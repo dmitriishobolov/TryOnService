@@ -60,6 +60,11 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
       sizeBytes: personRef.sizeBytes,
     });
     const personImage = await downloadInputImage(job, personRef, config, signal);
+    const inputContentType = resolveOpenAiImageContentType(
+      personImage.contentType,
+      personRef.key,
+      personImage.buffer,
+    );
     const prompt = job.payload.text?.trim() || config.openai.wardrobePrompt;
     const options = isRecord(job.payload.model?.options)
       ? job.payload.model.options
@@ -97,7 +102,8 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
       reasoningMode: reasoning.mode,
       maxOutputTokens,
       store,
-      inputContentType: personImage.contentType,
+      inputContentType,
+      originalInputContentType: personImage.contentType,
       inputBytes: personImage.buffer.length,
       promptLength: prompt.length,
     });
@@ -130,7 +136,7 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
                   type: "input_image",
                   image_url: toDataUrl(
                     personImage.buffer,
-                    personImage.contentType,
+                    inputContentType,
                   ),
                   detail: imageDetail,
                 },
@@ -195,6 +201,86 @@ function openAiHeaders(
 
 function toDataUrl(buffer: Buffer, contentType: string): string {
   return `data:${contentType};base64,${buffer.toString("base64")}`;
+}
+
+function resolveOpenAiImageContentType(
+  contentType: string | undefined,
+  key: string,
+  buffer: Buffer,
+): string {
+  if (contentType?.toLowerCase().startsWith("image/")) {
+    return contentType;
+  }
+
+  const fromKey = imageContentTypeFromKey(key);
+
+  if (fromKey) {
+    return fromKey;
+  }
+
+  const fromBytes = imageContentTypeFromBytes(buffer);
+
+  if (fromBytes) {
+    return fromBytes;
+  }
+
+  throw new TryOnModelError(
+    "openai_image_content_type_unsupported",
+    `OpenAI image input must have an image MIME type; got ${contentType ?? "unknown"}`,
+    false,
+  );
+}
+
+function imageContentTypeFromKey(key: string): string | undefined {
+  const extension = key.split(".").pop()?.toLowerCase();
+
+  if (extension === "jpg" || extension === "jpeg") {
+    return "image/jpeg";
+  }
+
+  if (extension === "png") {
+    return "image/png";
+  }
+
+  if (extension === "webp") {
+    return "image/webp";
+  }
+
+  if (extension === "gif") {
+    return "image/gif";
+  }
+
+  return undefined;
+}
+
+function imageContentTypeFromBytes(buffer: Buffer): string | undefined {
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8) {
+    return "image/jpeg";
+  }
+
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47
+  ) {
+    return "image/png";
+  }
+
+  if (
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buffer.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+
+  if (buffer.length >= 6 && buffer.subarray(0, 3).toString("ascii") === "GIF") {
+    return "image/gif";
+  }
+
+  return undefined;
 }
 
 function buildReasoningConfig(

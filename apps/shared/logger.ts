@@ -16,7 +16,7 @@ const levelPriority: Record<LogLevel, number> = {
   error: 40,
 };
 
-const redactedKeyPattern = /authorization|api[_-]?key|token|secret|password/i;
+const redactedKeyPattern = /authorization|api[_-]?key|secret|password/i;
 
 export function createLogger(service: string): Logger {
   return {
@@ -90,7 +90,7 @@ function sanitizeKey(key: string): string {
 }
 
 function safeValue(key: string, value: unknown): unknown {
-  if (redactedKeyPattern.test(key)) {
+  if (isSensitiveKey(key)) {
     return "[redacted]";
   }
 
@@ -116,6 +116,17 @@ function safeValue(key: string, value: unknown): unknown {
   }
 
   return value;
+}
+
+function isSensitiveKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+
+  return (
+    redactedKeyPattern.test(normalized) ||
+    normalized.endsWith("token") ||
+    normalized.includes("_token") ||
+    normalized.includes("-token")
+  );
 }
 
 function quoteValue(value: unknown): string {

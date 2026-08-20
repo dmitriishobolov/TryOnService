@@ -605,23 +605,23 @@ export class TelegramBot {
 
     const filename = sanitizeStorageFilename(file.file_path);
     const key = `${keyPrefix}/${filename}`;
+    const uploadContentType = resolveTelegramPhotoContentType(
+      filename,
+      downloadResponse.headers.get("content-type"),
+    );
     logger.info("Uploading Telegram photo to storage", {
       chatId: String(message.chat.id),
       storageId: storageAccess.storage.storageId,
       key,
       objectBaseUrl: storageAccess.storage.objectBaseUrl,
-      contentType:
-        downloadResponse.headers.get("content-type") ??
-        contentTypeFromFilename(filename),
+      contentType: uploadContentType,
     });
     const uploadResponse = await fetchWithTimeout(
       storageObjectUrl(storageAccess.storage.objectBaseUrl, key),
       {
         method: "PUT",
         headers: {
-          "content-type":
-            downloadResponse.headers.get("content-type") ??
-            contentTypeFromFilename(filename),
+          "content-type": uploadContentType,
           "x-storage-access-token": storageAccess.storage.accessToken,
         },
         body: downloadResponse.body,
@@ -832,6 +832,10 @@ function sanitizeStorageFilename(path: string): string {
 function contentTypeFromFilename(filename: string): string {
   const extension = filename.split(".").pop()?.toLowerCase();
 
+  if (extension === "jpg" || extension === "jpeg") {
+    return "image/jpeg";
+  }
+
   if (extension === "png") {
     return "image/png";
   }
@@ -841,4 +845,15 @@ function contentTypeFromFilename(filename: string): string {
   }
 
   return "image/jpeg";
+}
+
+function resolveTelegramPhotoContentType(
+  filename: string,
+  responseContentType: string | null,
+): string {
+  if (responseContentType?.toLowerCase().startsWith("image/")) {
+    return responseContentType;
+  }
+
+  return contentTypeFromFilename(filename);
 }

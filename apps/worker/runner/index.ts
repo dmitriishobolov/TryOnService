@@ -153,6 +153,7 @@ export async function runWorkerJob(
       retryable: update.error?.retryable,
       error,
     });
+    await deliverFailureCallback(job, config, callbackToken, update);
     await coordinator.reportResult(update);
     logger.info("Worker job failure reported", {
       jobId: job.jobId,
@@ -160,4 +161,71 @@ export async function runWorkerJob(
       errorCode: update.error?.code,
     });
   }
+}
+
+async function deliverFailureCallback(
+  job: WorkerJobRequest,
+  config: WorkerConfig,
+  callbackToken: string | undefined,
+  update: JobResultUpdateRequest,
+): Promise<void> {
+  if (!job.callbackUrl) {
+    logger.warn("Worker failed job has no callbackUrl", {
+      jobId: job.jobId,
+      status: update.status,
+      errorCode: update.error?.code,
+    });
+    return;
+  }
+
+  const callback: TelegramJobCallbackRequest = {
+    jobId: job.jobId,
+    client: job.client,
+    result: {
+      message: failureMessage(update),
+    },
+  };
+
+  try {
+    logger.info("Failure callback delivery started", {
+      jobId: job.jobId,
+      callbackUrl: job.callbackUrl,
+      chatId: job.client.chatId,
+      errorCode: update.error?.code,
+    });
+    await postJson(
+      job.callbackUrl,
+      callback,
+      callbackToken ? { "x-client-callback-token": callbackToken } : {},
+      {
+        retries: config.httpClientRetries,
+        timeoutMs: config.httpClientTimeoutMs,
+      },
+    );
+    logger.info("Failure callback delivery succeeded", {
+      jobId: job.jobId,
+      chatId: job.client.chatId,
+      errorCode: update.error?.code,
+    });
+  } catch (callbackError) {
+    logger.error("Failure callback delivery failed", {
+      jobId: job.jobId,
+      callbackUrl: job.callbackUrl,
+      chatId: job.client.chatId,
+      errorCode: update.error?.code,
+      error: callbackError,
+    });
+  }
+}
+
+function failureMessage(update: JobResultUpdateRequest): string {
+  if (update.status === "cancelled") {
+    return "Обработка запроса была отменена. Попробуйте отправить фото заново.";
+  }
+
+  if (update.error?.code === "openai_image_content_type_unsupported") {
+    return "Не удалось обработать изображение: файл не распознан как фото. Отправьте четкую фотографию в формате JPG, PNG или WEBP.";
+  }
+
+  return "Не удалось выполнить разбор внешности. Попробуйте отправить другое четкое фото с видимым лицом чуть позже.";
 }

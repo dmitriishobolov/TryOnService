@@ -8,6 +8,7 @@ import {
   selectInputFile,
   TryOnModelError,
 } from "../providerUtils.js";
+import { createLogger } from "../../../shared/logger.js";
 import type {
   OpenAiImageDetail,
   OpenAiReasoningEffort,
@@ -16,6 +17,7 @@ import type {
 } from "../../config/index.js";
 import type { TryOnModelAdapter } from "../types.js";
 
+const logger = createLogger("worker");
 const provider = "openai";
 const imageDetailValues = [
   "low",
@@ -50,11 +52,55 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
       config.tryOnPersonImageIndex,
       "person",
     );
+    logger.info("OpenAI input image download started", {
+      jobId: job.jobId,
+      storageId: personRef.storageId,
+      key: personRef.key,
+      contentType: personRef.contentType,
+      sizeBytes: personRef.sizeBytes,
+    });
     const personImage = await downloadInputImage(job, personRef, config, signal);
     const prompt = job.payload.text?.trim() || config.openai.wardrobePrompt;
     const options = isRecord(job.payload.model?.options)
       ? job.payload.model.options
       : {};
+    const model = job.payload.model?.providerModel ?? config.openai.model;
+    const imageDetail = readEnumOption(
+      options,
+      "imageDetail",
+      imageDetailValues,
+      config.openai.imageDetail,
+    );
+    const textVerbosity = readEnumOption(
+      options,
+      "textVerbosity",
+      textVerbosityValues,
+      config.openai.textVerbosity,
+    );
+    const reasoning = buildReasoningConfig(options, config);
+    const maxOutputTokens = readNumberOption(
+      options,
+      "maxOutputTokens",
+      config.openai.maxOutputTokens,
+    );
+    const store = readBooleanOption(
+      options,
+      "store",
+      config.openai.storeResponse,
+    );
+    logger.info("OpenAI Responses request started", {
+      jobId: job.jobId,
+      model,
+      imageDetail,
+      textVerbosity,
+      reasoningEffort: reasoning.effort,
+      reasoningMode: reasoning.mode,
+      maxOutputTokens,
+      store,
+      inputContentType: personImage.contentType,
+      inputBytes: personImage.buffer.length,
+      promptLength: prompt.length,
+    });
     const response = await fetchJson<unknown>(
       provider,
       joinUrl(config.openai.baseUrl, "/v1/responses"),
@@ -62,7 +108,7 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
         method: "POST",
         headers: openAiHeaders(apiKey, config),
         body: JSON.stringify({
-          model: job.payload.model?.providerModel ?? config.openai.model,
+          model,
           input: [
             {
               role: "system",
@@ -86,12 +132,7 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
                     personImage.buffer,
                     personImage.contentType,
                   ),
-                  detail: readEnumOption(
-                    options,
-                    "imageDetail",
-                    imageDetailValues,
-                    config.openai.imageDetail,
-                  ),
+                  detail: imageDetail,
                 },
               ],
             },
@@ -100,24 +141,11 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
             format: {
               type: "text",
             },
-            verbosity: readEnumOption(
-              options,
-              "textVerbosity",
-              textVerbosityValues,
-              config.openai.textVerbosity,
-            ),
+            verbosity: textVerbosity,
           },
-          reasoning: buildReasoningConfig(options, config),
-          max_output_tokens: readNumberOption(
-            options,
-            "maxOutputTokens",
-            config.openai.maxOutputTokens,
-          ),
-          store: readBooleanOption(
-            options,
-            "store",
-            config.openai.storeResponse,
-          ),
+          reasoning,
+          max_output_tokens: maxOutputTokens,
+          store,
         }),
       },
       config.tryOnModelHttpTimeoutMs,
@@ -126,12 +154,22 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
     const outputText = extractOutputText(response);
 
     if (!outputText) {
+      logger.warn("OpenAI Responses output text missing", {
+        jobId: job.jobId,
+        model,
+      });
       throw new TryOnModelError(
         "openai_output_text_missing",
         "OpenAI response did not contain output text",
         true,
       );
     }
+
+    logger.info("OpenAI Responses request finished", {
+      jobId: job.jobId,
+      model,
+      outputLength: outputText.length,
+    });
 
     return {
       message: `Ответ от сервера. Провайдер: OpenAI.\n\n${outputText}`,

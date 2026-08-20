@@ -48,6 +48,16 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - автоматический выбор ближайшего свободного callback-порта.
 - `POST /callbacks/jobs` проверяет signed callback token по `CLIENT_CALLBACK_SIGNING_KEY`, `CLIENT_CALLBACK_SIGNING_KEY_VERSION` и одноразовому `tokenId`, принимает ответ worker'а и отправляет пользователю текст результата.
 
+## Логи
+
+В devtest логи лежат в `devtest/logs/telegram.log`. Если бот написал `Фото принято... Ожидаю ответ`, ищите события:
+
+- `Appearance analysis job dispatched` - Telegram client отправил job worker-у.
+- `Callback request received` - worker дошел до callback endpoint клиента.
+- `Callback delivered to Telegram chat` - итоговое сообщение отправлено пользователю.
+
+Если первого события нет, проблема до worker dispatch. Если первое есть, а callback-событий нет, смотрите `devtest/logs/worker.log` по тому же `jobId`.
+
 ## Правила
 
 - Telegram client не вызывает AI API напрямую.

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { sleep } from "../../shared/http.js";
+import { createLogger } from "../../shared/logger.js";
 import type {
   StorageObjectRef,
   TryOnJobCreateResponse,
@@ -11,6 +12,8 @@ import type {
 import type { TelegramClientConfig } from "./config.js";
 import type { TelegramCoordinatorClient } from "./coordinatorClient.js";
 import type { TelegramWorkerClient } from "./workerClient.js";
+
+const logger = createLogger("telegram");
 
 interface TelegramApiResponse<T> {
   ok: boolean;
@@ -107,7 +110,10 @@ export class TelegramBot {
   ) {}
 
   async startPolling(): Promise<void> {
-    console.log("[telegram] Polling started");
+    logger.info("Polling started", {
+      clientId: this.config.clientId,
+      pollingTimeoutSeconds: this.config.pollingTimeoutSeconds,
+    });
 
     while (true) {
       try {
@@ -118,7 +124,9 @@ export class TelegramBot {
           await this.handleUpdate(update);
         }
       } catch (error) {
-        console.error("[telegram] Polling error", error);
+        logger.error("Polling error", {
+          error,
+        });
         await sleep(5_000);
       }
     }
@@ -147,6 +155,9 @@ export class TelegramBot {
     const chatId = String(message.chat.id);
 
     if (text === "/start") {
+      logger.info("Start command received", {
+        chatId,
+      });
       await this.setupCommands();
       this.sessions.delete(chatId);
       await this.sendStartMessage(chatId);
@@ -154,6 +165,9 @@ export class TelegramBot {
     }
 
     if (text && isCancelCommand(text)) {
+      logger.info("Appearance analysis cancelled", {
+        chatId,
+      });
       this.sessions.delete(chatId);
       await this.sendMessage(
         chatId,
@@ -164,6 +178,9 @@ export class TelegramBot {
     }
 
     if (text && isAppearanceAnalysisCommand(text)) {
+      logger.info("Appearance analysis requested", {
+        chatId,
+      });
       await this.startAppearanceAnalysis(chatId);
       return;
     }
@@ -187,6 +204,12 @@ export class TelegramBot {
     const parsedRequest = text ? parseRequestCommand(text) : undefined;
 
     if (parsedRequest) {
+      logger.info("Legacy request command received", {
+        chatId,
+        provider: parsedRequest.model?.provider ?? "mock",
+        task: parsedRequest.model?.task,
+        hasPhoto: Boolean(message.photo?.length),
+      });
       await this.createRequest(message, parsedRequest);
     }
   }
@@ -203,6 +226,9 @@ export class TelegramBot {
     this.sessions.set(chatId, {
       mode: "awaiting-appearance-photo",
     });
+    logger.info("Appearance analysis awaiting photo", {
+      chatId,
+    });
 
     return this.sendMessage(
       chatId,
@@ -217,6 +243,9 @@ export class TelegramBot {
     const chatId = String(message.chat.id);
 
     if (!message.photo?.length) {
+      logger.info("Appearance analysis expected photo but received non-photo", {
+        chatId,
+      });
       await this.sendMessage(
         chatId,
         "Пришлите фото реального человека с хорошо видимым лицом или нажмите «Отмена».",
@@ -234,6 +263,10 @@ export class TelegramBot {
     const chatId = String(message.chat.id);
 
     try {
+      logger.info("Appearance analysis photo received", {
+        chatId,
+        photoVariants: message.photo?.length ?? 0,
+      });
       const inputFiles = await this.uploadMessagePhotos(message);
 
       if (!inputFiles?.length) {
@@ -242,6 +275,21 @@ export class TelegramBot {
         );
       }
 
+      logger.info("Appearance analysis storage upload completed", {
+        chatId,
+        files: inputFiles.map((file) => ({
+          storageId: file.storageId,
+          key: file.key,
+          sizeBytes: file.sizeBytes,
+          contentType: file.contentType,
+        })),
+      });
+
+      logger.info("Appearance analysis job create requested", {
+        chatId,
+        provider: "openai",
+        task: "appearance-analysis",
+      });
       const assignment = await this.coordinator.createRequestJob({
         chatId,
         username: message.from?.username,
@@ -253,6 +301,12 @@ export class TelegramBot {
       this.sessions.delete(chatId);
 
       if (isQueuedJobResponse(assignment)) {
+        logger.info("Appearance analysis job queued", {
+          chatId,
+          jobId: assignment.job.id,
+          reason: assignment.reason,
+          retryAfterMs: assignment.retryAfterMs,
+        });
         await this.sendMessage(
           chatId,
           `Фото принято. Запрос ${assignment.job.id} поставлен в очередь, подберу свободный сервер автоматически.`,
@@ -266,7 +320,18 @@ export class TelegramBot {
         return;
       }
 
+      logger.info("Appearance analysis job assigned", {
+        chatId,
+        jobId: assignment.job.id,
+        workerId: assignment.worker.workerId,
+        workerBaseUrl: assignment.worker.baseUrl,
+      });
       await this.worker.dispatchJob(assignment);
+      logger.info("Appearance analysis job dispatched", {
+        chatId,
+        jobId: assignment.job.id,
+        workerId: assignment.worker.workerId,
+      });
 
       await this.sendMessage(
         chatId,
@@ -274,7 +339,10 @@ export class TelegramBot {
         mainMenuMarkup(),
       );
     } catch (error) {
-      console.error("[telegram] Failed to create appearance analysis job", error);
+      logger.error("Failed to create appearance analysis job", {
+        chatId,
+        error,
+      });
       await this.sendMessage(
         chatId,
         "Не удалось отправить фото на разбор. Попробуйте еще раз или нажмите «Отмена».",
@@ -290,6 +358,9 @@ export class TelegramBot {
     const chatId = String(message.chat.id);
 
     if (request.model?.provider === "openai" && !message.photo?.length) {
+      logger.info("OpenAI request rejected before job creation because photo is missing", {
+        chatId,
+      });
       await this.sendMessage(
         chatId,
         "Для OpenAI-анализа отправьте фото пользователя с подписью /request openai.",
@@ -298,6 +369,12 @@ export class TelegramBot {
     }
 
     try {
+      logger.info("Job create requested", {
+        chatId,
+        provider: request.model?.provider ?? "mock",
+        task: request.model?.task,
+        hasPhoto: Boolean(message.photo?.length),
+      });
       const inputFiles = await this.uploadMessagePhotos(message);
       const assignment = await this.coordinator.createRequestJob({
         chatId,
@@ -308,6 +385,12 @@ export class TelegramBot {
       });
 
       if (isQueuedJobResponse(assignment)) {
+        logger.info("Job queued", {
+          chatId,
+          jobId: assignment.job.id,
+          reason: assignment.reason,
+          retryAfterMs: assignment.retryAfterMs,
+        });
         await this.sendMessage(
           chatId,
           `Запрос ${assignment.job.id} поставлен в очередь. Подберу свободный сервер автоматически.`,
@@ -320,14 +403,29 @@ export class TelegramBot {
         return;
       }
 
+      logger.info("Job assigned", {
+        chatId,
+        jobId: assignment.job.id,
+        workerId: assignment.worker.workerId,
+        workerBaseUrl: assignment.worker.baseUrl,
+      });
       await this.worker.dispatchJob(assignment);
+      logger.info("Job dispatched", {
+        chatId,
+        jobId: assignment.job.id,
+        workerId: assignment.worker.workerId,
+      });
 
       await this.sendMessage(
         chatId,
         `Запрос ${assignment.job.id} отправлен на сервер. Ожидаю ответ.`,
       );
     } catch (error) {
-      console.error("[telegram] Failed to create or dispatch job", error);
+      logger.error("Failed to create or dispatch job", {
+        chatId,
+        provider: request.model?.provider ?? "mock",
+        error,
+      });
       await this.sendMessage(
         chatId,
         "Не удалось создать запрос. Попробуйте еще раз позже.",
@@ -346,21 +444,48 @@ export class TelegramBot {
       await sleep(retryAfterMs);
 
       try {
+        logger.info("Polling queued job assignment", {
+          chatId,
+          jobId,
+          attempt: attempt + 1,
+        });
         const assignment = await this.coordinator.getJobAssignment(jobId);
 
         if (isQueuedJobResponse(assignment)) {
+          logger.info("Job still queued", {
+            chatId,
+            jobId,
+            reason: assignment.reason,
+            retryAfterMs: assignment.retryAfterMs,
+          });
           retryAfterMs = assignment.retryAfterMs;
           continue;
         }
 
+        logger.info("Queued job assigned", {
+          chatId,
+          jobId: assignment.job.id,
+          workerId: assignment.worker.workerId,
+          workerBaseUrl: assignment.worker.baseUrl,
+        });
         await this.worker.dispatchJob(assignment);
+        logger.info("Queued job dispatched", {
+          chatId,
+          jobId: assignment.job.id,
+          workerId: assignment.worker.workerId,
+        });
         await this.sendMessage(
           chatId,
           `Запрос ${assignment.job.id} отправлен на сервер. Ожидаю ответ.`,
         );
         return;
       } catch (error) {
-        console.error(`[telegram] Failed to poll assignment for job ${jobId}`, error);
+        logger.error("Failed to poll assignment", {
+          chatId,
+          jobId,
+          attempt: attempt + 1,
+          error,
+        });
         retryAfterMs = Math.min(retryAfterMs * 2, 10_000);
       }
     }
@@ -369,6 +494,10 @@ export class TelegramBot {
       chatId,
       `Запрос ${jobId} все еще в очереди. Попробуйте проверить позже.`,
     );
+    logger.warn("Queued job polling exhausted", {
+      chatId,
+      jobId,
+    });
   }
 
   private setupCommands(): Promise<unknown> {
@@ -451,6 +580,12 @@ export class TelegramBot {
 
     const requestId = randomUUID();
     const keyPrefix = `clients/${this.config.clientId}/input/${requestId}`;
+    logger.info("Requesting storage access for Telegram photo", {
+      chatId: String(message.chat.id),
+      keyPrefix,
+      telegramFilePath: file.file_path,
+      telegramFileSize: file.file_size,
+    });
     const storageAccess = await this.coordinator.requestStorageAccess({
       scope: "read-write",
       keyPrefix,
@@ -470,6 +605,15 @@ export class TelegramBot {
 
     const filename = sanitizeStorageFilename(file.file_path);
     const key = `${keyPrefix}/${filename}`;
+    logger.info("Uploading Telegram photo to storage", {
+      chatId: String(message.chat.id),
+      storageId: storageAccess.storage.storageId,
+      key,
+      objectBaseUrl: storageAccess.storage.objectBaseUrl,
+      contentType:
+        downloadResponse.headers.get("content-type") ??
+        contentTypeFromFilename(filename),
+    });
     const uploadResponse = await fetchWithTimeout(
       storageObjectUrl(storageAccess.storage.objectBaseUrl, key),
       {
@@ -495,6 +639,14 @@ export class TelegramBot {
     if (!payload.object) {
       throw new Error("Storage upload response did not contain object metadata");
     }
+
+    logger.info("Telegram photo uploaded to storage", {
+      chatId: String(message.chat.id),
+      storageId: payload.object.storageId,
+      key: payload.object.key,
+      sizeBytes: payload.object.sizeBytes,
+      contentType: payload.object.contentType,
+    });
 
     return [payload.object];
   }

@@ -28,6 +28,7 @@ const services = [
     includeNodeModules: true,
     dependencies: rootPackage.dependencies ?? {},
     envKeys: [
+      "LOG_LEVEL",
       "COORDINATOR_PORT",
       "COORDINATOR_PUBLIC_URL",
       "WORKER_REGISTRATION_KEY",
@@ -74,6 +75,7 @@ const services = [
     entry: "app/apps/storage/index.js",
     directories: ["storage", "shared"],
     envKeys: [
+      "LOG_LEVEL",
       "STORAGE_PORT",
       "STORAGE_ID",
       "STORAGE_PUBLIC_PROTOCOL",
@@ -108,6 +110,7 @@ const services = [
     entry: "app/apps/worker/index.js",
     directories: ["worker", "shared"],
     envKeys: [
+      "LOG_LEVEL",
       "WORKER_PORT",
       "WORKER_ID",
       "WORKER_PUBLIC_PROTOCOL",
@@ -185,6 +188,7 @@ const services = [
     entry: "app/apps/client/telegram/index.js",
     directories: ["client", "shared"],
     envKeys: [
+      "LOG_LEVEL",
       "TELEGRAM_CLIENT_ID",
       "TELEGRAM_CLIENT_PORT",
       "TELEGRAM_CLIENT_PUBLIC_PROTOCOL",

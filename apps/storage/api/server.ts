@@ -9,6 +9,7 @@ import {
   writeError,
   writeJson,
 } from "../../shared/http.js";
+import { createLogger } from "../../shared/logger.js";
 import { FixedWindowRateLimiter } from "../../shared/rateLimit.js";
 import {
   normalizeStorageKey,
@@ -16,6 +17,8 @@ import {
   type ObjectStorage,
 } from "../../shared/storage/index.js";
 import type { StorageConfig } from "../config/index.js";
+
+const logger = createLogger("storage");
 
 interface StorageServerDeps {
   config: StorageConfig;
@@ -67,6 +70,11 @@ export function createStorageServer(deps: StorageServerDeps): Server {
         const key = normalizeStorageKey(decodeURIComponent(objectMatch[1]));
 
         if (!hasStorageObjectAccess(request.headers, config, key, "write")) {
+          logger.warn("Storage object upload rejected", {
+            storageId: config.storageId,
+            key,
+            remoteAddress: request.socket.remoteAddress,
+          });
           writeError(
             response,
             401,
@@ -76,6 +84,12 @@ export function createStorageServer(deps: StorageServerDeps): Server {
           return;
         }
 
+        logger.info("Storage object upload started", {
+          storageId: config.storageId,
+          key,
+          contentType: firstHeaderValue(request.headers["content-type"]),
+          contentLength: firstHeaderValue(request.headers["content-length"]),
+        });
         const object = await objects.putObject({
           key,
           contentType: firstHeaderValue(request.headers["content-type"]),
@@ -83,6 +97,13 @@ export function createStorageServer(deps: StorageServerDeps): Server {
           maxBytes: config.maxObjectBytes,
         });
 
+        logger.info("Storage object upload finished", {
+          storageId: config.storageId,
+          key: object.key,
+          contentType: object.contentType,
+          sizeBytes: object.sizeBytes,
+          driver: object.driver,
+        });
         writeJson(response, 201, {
           object: {
             ...object,
@@ -96,6 +117,11 @@ export function createStorageServer(deps: StorageServerDeps): Server {
         const key = normalizeStorageKey(decodeURIComponent(objectMatch[1]));
 
         if (!hasStorageObjectAccess(request.headers, config, key, "read")) {
+          logger.warn("Storage object download rejected", {
+            storageId: config.storageId,
+            key,
+            remoteAddress: request.socket.remoteAddress,
+          });
           writeError(
             response,
             401,
@@ -106,6 +132,15 @@ export function createStorageServer(deps: StorageServerDeps): Server {
         }
 
         const object = await objects.getObject(key);
+        logger.info("Storage object download started", {
+          storageId: config.storageId,
+          key,
+          contentType:
+            object.contentType ??
+            object.ref.contentType ??
+            "application/octet-stream",
+          sizeBytes: object.sizeBytes,
+        });
 
         response.writeHead(200, {
           "Content-Type":
@@ -117,6 +152,11 @@ export function createStorageServer(deps: StorageServerDeps): Server {
             : {}),
         });
         await pipeline(object.stream, response);
+        logger.info("Storage object download finished", {
+          storageId: config.storageId,
+          key,
+          sizeBytes: object.sizeBytes,
+        });
         return;
       }
 
@@ -132,7 +172,11 @@ export function createStorageServer(deps: StorageServerDeps): Server {
         return;
       }
 
-      console.error("[storage] Unhandled request error", error);
+      logger.error("Unhandled storage request error", {
+        method: request.method,
+        path: url.pathname,
+        error,
+      });
       writeCaughtError(response, error);
     }
   });

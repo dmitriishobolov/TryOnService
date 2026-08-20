@@ -186,6 +186,17 @@ npm run devtest
 
 Команда пересобирает TypeScript в `devtest/app`, создает `devtest/.env`, запускает coordinator, storage-node, worker и Telegram client из папки `devtest`, а логи пишет в `devtest/logs`. Local object storage в этом режиме находится в `devtest/runtime/storage/objects`, metadata index - в `devtest/runtime/storage/metadata.json`.
 
+Смотреть цепочку обработки job удобнее по логам:
+
+```powershell
+Get-Content D:\TryOnService\devtest\logs\telegram.log -Tail 120 -Wait
+Get-Content D:\TryOnService\devtest\logs\coordinator.log -Tail 120 -Wait
+Get-Content D:\TryOnService\devtest\logs\worker.log -Tail 160 -Wait
+Get-Content D:\TryOnService\devtest\logs\storage.log -Tail 120 -Wait
+```
+
+`LOG_LEVEL=info` уже показывает lifecycle `upload -> assignment -> worker -> model -> callback`; для ещё более подробного режима задайте `LOG_LEVEL=debug`.
+
 `devtest/.env` собирается из `.env.example` и файла `DEVTEST_ENV_FILE` (`.env` по умолчанию), но devtest принудительно использует `COORDINATOR_PERSISTENCE=memory`, `REQUIRE_HTTPS_ENDPOINTS=false` и локальные public URL. Если `TELEGRAM_BOT_TOKEN` не настроен и оставлен demo-placeholder, Telegram client будет пропущен; для строгой проверки задайте `DEVTEST_REQUIRE_TELEGRAM=true`.
 
 Для сборки без запуска сервисов:

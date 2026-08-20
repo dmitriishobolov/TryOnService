@@ -43,6 +43,7 @@ import {
   writeError,
   writeJson,
 } from "../../shared/http.js";
+import { createLogger } from "../../shared/logger.js";
 import { FixedWindowRateLimiter } from "../../shared/rateLimit.js";
 import { normalizeStorageKey } from "../../shared/storage/index.js";
 import type { CoordinatorConfig } from "../config/index.js";
@@ -64,6 +65,8 @@ import {
   resolveDirectRequestAddress,
   resolveRequesterHost,
 } from "../utils/requestAddress.js";
+
+const logger = createLogger("coordinator");
 
 interface CoordinatorServerDeps {
   config: CoordinatorConfig;
@@ -187,6 +190,14 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
+        logger.info("Job assignment poll received", {
+          jobId: job.id,
+          sourceClientId,
+          status: job.status,
+          provider: job.payload.model?.provider ?? "mock",
+          task: job.payload.model?.task,
+        });
+
         if (job.sourceClientId !== sourceClientId) {
           recordSecurityEvent(audit, {
             eventType: "job_assignment_forbidden",
@@ -247,6 +258,22 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           inputFilesStoragePrefix,
         });
 
+        if (isQueuedJobResponse(assignment)) {
+          logger.info("Job still queued after assignment poll", {
+            jobId: job.id,
+            sourceClientId: job.sourceClientId,
+            reason: assignment.reason,
+            retryAfterMs: assignment.retryAfterMs,
+          });
+        } else {
+          logger.info("Job assignment returned to client", {
+            jobId: assignment.job.id,
+            sourceClientId: assignment.job.sourceClientId,
+            workerId: assignment.worker.workerId,
+            storageId: assignment.storage?.storageId,
+          });
+        }
+
         writeJson(
           response,
           isQueuedJobResponse(assignment) ? 202 : 200,
@@ -283,6 +310,14 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           writeError(response, 400, "invalid_job_request", "Invalid job payload");
           return;
         }
+
+        logger.info("Job create request received", {
+          sourceClientId: body.sourceClientId,
+          provider: body.payload.model?.provider ?? "mock",
+          task: body.payload.model?.task,
+          inputFiles: body.payload.inputFiles?.length ?? 0,
+          hasCallbackUrl: Boolean(body.callbackUrl),
+        });
 
         if (
           !hasClientKey(request.headers["x-client-key"], config)
@@ -336,6 +371,14 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         }
 
         const job = await jobs.create(requestWithCallback);
+        logger.info("Job created", {
+          jobId: job.id,
+          sourceClientId: job.sourceClientId,
+          provider: job.payload.model?.provider ?? "mock",
+          task: job.payload.model?.task,
+          inputFiles: job.payload.inputFiles?.length ?? 0,
+          callbackUrl: job.callbackUrl,
+        });
         const assignment = await assignJobIfPossible({
           job,
           config,
@@ -348,6 +391,12 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         });
 
         if (isQueuedJobResponse(assignment)) {
+          logger.info("Job queued after create", {
+            jobId: job.id,
+            sourceClientId: job.sourceClientId,
+            reason: assignment.reason,
+            retryAfterMs: assignment.retryAfterMs,
+          });
           recordSecurityEvent(audit, {
             eventType: "job_queued",
             severity: "info",
@@ -974,6 +1023,13 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
+        logger.info("Job progress received", {
+          jobId: job.id,
+          sourceClientId: job.sourceClientId,
+          workerId: previous.assignedWorkerId,
+          status: body.status,
+          message: body.message,
+        });
         writeJson(response, 200, job);
         return;
       }
@@ -1016,6 +1072,16 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
+        logger.info("Job result received", {
+          jobId: job.id,
+          sourceClientId: job.sourceClientId,
+          workerId: previous.assignedWorkerId,
+          status: body.status,
+          errorCode: body.error?.code,
+          retryable: body.error?.retryable,
+          resultMessageLength: body.result?.message.length,
+          resultFiles: body.result?.files?.length ?? 0,
+        });
         if (
           previous?.assignedWorkerId &&
           previous.status !== "succeeded" &&
@@ -1034,7 +1100,11 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
 
       writeError(response, 404, "not_found", "Route not found");
     } catch (error) {
-      console.error("[coordinator] Unhandled request error", error);
+      logger.error("Unhandled coordinator request error", {
+        method: request.method,
+        path: url.pathname,
+        error,
+      });
       writeCaughtError(response, error);
     }
   });
@@ -1159,25 +1229,52 @@ async function assignJobIfPossible({
   const firstQueued = (await jobs.findQueued())[0];
 
   if (firstQueued?.id !== job.id) {
+    logger.info("Job assignment skipped: waiting for queue turn", {
+      jobId: job.id,
+      firstQueuedJobId: firstQueued?.id,
+    });
     return createQueuedJobResponse(job, "waiting_for_turn", config);
   }
 
   const request = createTryOnJobRequestFromJob(job);
   const requiredCapabilities = resolveRequiredCapabilities(request);
+  logger.info("Job assignment matching started", {
+    jobId: job.id,
+    sourceClientId: job.sourceClientId,
+    provider: request.payload.model?.provider ?? "mock",
+    task: request.payload.model?.task,
+    requiredCapabilities,
+  });
   const worker = await workers.findAvailable(
     config.workerHeartbeatTimeoutMs,
     requiredCapabilities,
   );
 
   if (!worker) {
+    logger.warn("Job assignment queued: no available worker", {
+      jobId: job.id,
+      requiredCapabilities,
+    });
     return createQueuedJobResponse(job, "no_available_worker", config);
   }
 
   const reservedWorker = await workers.reserve(worker.workerId);
 
   if (!reservedWorker) {
+    logger.warn("Job assignment queued: worker became unavailable before reserve", {
+      jobId: job.id,
+      workerId: worker.workerId,
+    });
     return createQueuedJobResponse(job, "worker_not_available", config);
   }
+
+  logger.info("Worker reserved for job", {
+    jobId: job.id,
+    workerId: reservedWorker.workerId,
+    workerBaseUrl: reservedWorker.baseUrl,
+    runningJobs: reservedWorker.runningJobs,
+    capacity: reservedWorker.capacity,
+  });
 
   const dispatchTokenExpiresAt = new Date(
     Date.now() + config.workerDispatchTokenTtlMs,
@@ -1192,6 +1289,10 @@ async function assignJobIfPossible({
     await workers.release(reservedWorker.workerId);
     const current = await jobs.get(job.id);
 
+    logger.warn("Job assignment queued: job was not queue head after reserve", {
+      jobId: job.id,
+      workerId: reservedWorker.workerId,
+    });
     return createQueuedJobResponse(current ?? job, "job_not_queue_head", config);
   }
 
@@ -1211,6 +1312,10 @@ async function assignJobIfPossible({
     await workers.release(reservedWorker.workerId);
     const requeued = await jobs.requeue(assignedJob.id);
 
+    logger.warn("Job assignment queued: no available storage", {
+      jobId: assignedJob.id,
+      workerId: reservedWorker.workerId,
+    });
     return createQueuedJobResponse(
       requeued ?? assignedJob,
       "no_available_storage",
@@ -1219,6 +1324,13 @@ async function assignJobIfPossible({
   }
 
   workerRequest.storage = storageAccess;
+  logger.info("Storage access assigned for job", {
+    jobId: assignedJob.id,
+    workerId: reservedWorker.workerId,
+    storageId: storageAccess.storageId,
+    keyPrefix: storageAccess.keyPrefix,
+    scope: storageAccess.scope,
+  });
   const callbackTokenExpiresAt = new Date(
     Date.now() + config.clientCallbackTokenTtlMs,
   ).toISOString();
@@ -1244,6 +1356,13 @@ async function assignJobIfPossible({
   );
 
   try {
+    logger.info("Preparing worker assignment", {
+      jobId: assignedJob.id,
+      workerId: reservedWorker.workerId,
+      workerBaseUrl: reservedWorker.baseUrl,
+      requiredCapabilities,
+      callbackUrl: request.callbackUrl,
+    });
     const prepared = await prepareWorkerAssignment(
       reservedWorker,
       assignedJob.id,
@@ -1258,11 +1377,17 @@ async function assignJobIfPossible({
     if (!prepared.accepted) {
       throw new Error("Worker rejected assignment preparation");
     }
+    logger.info("Worker assignment prepared", {
+      jobId: assignedJob.id,
+      workerId: reservedWorker.workerId,
+      expiresAt: prepared.expiresAt,
+    });
   } catch (error) {
-    console.error(
-      `[coordinator] Failed to prepare job ${assignedJob.id} on worker ${reservedWorker.workerId}`,
+    logger.error("Worker assignment prepare failed", {
+      jobId: assignedJob.id,
+      workerId: reservedWorker.workerId,
       error,
-    );
+    });
 
     let cancelConfirmed = false;
 
@@ -1271,10 +1396,11 @@ async function assignJobIfPossible({
         await cancelWorkerAssignment(reservedWorker, assignedJob.id, config),
       );
     } catch (cancelError) {
-      console.error(
-        `[coordinator] Failed to cancel prepared job ${assignedJob.id} on worker ${reservedWorker.workerId}`,
-        cancelError,
-      );
+      logger.error("Failed to cancel prepared worker assignment", {
+        jobId: assignedJob.id,
+        workerId: reservedWorker.workerId,
+        error: cancelError,
+      });
     }
 
     if (!cancelConfirmed) {
@@ -1297,6 +1423,10 @@ async function assignJobIfPossible({
     await workers.release(reservedWorker.workerId);
     const requeued = await jobs.requeue(assignedJob.id);
 
+    logger.info("Job requeued after worker prepare failure", {
+      jobId: assignedJob.id,
+      workerId: reservedWorker.workerId,
+    });
     return createQueuedJobResponse(
       requeued ?? assignedJob,
       "worker_prepare_failed",
@@ -1329,6 +1459,16 @@ async function assignJobIfPossible({
       workerId: reservedWorker.workerId,
       storageId: storageAccess.storageId,
     },
+  });
+
+  logger.info("Job assignment issued", {
+    jobId: assignedJob.id,
+    sourceClientId: assignedJob.sourceClientId,
+    workerId: reservedWorker.workerId,
+    workerBaseUrl: reservedWorker.baseUrl,
+    storageId: storageAccess.storageId,
+    provider: request.payload.model?.provider ?? "mock",
+    task: request.payload.model?.task,
   });
 
   return assignment;

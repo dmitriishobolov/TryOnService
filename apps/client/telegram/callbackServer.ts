@@ -10,10 +10,13 @@ import {
   writeError,
   writeJson,
 } from "../../shared/http.js";
+import { createLogger } from "../../shared/logger.js";
 import { FixedWindowRateLimiter } from "../../shared/rateLimit.js";
 import { TokenReplayGuard } from "../../shared/tokenReplayGuard.js";
 import type { TelegramBot } from "./bot.js";
 import type { TelegramClientConfig } from "./config.js";
+
+const logger = createLogger("telegram");
 
 export function createTelegramCallbackServer(
   bot: TelegramBot,
@@ -48,11 +51,17 @@ export function createTelegramCallbackServer(
       }
 
       if (request.method === "POST" && url.pathname === "/callbacks/jobs") {
+        logger.info("Callback request received", {
+          remoteAddress: request.socket.remoteAddress,
+        });
         const body = await readJsonBody(request, {
           maxBytes: config.maxJsonBodyBytes,
         });
 
         if (!isTelegramJobCallbackRequest(body)) {
+          logger.warn("Invalid callback payload received", {
+            remoteAddress: request.socket.remoteAddress,
+          });
           writeError(
             response,
             400,
@@ -65,6 +74,11 @@ export function createTelegramCallbackServer(
         const token = validateCallbackToken(request.headers, body.jobId, config);
 
         if (!token.valid) {
+          logger.warn("Callback token rejected", {
+            jobId: body.jobId,
+            chatId: body.client.chatId,
+            remoteAddress: request.socket.remoteAddress,
+          });
           writeError(
             response,
             401,
@@ -75,6 +89,10 @@ export function createTelegramCallbackServer(
         }
 
         if (callbackReplayGuard.hasSeen(token.tokenId)) {
+          logger.warn("Callback token replay rejected", {
+            jobId: body.jobId,
+            chatId: body.client.chatId,
+          });
           writeError(
             response,
             409,
@@ -86,7 +104,17 @@ export function createTelegramCallbackServer(
 
         callbackReplayGuard.remember(token.tokenId, token.expiresAt);
 
+        logger.info("Callback accepted, sending Telegram message", {
+          jobId: body.jobId,
+          chatId: body.client.chatId,
+          messageLength: body.result.message.length,
+          files: body.result.files?.length ?? 0,
+        });
         await bot.sendMessage(body.client.chatId, body.result.message);
+        logger.info("Callback delivered to Telegram chat", {
+          jobId: body.jobId,
+          chatId: body.client.chatId,
+        });
 
         writeJson(response, 200, {
           ok: true,
@@ -97,7 +125,9 @@ export function createTelegramCallbackServer(
 
       writeError(response, 404, "not_found", "Route not found");
     } catch (error) {
-      console.error("[telegram] Callback server error", error);
+      logger.error("Callback server error", {
+        error,
+      });
       writeCaughtError(response, error);
     }
   });

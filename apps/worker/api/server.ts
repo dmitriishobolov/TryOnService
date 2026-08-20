@@ -16,12 +16,15 @@ import {
   writeError,
   writeJson,
 } from "../../shared/http.js";
+import { createLogger } from "../../shared/logger.js";
 import { FixedWindowRateLimiter } from "../../shared/rateLimit.js";
 import { TokenReplayGuard } from "../../shared/tokenReplayGuard.js";
 import type { WorkerConfig } from "../config/index.js";
 import { runWorkerJob } from "../runner/index.js";
 import type { WorkerAssignmentStore } from "./assignmentStore.js";
 import type { CoordinatorClient } from "./coordinatorClient.js";
+
+const logger = createLogger("worker");
 
 interface WorkerServerDeps {
   config: WorkerConfig;
@@ -81,6 +84,9 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
 
       if (request.method === "POST" && url.pathname === "/assignments") {
         if (!hasWorkerServiceKey(request.headers["x-worker-service-key"], config)) {
+          logger.warn("Assignment prepare rejected: invalid worker service key", {
+            remoteAddress: request.socket.remoteAddress,
+          });
           writeError(response, 401, "unauthorized_worker", "Invalid worker key");
           return;
         }
@@ -92,6 +98,9 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
         });
 
         if (!isWorkerAssignmentPrepareRequest(body)) {
+          logger.warn("Assignment prepare rejected: invalid payload", {
+            remoteAddress: request.socket.remoteAddress,
+          });
           writeError(
             response,
             400,
@@ -102,6 +111,11 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
         }
 
         if (body.workerId !== config.workerId) {
+          logger.warn("Assignment prepare rejected: wrong worker", {
+            jobId: body.jobId,
+            expectedWorkerId: config.workerId,
+            requestedWorkerId: body.workerId,
+          });
           writeError(
             response,
             409,
@@ -112,6 +126,11 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
         }
 
         if (!hasRequiredCapabilities(body.requiredCapabilities, config)) {
+          logger.warn("Assignment prepare rejected: unsupported capabilities", {
+            jobId: body.jobId,
+            requiredCapabilities: body.requiredCapabilities,
+            capabilities: config.capabilities.map((capability) => capability.name),
+          });
           writeError(
             response,
             409,
@@ -122,11 +141,26 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
         }
 
         if (getCurrentLoad() >= config.capacity) {
+          logger.warn("Assignment prepare rejected: worker busy", {
+            jobId: body.jobId,
+            currentLoad: getCurrentLoad(),
+            capacity: config.capacity,
+          });
           writeError(response, 429, "worker_busy", "Worker has no free capacity");
           return;
         }
 
         const assignment = assignments.prepare(body);
+        logger.info("Assignment prepared", {
+          jobId: assignment.jobId,
+          workerId: config.workerId,
+          requiredCapabilities: body.requiredCapabilities,
+          callbackUrl: body.callbackUrl,
+          dispatchTokenExpiresAt: assignment.dispatchTokenExpiresAt,
+          pendingAssignments: assignments.countPending(),
+          runningJobs: getRunningJobs(),
+          capacity: config.capacity,
+        });
         const payload: WorkerAssignmentPrepareResponse = {
           jobId: assignment.jobId,
           accepted: true,
@@ -141,6 +175,10 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
 
       if (request.method === "POST" && cancelMatch) {
         if (!hasWorkerServiceKey(request.headers["x-worker-service-key"], config)) {
+          logger.warn("Job cancel rejected: invalid worker service key", {
+            jobId: cancelMatch[1],
+            remoteAddress: request.socket.remoteAddress,
+          });
           writeError(response, 401, "unauthorized_worker", "Invalid worker key");
           return;
         }
@@ -160,6 +198,11 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
           runningCancellationSupported: true,
         };
 
+        logger.info("Job cancel requested", {
+          jobId: cancelMatch[1],
+          cancelledPending: payload.cancelledPending,
+          cancelledRunning: payload.cancelledRunning,
+        });
         writeJson(response, 200, payload);
         return;
       }
@@ -172,13 +215,29 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
         });
 
         if (!isWorkerJobRequest(body)) {
+          logger.warn("Worker job rejected: invalid payload", {
+            remoteAddress: request.socket.remoteAddress,
+          });
           writeError(response, 400, "invalid_worker_job", "Invalid worker job payload");
           return;
         }
 
+        logger.info("Worker job dispatch received", {
+          jobId: body.jobId,
+          workerId: config.workerId,
+          provider: body.payload.model?.provider ?? "mock",
+          task: body.payload.model?.task,
+          inputFiles: body.payload.inputFiles?.length ?? 0,
+          runningJobs: getRunningJobs(),
+          pendingAssignments: assignments.countPending(),
+          capacity: config.capacity,
+        });
         const assignment = assignments.get(body.jobId);
 
         if (!assignment) {
+          logger.warn("Worker job rejected: assignment not prepared", {
+            jobId: body.jobId,
+          });
           writeError(
             response,
             409,
@@ -190,6 +249,10 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
 
         if (new Date(assignment.dispatchTokenExpiresAt).getTime() <= Date.now()) {
           assignments.cancel(body.jobId);
+          logger.warn("Worker job rejected: assignment expired", {
+            jobId: body.jobId,
+            dispatchTokenExpiresAt: assignment.dispatchTokenExpiresAt,
+          });
           writeError(
             response,
             410,
@@ -200,6 +263,13 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
         }
 
         if (!matchesPreparedAssignment(assignment, body)) {
+          logger.warn("Worker job rejected: assignment mismatch", {
+            jobId: body.jobId,
+            expectedChatId: assignment.clientChatId,
+            actualChatId: body.client.chatId,
+            expectedCallbackUrl: assignment.callbackUrl,
+            actualCallbackUrl: body.callbackUrl,
+          });
           writeError(
             response,
             409,
@@ -212,11 +282,17 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
         const token = validateWorkerJobAccess(request.headers, body.jobId, config);
 
         if (!token.valid) {
+          logger.warn("Worker job rejected: invalid dispatch token", {
+            jobId: body.jobId,
+          });
           writeError(response, 401, "unauthorized_worker_job", "Invalid job token");
           return;
         }
 
         if (dispatchReplayGuard.hasSeen(token.tokenId)) {
+          logger.warn("Worker job rejected: dispatch token replay", {
+            jobId: body.jobId,
+          });
           writeError(
             response,
             409,
@@ -227,6 +303,11 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
         }
 
         if (getRunningJobs() >= config.capacity) {
+          logger.warn("Worker job rejected: worker busy", {
+            jobId: body.jobId,
+            runningJobs: getRunningJobs(),
+            capacity: config.capacity,
+          });
           writeError(response, 429, "worker_busy", "Worker has no free capacity");
           return;
         }
@@ -236,6 +317,12 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
         incrementRunningJobs();
         const controller = new AbortController();
         runningJobControllers.set(body.jobId, controller);
+        logger.info("Worker job accepted for async processing", {
+          jobId: body.jobId,
+          workerId: config.workerId,
+          runningJobs: getRunningJobs(),
+          pendingAssignments: assignments.countPending(),
+        });
 
         void runWorkerJob(
           body,
@@ -245,13 +332,24 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
           controller.signal,
         )
           .catch((error) => {
-            console.error(`[worker] Job ${body.jobId} failed`, error);
+            logger.error("Worker async job failed", {
+              jobId: body.jobId,
+              error,
+            });
           })
           .finally(() => {
             runningJobControllers.delete(body.jobId);
             decrementRunningJobs();
+            logger.info("Worker async job finalized", {
+              jobId: body.jobId,
+              runningJobs: getRunningJobs(),
+              currentLoad: getCurrentLoad(),
+            });
             void coordinator.heartbeat(getCurrentLoad()).catch((error) => {
-              console.error("[worker] Failed to send heartbeat after job", error);
+              logger.error("Failed to send heartbeat after job", {
+                jobId: body.jobId,
+                error,
+              });
             });
           });
 
@@ -266,7 +364,11 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
 
       writeError(response, 404, "not_found", "Route not found");
     } catch (error) {
-      console.error("[worker] Unhandled request error", error);
+      logger.error("Unhandled worker request error", {
+        method: request.method,
+        path: url.pathname,
+        error,
+      });
       writeCaughtError(response, error);
     }
   });

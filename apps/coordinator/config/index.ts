@@ -1,12 +1,13 @@
 import {
   CLIENT_HEARTBEAT_INTERVAL_MS,
   CLIENT_HEARTBEAT_TIMEOUT_MS,
+  STORAGE_HEARTBEAT_INTERVAL_MS,
+  STORAGE_HEARTBEAT_TIMEOUT_MS,
   WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_HEARTBEAT_TIMEOUT_MS,
 } from "../../shared/contracts/index.js";
 
 export type CoordinatorPersistenceDriver = "memory" | "postgres";
-export type CoordinatorStorageDriver = "local" | "s3";
 
 export interface CoordinatorConfig {
   port: number;
@@ -14,17 +15,24 @@ export interface CoordinatorConfig {
   workerRegistrationKey: string;
   workerServiceKey: string;
   workerDispatchSigningKey: string;
+  storageRegistrationKey: string;
+  storageServiceKey: string;
+  storageAccessSigningKey: string;
   clientCallbackSigningKey: string;
   adminApiKey: string;
   workerRegistrationMaxInvalidAttempts: number;
+  storageRegistrationMaxInvalidAttempts: number;
   clientRegistrationKey: string;
   workerHeartbeatIntervalMs: number;
   workerHeartbeatTimeoutMs: number;
+  storageHeartbeatIntervalMs: number;
+  storageHeartbeatTimeoutMs: number;
   clientHeartbeatIntervalMs: number;
   clientHeartbeatTimeoutMs: number;
   schedulerIntervalMs: number;
   workerDispatchTokenTtlMs: number;
   clientCallbackTokenTtlMs: number;
+  storageAccessTokenTtlMs: number;
   jobAssignmentTimeoutMs: number;
   apiRateLimitWindowMs: number;
   apiRateLimitMaxRequests: number;
@@ -35,11 +43,6 @@ export interface CoordinatorConfig {
   postgresUrl?: string;
   postgresSsl: boolean;
   postgresMaxConnections: number;
-  storageDriver: CoordinatorStorageDriver;
-  storageLocalRoot: string;
-  storagePublicBaseUrl?: string;
-  storageBucket?: string;
-  storageSignedUrlTtlMs: number;
 }
 
 function readNumber(name: string, fallback: number): number {
@@ -94,16 +97,6 @@ function readPersistenceDriver(): CoordinatorPersistenceDriver {
   return value;
 }
 
-function readStorageDriver(): CoordinatorStorageDriver {
-  const value = readString("STORAGE_DRIVER", "local");
-
-  if (value !== "local" && value !== "s3") {
-    throw new Error("STORAGE_DRIVER must be local or s3");
-  }
-
-  return value;
-}
-
 export function loadCoordinatorConfig(): CoordinatorConfig {
   const port = readNumber("COORDINATOR_PORT", 3000);
 
@@ -119,6 +112,15 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
       "WORKER_DISPATCH_SIGNING_KEY",
       "dev-worker-dispatch-signing-key",
     ),
+    storageRegistrationKey: readString(
+      "STORAGE_REGISTRATION_KEY",
+      "dev-storage-registration-key",
+    ),
+    storageServiceKey: readString("STORAGE_SERVICE_KEY", "dev-storage-service-key"),
+    storageAccessSigningKey: readString(
+      "STORAGE_ACCESS_SIGNING_KEY",
+      "dev-storage-access-signing-key",
+    ),
     clientCallbackSigningKey: readString(
       "CLIENT_CALLBACK_SIGNING_KEY",
       "dev-client-callback-signing-key",
@@ -126,6 +128,10 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
     adminApiKey: readString("ADMIN_API_KEY", "dev-admin-key"),
     workerRegistrationMaxInvalidAttempts: readNumber(
       "WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS",
+      5,
+    ),
+    storageRegistrationMaxInvalidAttempts: readNumber(
+      "STORAGE_REGISTRATION_MAX_INVALID_ATTEMPTS",
       5,
     ),
     clientRegistrationKey: readString(
@@ -140,6 +146,14 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
       "WORKER_HEARTBEAT_TIMEOUT_MS",
       WORKER_HEARTBEAT_TIMEOUT_MS,
     ),
+    storageHeartbeatIntervalMs: readNumber(
+      "STORAGE_HEARTBEAT_INTERVAL_MS",
+      STORAGE_HEARTBEAT_INTERVAL_MS,
+    ),
+    storageHeartbeatTimeoutMs: readNumber(
+      "STORAGE_HEARTBEAT_TIMEOUT_MS",
+      STORAGE_HEARTBEAT_TIMEOUT_MS,
+    ),
     clientHeartbeatIntervalMs: readNumber(
       "CLIENT_HEARTBEAT_INTERVAL_MS",
       CLIENT_HEARTBEAT_INTERVAL_MS,
@@ -151,6 +165,7 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
     schedulerIntervalMs: readNumber("SCHEDULER_INTERVAL_MS", 1_000),
     workerDispatchTokenTtlMs: readNumber("WORKER_DISPATCH_TOKEN_TTL_MS", 30_000),
     clientCallbackTokenTtlMs: readNumber("CLIENT_CALLBACK_TOKEN_TTL_MS", 900_000),
+    storageAccessTokenTtlMs: readNumber("STORAGE_ACCESS_TOKEN_TTL_MS", 900_000),
     jobAssignmentTimeoutMs: readNumber("JOB_ASSIGNMENT_TIMEOUT_MS", 30_000),
     apiRateLimitWindowMs: readNumber("API_RATE_LIMIT_WINDOW_MS", 60_000),
     apiRateLimitMaxRequests: readNumber("API_RATE_LIMIT_MAX_REQUESTS", 120),
@@ -161,10 +176,5 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
     postgresUrl: readOptionalString("POSTGRES_URL"),
     postgresSsl: readBoolean("POSTGRES_SSL", false),
     postgresMaxConnections: readNumber("POSTGRES_MAX_CONNECTIONS", 10),
-    storageDriver: readStorageDriver(),
-    storageLocalRoot: readString("STORAGE_LOCAL_ROOT", "tmp/storage"),
-    storagePublicBaseUrl: readOptionalString("STORAGE_PUBLIC_BASE_URL"),
-    storageBucket: readOptionalString("STORAGE_BUCKET"),
-    storageSignedUrlTtlMs: readNumber("STORAGE_SIGNED_URL_TTL_MS", 900_000),
   };
 }

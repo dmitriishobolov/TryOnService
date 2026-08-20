@@ -1,8 +1,8 @@
 # Coordinator
 
-Coordinator - центральный сервис TryOnService. Он принимает запросы клиентов на assignment, создает jobs, хранит их состояние, знает о доступных worker'ах и возвращает клиенту подходящий worker endpoint.
+Coordinator - центральный сервис TryOnService. Он принимает запросы клиентов на assignment, создает jobs, хранит их состояние, знает о доступных worker'ах, service clients и storage-node, а затем возвращает клиенту подходящие endpoints и signed tokens.
 
-Coordinator не выполняет AI-обработку сам и не проксирует клиентские результаты. Его задача - matchmaking между client и worker, легкое security prepare на выбранном worker-е, учет состояния, защита регистрации и управление масштабированием через worker/client registry.
+Coordinator не выполняет AI-обработку сам, не проксирует клиентские результаты и не гоняет большие файлы. Его задача - matchmaking между client, worker и storage-node, легкое security prepare на выбранном worker-е, выдача scoped storage-access, учет состояния, защита регистрации и управление масштабированием через registry.
 
 ## Запуск
 
@@ -20,9 +20,8 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - [config](config/README.md) - конфигурация coordinator, чтение env и валидация настроек.
 - [jobs](jobs/README.md) - модель jobs, статусы, хранение и переходы состояния.
 - [persistence](persistence/README.md) - выбор memory/Postgres backend и миграции coordinator tables.
-- [registry](registry/README.md) - реестр worker'ов, registration, heartbeat, capacity и capabilities.
+- [registry](registry/README.md) - реестр worker'ов, service clients и storage-node: registration, heartbeat, capacity и capabilities.
 - [scheduler](scheduler/README.md) - housekeeping просроченных assignments и освобождение capacity.
-- [storage](storage/README.md) - object storage backend для файлов и изображений.
 - [utils](utils/README.md) - утилитарные функции coordinator: IP extraction, registration guards и helpers без доменной логики.
 
 ## Основной поток
@@ -30,18 +29,20 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 1. API принимает запрос на создание примерки.
 2. Request валидируется через контракты из `apps/shared`.
 3. Coordinator находит callback URL зарегистрированного service client, если запрос пришел с `sourceClientId`.
-4. Coordinator выбирает доступный worker из `registry`, резервирует его capacity и создает job со статусом `assigned`.
+4. Coordinator выбирает доступный worker и storage-node из `registry`, резервирует worker capacity и создает job со статусом `assigned`.
 5. Coordinator вызывает `POST /assignments` выбранного worker'а по `WORKER_SERVICE_KEY`, чтобы подготовить будущий client dispatch и передать worker-у signed callback token.
-6. API возвращает клиенту `job`, `worker` и готовый `workerRequest` с signed dispatch token. Callback token клиенту не возвращается.
-7. Client отправляет `workerRequest` напрямую worker'у, worker затем сообщает progress/result status обратно в coordinator.
+6. API возвращает клиенту `job`, `worker`, `storage` и готовый `workerRequest` с signed dispatch token. Callback token клиенту не возвращается.
+7. Client отправляет `workerRequest` напрямую worker'у, а файлы читает/пишет напрямую через storage-node по storage-access token.
+8. Worker сообщает progress/result status обратно в coordinator и результат в callback клиента.
 
 ## Реализованные endpoints
 
 - `GET /health` - статус coordinator, worker'ы, service clients и количество queued jobs; требует `x-admin-key`.
 - `GET /jobs` - список jobs из активного persistence backend; требует `x-admin-key`.
 - `GET /jobs/:id` - состояние конкретной job; требует `x-admin-key`.
-- `POST /storage/objects` - dev/local upload файла в object storage; требует `x-client-key` или `x-worker-service-key`, возвращает `StorageObjectRef`.
-- `GET /storage/objects/:key` - dev/debug чтение объекта из local storage; требует `x-admin-key`.
+- `POST /storage/register` - регистрация storage-node; требует `x-storage-registration-key`.
+- `POST /storage/:storageId/heartbeat` - heartbeat storage-node; требует `x-storage-service-key`.
+- `POST /storage/access` - выдача подходящего storage-node и scoped token для прямого upload/download; требует `x-client-key` для clients или `x-worker-service-key` для worker'ов.
 - `POST /jobs` - создание job assignment зарегистрированным клиентом; требует `x-client-key`, валидный `sourceClientId`, возвращает выбранный worker endpoint, `workerRequest` и dispatch token.
 - `POST /clients/register` - регистрация service client; требует `x-client-key`.
 - `POST /clients/:clientId/heartbeat` - heartbeat service client; требует `x-client-key`.
@@ -56,11 +57,13 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - Postgres, если включен, принадлежит только coordinator: worker/client не получают credentials БД.
 - Файлы и изображения должны жить в object storage; в БД хранятся metadata и object keys.
 - Coordinator не должен быть data-plane для клиентских результатов: результат идет worker -> client callback.
+- Coordinator не должен быть data-plane для файлов: client/worker общаются с storage-node напрямую.
 - Перед выдачей worker клиенту coordinator должен подготовить pending assignment на worker-е.
 - `callbackUrl` при создании job не должен доверяться клиентскому payload: coordinator берет его только из registry зарегистрированного service client.
 - Регистрация worker'ов должна быть защищена отдельным registration key.
 - Служебное общение worker/coordinator должно быть защищено отдельным service key.
 - Неверные попытки регистрации worker'а считаются по IP и после лимита переводят IP в ban до перезапуска coordinator.
+- Неверные попытки регистрации storage-node считаются по IP и после лимита переводят IP в ban до перезапуска coordinator.
 - Регистрация service clients должна быть защищена отдельным ключом.
 - Недоступный worker должен автоматически выпадать из активного пула после пропущенных heartbeat.
 - Активные jobs упавшего worker'а или service client должны переводиться в `failed`, а pending assignment на worker-е должен отменяться, когда это возможно.

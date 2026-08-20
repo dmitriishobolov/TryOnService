@@ -7,7 +7,8 @@
 - создание job;
 - получение статуса job;
 - результат обработки;
-- storage object refs для входных и выходных файлов;
+- storage object refs для входных и выходных файлов, включая `storageId` узла, где лежит объект;
+- регистрацию storage-node, heartbeat storage-node и выдачу storage-access;
 - ошибки API;
 - регистрацию service client;
 - heartbeat service client;
@@ -17,6 +18,7 @@
 - assignment response для прямой связи client -> worker;
 - worker assignment prepare для security handshake coordinator -> worker;
 - callback token metadata для прямого ответа worker -> client;
+- storage-access token metadata для прямого upload/download client/worker -> storage-node;
 - обновление прогресса;
 - capabilities worker'а.
 

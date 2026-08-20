@@ -1,12 +1,21 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-export type SignedTokenPurpose = "worker-dispatch" | "client-callback";
+export type SignedTokenPurpose =
+  | "worker-dispatch"
+  | "client-callback"
+  | "storage-access";
+
+export type SignedTokenStorageScope = "read" | "write" | "read-write";
 
 export interface DispatchTokenPayload {
   purpose: SignedTokenPurpose;
-  jobId: string;
+  jobId?: string;
   workerId?: string;
   clientId?: string;
+  storageId?: string;
+  requesterId?: string;
+  scope?: SignedTokenStorageScope;
+  keyPrefix?: string;
   expiresAt: string;
 }
 
@@ -86,11 +95,35 @@ function decodePayload(value: string): DispatchTokenPayload | undefined {
 
     if (
       (parsed?.purpose !== "worker-dispatch" &&
-        parsed?.purpose !== "client-callback") ||
-      typeof parsed?.jobId !== "string" ||
+        parsed?.purpose !== "client-callback" &&
+        parsed?.purpose !== "storage-access") ||
+      (parsed.jobId !== undefined && typeof parsed.jobId !== "string") ||
       (parsed.workerId !== undefined && typeof parsed.workerId !== "string") ||
       (parsed.clientId !== undefined && typeof parsed.clientId !== "string") ||
+      (parsed.storageId !== undefined && typeof parsed.storageId !== "string") ||
+      (parsed.requesterId !== undefined &&
+        typeof parsed.requesterId !== "string") ||
+      (parsed.scope !== undefined &&
+        parsed.scope !== "read" &&
+        parsed.scope !== "write" &&
+        parsed.scope !== "read-write") ||
+      (parsed.keyPrefix !== undefined && typeof parsed.keyPrefix !== "string") ||
       typeof parsed.expiresAt !== "string"
+    ) {
+      return undefined;
+    }
+
+    if (
+      (parsed.purpose === "worker-dispatch" ||
+        parsed.purpose === "client-callback") &&
+      typeof parsed.jobId !== "string"
+    ) {
+      return undefined;
+    }
+
+    if (
+      parsed.purpose === "storage-access" &&
+      (typeof parsed.storageId !== "string" || typeof parsed.scope !== "string")
     ) {
       return undefined;
     }

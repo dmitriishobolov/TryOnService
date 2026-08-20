@@ -3,6 +3,7 @@ import type {
   ClientRegistrationRequest,
   ClientRegistrationResponse,
   CreateTryOnJobRequest,
+  StorageAccessResponse,
   TryOnJobAssignmentResponse,
 } from "../../shared/contracts/index.js";
 import { postJson } from "../../shared/http.js";
@@ -64,6 +65,25 @@ export class TelegramCoordinatorClient {
     return postJson<TryOnJobAssignmentResponse>(
       `${this.config.coordinatorUrl}/jobs`,
       payload,
+      this.headers(),
+      this.postOptions(),
+    );
+  }
+
+  requestStorageAccess(params: {
+    scope: "read" | "write" | "read-write";
+    storageId?: string;
+    keyPrefix?: string;
+  }): Promise<StorageAccessResponse> {
+    return postJson<StorageAccessResponse>(
+      `${this.config.coordinatorUrl}/storage/access`,
+      {
+        requesterId: this.config.clientId,
+        requesterType: "client",
+        scope: params.scope,
+        storageId: params.storageId,
+        keyPrefix: params.keyPrefix,
+      },
       this.headers(),
       this.postOptions(),
     );

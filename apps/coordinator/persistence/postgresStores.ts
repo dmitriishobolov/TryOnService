@@ -10,7 +10,10 @@ import type {
   JobResultUpdateRequest,
   JobStatus,
   RegisteredClient,
+  RegisteredStorageNode,
   RegisteredWorker,
+  StorageHeartbeatRequest,
+  StorageRegistrationRequest,
   TryOnJob,
   WorkerCapability,
   WorkerHeartbeatRequest,
@@ -19,6 +22,7 @@ import type {
 } from "../../shared/contracts/index.js";
 import type { JobStore } from "../jobs/store.js";
 import type { ClientRegistryStore } from "../registry/clientStore.js";
+import type { StorageRegistryStore } from "../registry/storageStore.js";
 import type { WorkerRegistryStore } from "../registry/store.js";
 
 interface JobRow {
@@ -54,6 +58,17 @@ interface ClientRow {
   base_url: string;
   callback_url: string;
   status: string;
+  registered_at: Date | string;
+  last_heartbeat_at: Date | string;
+}
+
+interface StorageNodeRow {
+  storage_id: string;
+  base_url: string;
+  driver: string;
+  status: string;
+  used_bytes: string | number | null;
+  capacity_bytes: string | number | null;
   registered_at: Date | string;
   last_heartbeat_at: Date | string;
 }
@@ -135,10 +150,34 @@ export async function migrateCoordinatorPostgres(pool: Pool): Promise<void> {
       content_type text,
       size_bytes bigint,
       checksum_sha256 text,
+      storage_id text,
       url text,
       owner_job_id uuid REFERENCES tryon_jobs(id) ON DELETE SET NULL,
       created_at timestamptz NOT NULL DEFAULT now()
     )
+  `);
+
+  await pool.query(`
+    ALTER TABLE tryon_storage_objects
+      ADD COLUMN IF NOT EXISTS storage_id text
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tryon_storage_nodes (
+      storage_id text PRIMARY KEY,
+      base_url text NOT NULL,
+      driver text NOT NULL,
+      status text NOT NULL,
+      used_bytes bigint,
+      capacity_bytes bigint,
+      registered_at timestamptz NOT NULL,
+      last_heartbeat_at timestamptz NOT NULL
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tryon_storage_nodes_status_heartbeat
+      ON tryon_storage_nodes (status, last_heartbeat_at)
   `);
 }
 
@@ -726,6 +765,145 @@ export class PostgresClientRegistry implements ClientRegistryStore {
   }
 }
 
+export class PostgresStorageRegistry implements StorageRegistryStore {
+  constructor(private readonly pool: Pool) {}
+
+  async register(
+    request: StorageRegistrationRequest,
+    resolvedBaseUrl: string,
+  ): Promise<RegisteredStorageNode> {
+    const now = new Date().toISOString();
+    const result = await this.pool.query<StorageNodeRow>(
+      `
+        INSERT INTO tryon_storage_nodes (
+          storage_id,
+          base_url,
+          driver,
+          status,
+          used_bytes,
+          capacity_bytes,
+          registered_at,
+          last_heartbeat_at
+        )
+        VALUES ($1, $2, $3, 'ready', NULL, $4, $5, $5)
+        ON CONFLICT (storage_id) DO UPDATE
+        SET base_url = EXCLUDED.base_url,
+            driver = EXCLUDED.driver,
+            status = 'ready',
+            capacity_bytes = EXCLUDED.capacity_bytes,
+            last_heartbeat_at = EXCLUDED.last_heartbeat_at
+        RETURNING *
+      `,
+      [
+        request.storageId,
+        resolvedBaseUrl.replace(/\/$/, ""),
+        request.driver,
+        request.capacityBytes ?? null,
+        now,
+      ],
+    );
+
+    return mapStorageNodeRow(result.rows[0]);
+  }
+
+  async heartbeat(
+    request: StorageHeartbeatRequest,
+  ): Promise<RegisteredStorageNode | undefined> {
+    const now = new Date().toISOString();
+    const result = await this.pool.query<StorageNodeRow>(
+      `
+        UPDATE tryon_storage_nodes
+        SET status = $2,
+            used_bytes = COALESCE($3, used_bytes),
+            capacity_bytes = COALESCE($4, capacity_bytes),
+            last_heartbeat_at = $5
+        WHERE storage_id = $1
+        RETURNING *
+      `,
+      [
+        request.storageId,
+        request.status,
+        request.usedBytes ?? null,
+        request.capacityBytes ?? null,
+        now,
+      ],
+    );
+
+    return result.rows[0] ? mapStorageNodeRow(result.rows[0]) : undefined;
+  }
+
+  async markOffline(
+    storageId: string,
+  ): Promise<RegisteredStorageNode | undefined> {
+    const result = await this.pool.query<StorageNodeRow>(
+      `
+        UPDATE tryon_storage_nodes
+        SET status = 'offline'
+        WHERE storage_id = $1
+        RETURNING *
+      `,
+      [storageId],
+    );
+
+    return result.rows[0] ? mapStorageNodeRow(result.rows[0]) : undefined;
+  }
+
+  async list(): Promise<RegisteredStorageNode[]> {
+    const result = await this.pool.query<StorageNodeRow>(
+      "SELECT * FROM tryon_storage_nodes ORDER BY storage_id ASC",
+    );
+
+    return result.rows.map(mapStorageNodeRow);
+  }
+
+  async get(storageId: string): Promise<RegisteredStorageNode | undefined> {
+    const result = await this.pool.query<StorageNodeRow>(
+      "SELECT * FROM tryon_storage_nodes WHERE storage_id = $1",
+      [storageId],
+    );
+
+    return result.rows[0] ? mapStorageNodeRow(result.rows[0]) : undefined;
+  }
+
+  async findAvailable(
+    heartbeatTimeoutMs: number,
+  ): Promise<RegisteredStorageNode | undefined> {
+    const cutoff = new Date(Date.now() - heartbeatTimeoutMs).toISOString();
+    const result = await this.pool.query<StorageNodeRow>(
+      `
+        SELECT *
+        FROM tryon_storage_nodes
+        WHERE status <> 'offline'
+          AND last_heartbeat_at >= $1
+          AND (capacity_bytes IS NULL OR used_bytes IS NULL OR used_bytes < capacity_bytes)
+        ORDER BY last_heartbeat_at DESC
+        LIMIT 1
+      `,
+      [cutoff],
+    );
+
+    return result.rows[0] ? mapStorageNodeRow(result.rows[0]) : undefined;
+  }
+
+  async markStaleStorageOffline(
+    heartbeatTimeoutMs: number,
+  ): Promise<RegisteredStorageNode[]> {
+    const cutoff = new Date(Date.now() - heartbeatTimeoutMs).toISOString();
+    const result = await this.pool.query<StorageNodeRow>(
+      `
+        UPDATE tryon_storage_nodes
+        SET status = 'offline'
+        WHERE status <> 'offline'
+          AND last_heartbeat_at < $1
+        RETURNING *
+      `,
+      [cutoff],
+    );
+
+    return result.rows.map(mapStorageNodeRow);
+  }
+}
+
 function mapJobRow(row: JobRow): TryOnJob {
   return {
     id: row.id,
@@ -764,6 +942,20 @@ function mapClientRow(row: ClientRow): RegisteredClient {
     baseUrl: row.base_url,
     callbackUrl: row.callback_url,
     status: row.status as RegisteredClient["status"],
+    registeredAt: toIsoString(row.registered_at),
+    lastHeartbeatAt: toIsoString(row.last_heartbeat_at),
+  };
+}
+
+function mapStorageNodeRow(row: StorageNodeRow): RegisteredStorageNode {
+  return {
+    storageId: row.storage_id,
+    baseUrl: row.base_url,
+    driver: row.driver as RegisteredStorageNode["driver"],
+    status: row.status as RegisteredStorageNode["status"],
+    usedBytes: row.used_bytes === null ? undefined : Number(row.used_bytes),
+    capacityBytes:
+      row.capacity_bytes === null ? undefined : Number(row.capacity_bytes),
     registeredAt: toIsoString(row.registered_at),
     lastHeartbeatAt: toIsoString(row.last_heartbeat_at),
   };

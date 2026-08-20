@@ -7,14 +7,21 @@ import {
   isCreateTryOnJobRequest,
   isJobProgressUpdateRequest,
   isJobResultUpdateRequest,
-  isStorageObjectUploadRequest,
+  isStorageAccessRequest,
+  isStorageHeartbeatRequest,
+  isStorageRegistrationRequest,
   isWorkerHeartbeatRequest,
   isWorkerRegistrationRequest,
   type ClientRegistrationRequest,
   type ClientRegistrationResponse,
   type CreateTryOnJobRequest,
   type RegisteredWorker,
-  type StorageObjectUploadResponse,
+  type RegisteredStorageNode,
+  type StorageAccessAssignment,
+  type StorageAccessResponse,
+  type StorageObjectRef,
+  type StorageRegistrationRequest,
+  type StorageRegistrationResponse,
   type WorkerAssignmentPrepareRequest,
   type WorkerAssignmentPrepareResponse,
   type TryOnJobAssignmentResponse,
@@ -32,12 +39,13 @@ import {
   writeJson,
 } from "../../shared/http.js";
 import { FixedWindowRateLimiter } from "../../shared/rateLimit.js";
+import { normalizeStorageKey } from "../../shared/storage/index.js";
 import type { CoordinatorConfig } from "../config/index.js";
 import type { JobStore } from "../jobs/store.js";
 import type { ClientRegistryStore } from "../registry/clientStore.js";
+import type { StorageRegistryStore } from "../registry/storageStore.js";
 import type { WorkerRegistryStore } from "../registry/store.js";
 import type { Scheduler } from "../scheduler/index.js";
-import type { ObjectStorage } from "../../shared/storage/index.js";
 import type { IpBanGuard } from "../utils/ipBanGuard.js";
 import {
   resolveDirectRequestAddress,
@@ -49,8 +57,9 @@ interface CoordinatorServerDeps {
   jobs: JobStore;
   workers: WorkerRegistryStore;
   clients: ClientRegistryStore;
-  storage: ObjectStorage;
+  storageNodes: StorageRegistryStore;
   workerRegistrationGuard: IpBanGuard;
+  storageRegistrationGuard: IpBanGuard;
   scheduler: Scheduler;
 }
 
@@ -60,8 +69,9 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
     jobs,
     workers,
     clients,
-    storage,
+    storageNodes,
     workerRegistrationGuard,
+    storageRegistrationGuard,
     scheduler,
   } = deps;
   const rateLimiter = new FixedWindowRateLimiter(
@@ -89,16 +99,19 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        const [workerList, clientList, queuedJobs] = await Promise.all([
-          workers.list(),
-          clients.list(),
-          jobs.findQueued(),
-        ]);
+        const [workerList, clientList, storageNodeList, queuedJobs] =
+          await Promise.all([
+            workers.list(),
+            clients.list(),
+            storageNodes.list(),
+            jobs.findQueued(),
+          ]);
 
         writeJson(response, 200, {
           status: "ok",
           workers: workerList,
           clients: clientList,
+          storageNodes: storageNodeList,
           queuedJobs: queuedJobs.length,
         });
         return;
@@ -147,6 +160,20 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
 
         if (!isCreateTryOnJobRequest(body)) {
           writeError(response, 400, "invalid_job_request", "Invalid job payload");
+          return;
+        }
+
+        const inputFilesStoragePrefix = resolveInputFilesStoragePrefix(
+          body.payload.inputFiles,
+        );
+
+        if (!inputFilesStoragePrefix.valid) {
+          writeError(
+            response,
+            400,
+            "input_files_not_scoped",
+            inputFilesStoragePrefix.message,
+          );
           return;
         }
 
@@ -206,6 +233,34 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           requestWithCallback,
           config,
         );
+        const storageAccess = await createStorageAccessAssignment(
+          storageNodes,
+          config,
+          resolveJobStorageAccessRequest(
+            job.id,
+            reservedWorker.workerId,
+            inputFilesStoragePrefix.storageId,
+            inputFilesStoragePrefix.keyPrefix,
+          ),
+        );
+
+        if (!storageAccess) {
+          await workers.release(reservedWorker.workerId);
+          await jobs.markFailed(job.id, {
+            code: "no_available_storage",
+            message: "No object storage node is currently available",
+            retryable: true,
+          });
+          writeError(
+            response,
+            503,
+            "no_available_storage",
+            "No object storage node is currently available",
+          );
+          return;
+        }
+
+        workerRequest.storage = storageAccess;
         const dispatchToken = createDispatchToken(
           {
             purpose: "worker-dispatch",
@@ -280,6 +335,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
             dispatchToken,
             dispatchTokenExpiresAt,
           },
+          storage: storageAccess,
           workerRequest,
         };
 
@@ -287,58 +343,127 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         return;
       }
 
-      if (request.method === "POST" && url.pathname === "/storage/objects") {
+      if (request.method === "POST" && url.pathname === "/storage/access") {
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
+
+        if (!isStorageAccessRequest(body)) {
+          writeError(
+            response,
+            400,
+            "invalid_storage_access",
+            "Invalid storage access payload",
+          );
+          return;
+        }
+
         if (
-          !hasClientKey(request.headers["x-client-key"], config) &&
-          !hasWorkerServiceKey(request.headers["x-worker-service-key"], config)
+          (body.requesterType === "client" &&
+            !hasClientKey(request.headers["x-client-key"], config)) ||
+          (body.requesterType === "worker" &&
+            !hasWorkerServiceKey(request.headers["x-worker-service-key"], config))
         ) {
           writeError(response, 401, "unauthorized_storage", "Invalid storage key");
           return;
         }
 
-        const body = await readJsonBody(request, {
-          maxBytes: config.maxJsonBodyBytes,
-        });
+        const storageAccess = await createStorageAccessAssignment(
+          storageNodes,
+          config,
+          {
+            requesterId: body.requesterId,
+            scope: body.scope,
+            storageId: body.storageId,
+            keyPrefix:
+              body.keyPrefix ??
+              `${body.requesterType}/${body.requesterId.replace(/[^a-zA-Z0-9._-]/g, "-")}/`,
+          },
+        );
 
-        if (!isStorageObjectUploadRequest(body)) {
+        if (!storageAccess) {
           writeError(
             response,
-            400,
-            "invalid_storage_upload",
-            "Invalid storage upload payload",
+            503,
+            "no_available_storage",
+            "No object storage node is currently available",
           );
           return;
         }
 
-        const object = await storage.putObject({
-          key: body.key,
-          contentType: body.contentType,
-          data: Buffer.from(body.dataBase64, "base64"),
-        });
-        const payload: StorageObjectUploadResponse = {
-          object,
+        const payload: StorageAccessResponse = {
+          storage: storageAccess,
         };
 
-        writeJson(response, 201, payload);
+        writeJson(response, 200, payload);
         return;
       }
 
-      const storageObjectMatch = /^\/storage\/objects\/(.+)$/.exec(url.pathname);
+      if (request.method === "POST" && url.pathname === "/storage/register") {
+        const ipAddress = resolveDirectRequestAddress(request);
 
-      if (request.method === "GET" && storageObjectMatch) {
-        if (!hasAdminKey(request.headers["x-admin-key"], config)) {
-          writeError(response, 401, "unauthorized_admin", "Invalid admin key");
+        if (storageRegistrationGuard.isBanned(ipAddress)) {
+          writeError(
+            response,
+            403,
+            "storage_registration_ip_banned",
+            "Storage registration source IP is banned until coordinator restart",
+          );
           return;
         }
 
-        const key = decodeURIComponent(storageObjectMatch[1]);
-        const object = await storage.getObject(key);
+        if (
+          !hasStorageRegistrationKey(
+            request.headers["x-storage-registration-key"],
+            config,
+          )
+        ) {
+          const attempt = storageRegistrationGuard.registerFailure(ipAddress);
 
-        response.writeHead(200, {
-          "Content-Type": object.ref.contentType ?? "application/octet-stream",
-          "Content-Length": object.data.length,
+          if (attempt.banned) {
+            console.warn(
+              `[coordinator] Storage registration IP ${ipAddress} banned after ${attempt.failedAttempts} invalid key attempts`,
+            );
+            writeError(
+              response,
+              403,
+              "storage_registration_ip_banned",
+              "Storage registration source IP is banned until coordinator restart",
+            );
+            return;
+          }
+
+          console.warn(
+            `[coordinator] Invalid storage registration key from ${ipAddress}; attempt ${attempt.failedAttempts}/${config.storageRegistrationMaxInvalidAttempts}`,
+          );
+          writeError(response, 401, "unauthorized_storage", "Invalid storage key");
+          return;
+        }
+
+        storageRegistrationGuard.clear(ipAddress);
+
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
         });
-        response.end(object.data);
+
+        if (!isStorageRegistrationRequest(body)) {
+          writeError(
+            response,
+            400,
+            "invalid_storage_registration",
+            "Invalid storage registration payload",
+          );
+          return;
+        }
+
+        const resolvedBaseUrl = resolveServiceBaseUrl(request, body);
+        const storageNode = await storageNodes.register(body, resolvedBaseUrl);
+        const payload: StorageRegistrationResponse = {
+          storageId: storageNode.storageId,
+          heartbeatIntervalMs: config.storageHeartbeatIntervalMs,
+        };
+
+        writeJson(response, 200, payload);
         return;
       }
 
@@ -371,6 +496,56 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         };
 
         writeJson(response, 200, payload);
+        return;
+      }
+
+      const storageHeartbeatMatch = /^\/storage\/([^/]+)\/heartbeat$/.exec(
+        url.pathname,
+      );
+
+      if (request.method === "POST" && storageHeartbeatMatch) {
+        if (!hasStorageServiceKey(request.headers["x-storage-service-key"], config)) {
+          writeError(response, 401, "unauthorized_storage", "Invalid storage key");
+          return;
+        }
+
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
+
+        if (
+          !isStorageHeartbeatRequest(body) ||
+          body.storageId !== storageHeartbeatMatch[1]
+        ) {
+          writeError(
+            response,
+            400,
+            "invalid_storage_heartbeat",
+            "Invalid storage heartbeat payload",
+          );
+          return;
+        }
+
+        const storageNode = await storageNodes.heartbeat(body);
+
+        if (!storageNode) {
+          writeError(
+            response,
+            404,
+            "storage_not_found",
+            "Storage node is not registered",
+          );
+          return;
+        }
+
+        if (storageNode.status === "offline") {
+          await storageNodes.markOffline(storageNode.storageId);
+        }
+
+        writeJson(response, 200, {
+          ok: true,
+          storage: storageNode,
+        });
         return;
       }
 
@@ -633,6 +808,24 @@ function hasWorkerServiceKey(
   return value === config.workerServiceKey;
 }
 
+function hasStorageRegistrationKey(
+  headerValue: string | string[] | undefined,
+  config: CoordinatorConfig,
+): boolean {
+  const value = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+
+  return value === config.storageRegistrationKey;
+}
+
+function hasStorageServiceKey(
+  headerValue: string | string[] | undefined,
+  config: CoordinatorConfig,
+): boolean {
+  const value = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+
+  return value === config.storageServiceKey;
+}
+
 function hasClientKey(
   headerValue: string | string[] | undefined,
   config: CoordinatorConfig,
@@ -745,6 +938,205 @@ function resolveRequiredCapabilities(request: CreateTryOnJobRequest): string[] {
   return [];
 }
 
+function resolveJobStorageAccessRequest(
+  jobId: string,
+  workerId: string,
+  storageId: string | undefined,
+  inputFilesStoragePrefix: string | undefined,
+): {
+  requesterId: string;
+  scope: StorageAccessAssignment["scope"];
+  storageId?: string;
+  keyPrefix: string;
+} {
+  if (inputFilesStoragePrefix) {
+    return {
+      requesterId: workerId,
+      scope: "read",
+      storageId,
+      keyPrefix: inputFilesStoragePrefix,
+    };
+  }
+
+  return {
+    requesterId: workerId,
+    scope: "read-write",
+    keyPrefix: `jobs/${jobId}`,
+  };
+}
+
+function resolveInputFilesStoragePrefix(
+  inputFiles: StorageObjectRef[] | undefined,
+):
+  | { valid: true; storageId?: string; keyPrefix?: string }
+  | { valid: false; message: string } {
+  if (!inputFiles || inputFiles.length === 0) {
+    return {
+      valid: true,
+    };
+  }
+
+  try {
+    const storageIds = new Set(inputFiles.map((file) => file.storageId));
+
+    if (
+      storageIds.size !== 1 ||
+      storageIds.has(undefined) ||
+      storageIds.has("")
+    ) {
+      return {
+        valid: false,
+        message: "Input files must reference one registered storage node",
+      };
+    }
+
+    const directories = inputFiles
+      .map((file) => dirnameStorageKey(normalizeStorageKey(file.key)))
+      .filter((directory): directory is string => Boolean(directory));
+
+    if (directories.length !== inputFiles.length) {
+      return {
+        valid: false,
+        message: "Input files must use valid keys with a shared storage prefix",
+      };
+    }
+
+    const keyPrefix = commonStoragePrefix(directories);
+
+    if (!keyPrefix) {
+      return {
+        valid: false,
+        message: "Input files must use valid keys with a shared storage prefix",
+      };
+    }
+
+    return {
+      valid: true,
+      storageId: inputFiles[0].storageId,
+      keyPrefix,
+    };
+  } catch {
+    return {
+      valid: false,
+      message: "Input files must use valid keys with a shared storage prefix",
+    };
+  }
+}
+
+function dirnameStorageKey(key: string): string | undefined {
+  const index = key.lastIndexOf("/");
+
+  if (index <= 0) {
+    return undefined;
+  }
+
+  return key.slice(0, index);
+}
+
+function commonStoragePrefix(keys: string[]): string | undefined {
+  const [first, ...rest] = keys;
+
+  if (!first) {
+    return undefined;
+  }
+
+  const commonParts = first.split("/");
+
+  for (const key of rest) {
+    const parts = key.split("/");
+
+    while (
+      commonParts.length > 0 &&
+      parts.slice(0, commonParts.length).join("/") !== commonParts.join("/")
+    ) {
+      commonParts.pop();
+    }
+  }
+
+  return commonParts.length > 0 ? commonParts.join("/") : undefined;
+}
+
+async function createStorageAccessAssignment(
+  storageNodes: StorageRegistryStore,
+  config: CoordinatorConfig,
+  request: {
+    requesterId: string;
+    scope: StorageAccessAssignment["scope"];
+    storageId?: string;
+    keyPrefix?: string;
+  },
+): Promise<StorageAccessAssignment | undefined> {
+  const storageNode = request.storageId
+    ? await findAvailableStorageNodeById(
+        storageNodes,
+        request.storageId,
+        config.storageHeartbeatTimeoutMs,
+      )
+    : await storageNodes.findAvailable(config.storageHeartbeatTimeoutMs);
+
+  if (!storageNode) {
+    return undefined;
+  }
+
+  return createStorageAccessForNode(storageNode, config, request);
+}
+
+async function findAvailableStorageNodeById(
+  storageNodes: StorageRegistryStore,
+  storageId: string,
+  heartbeatTimeoutMs: number,
+): Promise<RegisteredStorageNode | undefined> {
+  const node = await storageNodes.get(storageId);
+
+  if (!node || node.status === "offline") {
+    return undefined;
+  }
+
+  const lastHeartbeatAt = new Date(node.lastHeartbeatAt).getTime();
+  const hasFreshHeartbeat = Date.now() - lastHeartbeatAt <= heartbeatTimeoutMs;
+  const hasSpace =
+    node.capacityBytes === undefined ||
+    node.usedBytes === undefined ||
+    node.usedBytes < node.capacityBytes;
+
+  return hasFreshHeartbeat && hasSpace ? node : undefined;
+}
+
+function createStorageAccessForNode(
+  storageNode: RegisteredStorageNode,
+  config: CoordinatorConfig,
+  request: {
+    requesterId: string;
+    scope: StorageAccessAssignment["scope"];
+    keyPrefix?: string;
+  },
+): StorageAccessAssignment {
+  const accessTokenExpiresAt = new Date(
+    Date.now() + config.storageAccessTokenTtlMs,
+  ).toISOString();
+  const accessToken = createDispatchToken(
+    {
+      purpose: "storage-access",
+      storageId: storageNode.storageId,
+      requesterId: request.requesterId,
+      scope: request.scope,
+      keyPrefix: request.keyPrefix,
+      expiresAt: accessTokenExpiresAt,
+    },
+    config.storageAccessSigningKey,
+  );
+
+  return {
+    storageId: storageNode.storageId,
+    baseUrl: storageNode.baseUrl,
+    objectBaseUrl: `${storageNode.baseUrl}/objects`,
+    accessToken,
+    accessTokenExpiresAt,
+    scope: request.scope,
+    keyPrefix: request.keyPrefix,
+  };
+}
+
 async function failActiveJobsForWorker(
   workerId: string,
   jobs: JobStore,
@@ -760,7 +1152,10 @@ async function failActiveJobsForWorker(
 
 function resolveServiceBaseUrl(
   request: IncomingMessage,
-  registration: WorkerRegistrationRequest | ClientRegistrationRequest,
+  registration:
+    | WorkerRegistrationRequest
+    | ClientRegistrationRequest
+    | StorageRegistrationRequest,
 ): string {
   if (registration.publicUrl) {
     return registration.publicUrl.replace(/\/$/, "");

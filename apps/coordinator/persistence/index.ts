@@ -8,9 +8,14 @@ import {
 } from "../registry/clientStore.js";
 import { WorkerRegistry, type WorkerRegistryStore } from "../registry/store.js";
 import {
+  StorageRegistry,
+  type StorageRegistryStore,
+} from "../registry/storageStore.js";
+import {
   migrateCoordinatorPostgres,
   PostgresClientRegistry,
   PostgresJobStore,
+  PostgresStorageRegistry,
   PostgresWorkerRegistry,
 } from "./postgresStores.js";
 
@@ -18,6 +23,7 @@ export interface CoordinatorStores {
   jobs: JobStore;
   workers: WorkerRegistryStore;
   clients: ClientRegistryStore;
+  storageNodes: StorageRegistryStore;
   close(): Promise<void>;
 }
 
@@ -29,6 +35,7 @@ export async function createCoordinatorStores(
       jobs: new InMemoryJobStore(),
       workers: new WorkerRegistry(),
       clients: new ClientRegistry(),
+      storageNodes: new StorageRegistry(),
       close: async () => undefined,
     };
   }
@@ -49,6 +56,7 @@ export async function createCoordinatorStores(
     jobs: new PostgresJobStore(pool),
     workers: new PostgresWorkerRegistry(pool),
     clients: new PostgresClientRegistry(pool),
+    storageNodes: new PostgresStorageRegistry(pool),
     close: () => pool.end(),
   };
 }

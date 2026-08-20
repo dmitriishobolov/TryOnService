@@ -1,6 +1,7 @@
 import type {
   JobProgressUpdateRequest,
   JobResultUpdateRequest,
+  StorageAccessResponse,
   WorkerHeartbeatRequest,
   WorkerRegistrationRequest,
   WorkerRegistrationResponse,
@@ -58,6 +59,25 @@ export class CoordinatorClient {
     return postJson(
       updateUrl(update.jobId, "result", this.config),
       update,
+      this.serviceHeaders(),
+      this.postOptions(),
+    );
+  }
+
+  requestStorageAccess(params: {
+    scope: "read" | "write" | "read-write";
+    storageId?: string;
+    keyPrefix?: string;
+  }): Promise<StorageAccessResponse> {
+    return postJson<StorageAccessResponse>(
+      `${this.config.coordinatorUrl}/storage/access`,
+      {
+        requesterId: this.config.workerId,
+        requesterType: "worker",
+        scope: params.scope,
+        storageId: params.storageId,
+        keyPrefix: params.keyPrefix,
+      },
       this.serviceHeaders(),
       this.postOptions(),
     );

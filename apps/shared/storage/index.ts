@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, type ReadStream } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, normalize, resolve, sep } from "node:path";
+import { dirname, posix, resolve, sep } from "node:path";
 
 import type { StorageObjectRef } from "../contracts/index.js";
 
@@ -101,7 +101,7 @@ export class LocalObjectStorage implements ObjectStorage {
   }
 
   private resolveObjectPath(key: string): string {
-    const normalizedKey = normalize(key).replace(/^(\.\.(\/|\\|$))+/, "");
+    const normalizedKey = normalizeStorageKey(key);
     const path = resolve(this.rootDir, normalizedKey);
 
     if (path !== this.rootDir && !path.startsWith(`${this.rootDir}${sep}`)) {
@@ -110,6 +110,20 @@ export class LocalObjectStorage implements ObjectStorage {
 
     return path;
   }
+}
+
+export function normalizeStorageKey(key: string): string {
+  const normalized = posix.normalize(key.replace(/\\/g, "/")).replace(/^\/+/, "");
+
+  if (
+    !normalized ||
+    normalized === "." ||
+    normalized.split("/").some((part) => part === "..")
+  ) {
+    throw new Error("Invalid storage object key");
+  }
+
+  return normalized;
 }
 
 function sanitizePathPart(value: string): string {

@@ -9,9 +9,10 @@ TryOnService - сервис примерки на базе AI API. Проект 
 Сейчас реализован первый вертикальный срез на Node.js/TypeScript:
 
 - coordinator регистрирует worker'ы и service clients, получает heartbeat, выбирает worker по capacity/capabilities, готовит assignment на worker-е и возвращает клиенту выбранный worker;
+- object storage node регистрируется в coordinator по отдельному ключу, отправляет heartbeat и принимает прямой upload/download от клиентов и worker'ов по короткоживущему signed storage token;
 - worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat с учетом running jobs и pending assignments, принимает jobs напрямую от клиентов только после prepare от coordinator;
-- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, получает assignment, отправляет job worker'у напрямую и выводит пользователю ответ worker'а.
-- coordinator защищает регистрацию worker'ов от перебора ключа: после превышения лимита неверных попыток IP блокируется до перезапуска coordinator;
+- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, получает assignment, отправляет job worker'у напрямую и выводит пользователю ответ worker'а;
+- coordinator защищает регистрацию worker'ов и storage-node от перебора ключа: после превышения лимита неверных попыток IP блокируется до перезапуска coordinator;
 - registration, service-to-service, dispatch token, client callback и admin/debug доступ используют разные ключи;
 - HTTP API имеют лимиты размера JSON body, базовый rate limit и timeout/retry для исходящих service calls;
 - coordinator умеет работать с `memory` или `postgres` persistence backend;
@@ -25,8 +26,13 @@ flowchart LR
     CoordinatorAPI --> Jobs["Jobs"]
     CoordinatorAPI --> Registry["Worker/client registry"]
     CoordinatorAPI --> DB["Postgres or memory state"]
-    CoordinatorAPI --> Storage["Object storage"]
+    CoordinatorAPI --> StorageRegistry["Storage registry"]
     CoordinatorAPI --> Security["Registration guard"]
+    StorageNode["Object storage node"] -->|"register + heartbeat"| CoordinatorAPI
+    Client -->|"request storage access"| CoordinatorAPI
+    CoordinatorAPI -->|"storage endpoint + access token"| Client
+    Client -->|"direct upload/download"| StorageNode
+    WorkerAPI -->|"direct upload/download"| StorageNode
     CoordinatorAPI -->|"prepare assignment"| WorkerAPI
     CoordinatorAPI -->|"worker endpoint + dispatch token"| Client
     Client -->|"direct job dispatch"| WorkerAPI["Worker API"]
@@ -37,14 +43,15 @@ flowchart LR
     Runner -->|"result callback"| Client
 ```
 
-1. Client и worker при запуске регистрируются в coordinator и регулярно подтверждают доступность.
-2. Клиент отправляет запрос на assignment в coordinator.
-3. Coordinator валидирует запрос, находит callback URL клиента, выбирает доступный worker, резервирует capacity и создает job.
-4. Coordinator отправляет worker-у lightweight prepare-запрос: `jobId`, client/callback metadata, required capabilities, срок жизни dispatch token и signed callback token для ответа клиенту.
-5. Если worker подтвердил prepare, coordinator возвращает клиенту assignment с worker endpoint, `workerRequest` и signed dispatch token.
-6. Клиент отправляет heavy request напрямую на worker endpoint с `x-job-dispatch-token`.
-7. Worker принимает job только если token валиден и assignment заранее подготовлен coordinator-ом, затем запускает runner.
-8. Worker отправляет status-only update в coordinator и результат на callback клиента с `x-client-callback-token`.
+1. Client, worker и storage-node при запуске регистрируются в coordinator и регулярно подтверждают доступность.
+2. Клиент запрашивает у coordinator storage-access, получает подходящий storage-node и короткоживущий token, затем загружает изображения напрямую в storage-node.
+3. Клиент отправляет запрос на assignment в coordinator, передавая в payload только `StorageObjectRef` со `storageId`, metadata и пользовательский контекст.
+4. Coordinator валидирует запрос, находит callback URL клиента, выбирает доступный worker и storage-node, резервирует capacity и создает job.
+5. Coordinator отправляет worker-у lightweight prepare-запрос: `jobId`, client/callback metadata, required capabilities, срок жизни dispatch token и signed callback token для ответа клиенту.
+6. Если worker подтвердил prepare, coordinator возвращает клиенту assignment с worker endpoint, `workerRequest`, signed dispatch token и scoped storage-access для worker'а. Если в job есть входные файлы, token ограничен их `storageId` и общим prefix.
+7. Клиент отправляет heavy request напрямую на worker endpoint с `x-job-dispatch-token`.
+8. Worker принимает job только если token валиден и assignment заранее подготовлен coordinator-ом, затем запускает runner и работает с файлами напрямую через storage-node.
+9. Worker отправляет status-only update в coordinator и результат на callback клиента с `x-client-callback-token`.
 
 ## Данные, БД и файлы
 
@@ -54,17 +61,20 @@ Postgres принадлежит coordinator. Worker и client не получа�
 
 - jobs и переходы статусов;
 - registered workers и registered service clients;
-- heartbeat/capacity данные;
-- metadata storage-объектов и object keys.
+- registered storage-node и heartbeat/capacity данные;
+- metadata storage-объектов и object keys, когда они появляются в payload/result.
 
-Файлы и изображения хранятся в object storage. В текущем коде есть dev backend `STORAGE_DRIVER=local`, который пишет файлы в `STORAGE_LOCAL_ROOT`, и общий контракт `StorageObjectRef` для будущего S3-compatible backend. В jobs можно передавать `payload.inputFiles`, а worker result может вернуть `result.files`.
+Файлы и изображения хранятся в отдельном object storage node. В текущем коде есть dev backend `STORAGE_DRIVER=local`, который пишет файлы в `STORAGE_LOCAL_ROOT`, и общий контракт `StorageObjectRef` для будущего S3-compatible backend. В jobs можно передавать `payload.inputFiles`, а worker result может вернуть `result.files`. Ref, который вернул storage-node, содержит `storageId`, чтобы coordinator выдал worker'у доступ к правильному узлу.
 
-Для dev/local загрузки coordinator предоставляет `POST /storage/objects`: service client с `x-client-key` или worker с `x-worker-service-key` отправляет base64 payload и получает `StorageObjectRef`. В production этот путь должен быть заменен signed upload/download URL, чтобы большие файлы не шли через coordinator.
+Coordinator не принимает и не отдает бинарные файлы. Он выдает `POST /storage/access`: клиент или worker получает `StorageAccessAssignment` с `objectBaseUrl`, scoped `accessToken`, TTL и, при необходимости, `keyPrefix`. После этого upload/download идет напрямую в storage-node через `PUT /objects/<key>` и `GET /objects/<key>`.
+
+Если job содержит несколько входных файлов, они должны лежать на одном storage-node и под общим prefix, например `clients/<clientId>/input/<requestId>/...`.
 
 ## Структура репозитория
 
 - [apps](apps/README.md) - все приложения и общие пакеты монорепозитория.
 - [apps/coordinator](apps/coordinator/README.md) - сервис-координатор: API assignment, jobs state, registry worker'ов/service clients, assignment cleanup и coordinator utilities.
+- [apps/storage](apps/storage/README.md) - object storage node: самостоятельная регистрация в coordinator, heartbeat и прямой upload/download файлов.
 - [apps/worker](apps/worker/README.md) - исполняющий сервис: регистрация в coordinator, запуск пайплайнов, вызовы AI API.
 - [apps/shared](apps/shared/README.md) - общие контракты, DTO, типы и схемы валидации.
 - [apps/client](apps/client/README.md) - клиентские интеграции, через которые пользователи создают задачи.
@@ -78,9 +88,18 @@ Coordinator:
 - хранит состояние jobs и историю переходов;
 - ведет реестр worker'ов и service clients, их heartbeat, capacity и capabilities;
 - подбирает worker, готовит pending assignment на worker-е и выдает клиенту signed assignment для прямой отправки job;
+- ведет registry storage-node, выдает клиентам и worker'ам scoped storage-access token;
 - чистит просроченные assignments и освобождает capacity worker'а;
 - пытается отменять pending assignment на worker-е, если assignment истек или service client пропал;
-- блокирует IP, которые пытаются подобрать `WORKER_REGISTRATION_KEY` через регистрацию worker'а.
+- блокирует IP, которые пытаются подобрать `WORKER_REGISTRATION_KEY` через регистрацию worker'а;
+- блокирует IP, которые пытаются подобрать `STORAGE_REGISTRATION_KEY` через регистрацию storage-node.
+
+Object storage node:
+
+- при старте выбирает свободный порт, регистрируется в coordinator по `STORAGE_REGISTRATION_KEY` и сообщает публичный endpoint;
+- отправляет heartbeat coordinator-у по `STORAGE_SERVICE_KEY`;
+- принимает `PUT /objects/<key>` и `GET /objects/<key>` только с signed token purpose `storage-access`;
+- хранит файлы локально в dev backend или станет точкой расширения под S3-compatible backend.
 
 Worker:
 
@@ -116,6 +135,12 @@ Copy-Item .env.example .env
 npm run dev:coordinator
 ```
 
+В отдельном терминале запустите object storage node:
+
+```bash
+npm run dev:storage
+```
+
 В отдельном терминале запустите worker:
 
 ```bash
@@ -131,14 +156,15 @@ npm run dev:telegram
 По умолчанию используются адреса:
 
 - coordinator: `http://localhost:3000`
+- object storage node: `http://localhost:4200`
 - worker: `http://localhost:4001`
 - telegram callback server: `http://localhost:4100`
 
-Если основной порт worker или Telegram client занят, сервис автоматически выберет ближайший свободный порт и зарегистрирует в coordinator фактический порт.
+Если основной порт storage-node, worker или Telegram client занят, сервис автоматически выберет ближайший свободный порт и зарегистрирует в coordinator фактический порт.
 
-Если worker, coordinator и Telegram client запускаются не на одной машине, задайте публичные URL через `COORDINATOR_PUBLIC_URL` и `COORDINATOR_URL`. Адреса worker'а и Telegram client callback server coordinator определяет сам по IP registration-запроса и выбранному порту.
+Если storage-node, worker, coordinator и Telegram client запускаются не на одной машине, задайте публичные URL через `COORDINATOR_PUBLIC_URL` и `COORDINATOR_URL`. Адреса storage-node, worker'а и Telegram client callback server coordinator определяет сам по IP registration-запроса и выбранному порту.
 
-Если автоопределение публичного endpoint не подходит из-за NAT, reverse proxy или домена, задайте override через `WORKER_PUBLIC_URL` или `TELEGRAM_CLIENT_PUBLIC_URL`.
+Если автоопределение публичного endpoint не подходит из-за NAT, reverse proxy или домена, задайте override через `STORAGE_PUBLIC_URL`, `WORKER_PUBLIC_URL` или `TELEGRAM_CLIENT_PUBLIC_URL`.
 
 ## Безопасность
 
@@ -150,16 +176,19 @@ npm run dev:telegram
 - `CLIENT_REGISTRATION_KEY` - регистрация и heartbeat service clients, а также создание jobs в coordinator; передается как `x-client-key`.
 - `CLIENT_CALLBACK_SIGNING_KEY` - подпись callback token, по которому Telegram client проверяет ответ worker'а.
 - `ADMIN_API_KEY` - доступ к debug/admin endpoints coordinator: `GET /health`, `GET /jobs`, `GET /jobs/:id`; передается как `x-admin-key`.
+- `STORAGE_REGISTRATION_KEY` - только регистрация storage-node в `POST /storage/register`, передается как `x-storage-registration-key`.
+- `STORAGE_SERVICE_KEY` - служебные вызовы coordinator <-> storage-node: heartbeat и health; передается как `x-storage-service-key`.
+- `STORAGE_ACCESS_SIGNING_KEY` - подпись scoped token, по которому client/worker ходят напрямую в storage-node.
 
 Клиент не может подставить произвольный `callbackUrl` при создании job. Coordinator всегда берет callback URL из registry по `sourceClientId`, поэтому `POST /jobs` требует зарегистрированный и ready service client.
 
-Для worker registration есть in-memory защита от перебора: если один direct remote IP отправит больше `WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS` неверных ключей в `POST /workers/register`, coordinator вернет `403 worker_registration_ip_banned` и будет держать этот IP в бане до перезапуска процесса.
+Для worker и storage registration есть in-memory защита от перебора: если один direct remote IP отправит больше лимита неверных ключей в `POST /workers/register` или `POST /storage/register`, coordinator вернет `403 ..._ip_banned` и будет держать этот IP в бане до перезапуска процесса.
 
-Адрес для бана берется из прямого socket remote address, а не из `x-forwarded-for`, чтобы атакующий не мог легко менять IP заголовком. `x-forwarded-for` и `x-real-ip` используются только для автоопределения публичного endpoint worker/client при регистрации.
+Адрес для бана берется из прямого socket remote address, а не из `x-forwarded-for`, чтобы атакующий не мог легко менять IP заголовком. `x-forwarded-for` и `x-real-ip` используются только для автоопределения публичного endpoint storage-node/worker/client при регистрации.
 
 ## Проверка без Telegram Bot API
 
-Можно проверить matchmaking coordinator + прямую отправку job worker'у через тестовый HTTP callback. Запустите coordinator и worker, затем в отдельном терминале поднимите простой callback server:
+Можно проверить matchmaking coordinator + прямую отправку job worker'у через тестовый HTTP callback. Запустите coordinator, storage-node и worker, затем в отдельном терминале поднимите простой callback server:
 
 ```powershell
 node -e "require('node:http').createServer((req,res)=>{let b='';req.on('data',c=>b+=c);req.on('end',()=>{console.log(req.method,req.url,req.headers['x-client-callback-token'],b);res.writeHead(200,{'content-type':'application/json'});res.end('{\"ok\":true}')})}).listen(4100,'0.0.0.0',()=>console.log('callback on 4100'))"
@@ -176,10 +205,21 @@ curl.exe -s -X POST http://localhost:3000/clients/register `
   -H "x-client-key: $clientKey" `
   --data '{"clientId":"smoke-client","type":"telegram","port":4100,"publicUrl":"http://localhost:4100","callbackPath":"/callbacks/jobs"}'
 
+$storage = curl.exe -s -X POST http://localhost:3000/storage/access `
+  -H "Content-Type: application/json" `
+  -H "x-client-key: $clientKey" `
+  --data '{"requesterId":"smoke-client","requesterType":"client","scope":"read-write","keyPrefix":"clients/smoke-client/input"}' | ConvertFrom-Json
+
+$uploadUrl = "$($storage.storage.objectBaseUrl)/clients/smoke-client/input/person.txt"
+$uploaded = curl.exe -s -X PUT $uploadUrl `
+  -H "x-storage-access-token: $($storage.storage.accessToken)" `
+  -H "Content-Type: text/plain" `
+  --data-binary "hello-storage" | ConvertFrom-Json
+
 $assignment = curl.exe -s -X POST http://localhost:3000/jobs `
   -H "Content-Type: application/json" `
   -H "x-client-key: $clientKey" `
-  --data '{"sourceClientId":"smoke-client","client":{"type":"telegram","chatId":"local-dev"},"payload":{"command":"request"}}' | ConvertFrom-Json
+  --data (@{sourceClientId="smoke-client";client=@{type="telegram";chatId="local-dev"};payload=@{command="request";inputFiles=@($uploaded.object)}} | ConvertTo-Json -Depth 10 -Compress) | ConvertFrom-Json
 
 curl.exe -s -X POST $assignment.worker.jobUrl `
   -H "Content-Type: application/json" `
@@ -205,6 +245,7 @@ npm run build:dist
 Результат появится в `dist/packages`:
 
 - `dist/packages/coordinator` - готовый coordinator.
+- `dist/packages/storage` - готовый object storage node.
 - `dist/packages/worker` - готовый worker.
 - `dist/packages/telegram-client` - готовый Telegram client.
 
@@ -242,6 +283,19 @@ npm run build:dist
 - `CLIENT_REGISTRATION_KEY` - ключ регистрации service clients в coordinator и создания jobs.
 - `ADMIN_API_KEY` - ключ доступа к debug/admin endpoints coordinator.
 - `WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS` - сколько неверных registration-ключей с одного IP допускается до бана; по умолчанию `5`.
+- `STORAGE_REGISTRATION_KEY` - ключ регистрации storage-node в coordinator.
+- `STORAGE_SERVICE_KEY` - ключ heartbeat/health для storage-node.
+- `STORAGE_ACCESS_SIGNING_KEY` - секрет подписи storage-access token.
+- `STORAGE_REGISTRATION_MAX_INVALID_ATTEMPTS` - сколько неверных storage registration-ключей с одного IP допускается до бана.
+- `STORAGE_HEARTBEAT_INTERVAL_MS`, `STORAGE_HEARTBEAT_TIMEOUT_MS` - heartbeat storage-node и timeout исключения из активного пула.
+- `STORAGE_ACCESS_TOKEN_TTL_MS` - срок жизни token для прямого upload/download в storage-node.
+- `STORAGE_PORT` - порт storage-node; coordinator использует его вместе с IP registration-запроса.
+- `STORAGE_PUBLIC_PROTOCOL` - протокол публичного storage endpoint.
+- `STORAGE_PUBLIC_URL` - опциональный ручной override для storage endpoint, если автоопределение по IP/port не подходит.
+- `STORAGE_DRIVER` - сейчас `local`; S3-compatible backend подготовлен архитектурно, но не реализован.
+- `STORAGE_LOCAL_ROOT` - локальная папка dev storage-node.
+- `STORAGE_CAPACITY_BYTES` - опциональная capacity storage-node для выбора coordinator-ом.
+- `STORAGE_MAX_OBJECT_BYTES` - максимальный размер одного объекта для прямого upload.
 - `WORKER_PORT` - порт worker; coordinator использует его вместе с IP registration-запроса, чтобы отправлять jobs на worker.
 - `WORKER_PUBLIC_PROTOCOL` - протокол публичного worker endpoint, обычно `http` или `https`.
 - `WORKER_PUBLIC_URL` - опциональный ручной override для worker endpoint, если автоопределение по IP/port не подходит.
@@ -253,10 +307,6 @@ npm run build:dist
 - `MAX_JSON_BODY_BYTES` - лимит JSON body для входящих API-запросов.
 - `COORDINATOR_PERSISTENCE` - `memory` для dev или `postgres` для persistent state coordinator.
 - `POSTGRES_URL`, `POSTGRES_SSL`, `POSTGRES_MAX_CONNECTIONS` - настройки Postgres coordinator.
-- `STORAGE_DRIVER` - сейчас `local`; S3-compatible backend подготовлен архитектурно, но не реализован.
-- `STORAGE_LOCAL_ROOT` - локальная папка dev storage.
-- `STORAGE_PUBLIC_BASE_URL` - опциональная база URL для `StorageObjectRef.url`.
-- `STORAGE_BUCKET`, `STORAGE_SIGNED_URL_TTL_MS` - зарезервированы для production object storage.
 - `TELEGRAM_CLIENT_PUBLIC_PROTOCOL` - протокол публичного Telegram callback endpoint.
 - `TELEGRAM_CLIENT_PUBLIC_URL` - опциональный ручной override для Telegram callback endpoint, если автоопределение по IP/port не подходит.
 
@@ -267,7 +317,7 @@ npm run build:dist
 - TLS на всех публичных endpoint, желательно mTLS или private network для coordinator <-> worker.
 - Persistent storage для jobs/registry: включается через `COORDINATOR_PERSISTENCE=postgres`.
 - Очередь/lease-механизм для повторного назначения jobs и распределенных coordinator-инстансов.
-- S3-compatible object storage для изображений и больших payload'ов: через coordinator и JSON body должны идти metadata и ссылки, а не бинарные данные.
+- S3-compatible backend внутри storage-node или отдельный production storage provider; через coordinator и JSON body должны идти metadata, access assignments и ссылки, а не бинарные данные.
 - Централизованные metrics/logs/tracing и алерты по capacity, latency, failed jobs, stale worker/client.
 
 ## Расширение системы

@@ -5,16 +5,18 @@ import { createCoordinatorServer } from "./api/server.js";
 import { loadCoordinatorConfig } from "./config/index.js";
 import { createCoordinatorStores } from "./persistence/index.js";
 import { Scheduler } from "./scheduler/index.js";
-import { createCoordinatorStorage } from "./storage/index.js";
 import { IpBanGuard } from "./utils/ipBanGuard.js";
 
 loadEnvFile();
 
 const config = loadCoordinatorConfig();
-const { jobs, workers, clients, close } = await createCoordinatorStores(config);
-const storage = createCoordinatorStorage(config);
+const { jobs, workers, clients, storageNodes, close } =
+  await createCoordinatorStores(config);
 const workerRegistrationGuard = new IpBanGuard(
   config.workerRegistrationMaxInvalidAttempts,
+);
+const storageRegistrationGuard = new IpBanGuard(
+  config.storageRegistrationMaxInvalidAttempts,
 );
 const scheduler = new Scheduler(config, jobs, workers, cancelWorkerJobById);
 const server = createCoordinatorServer({
@@ -22,15 +24,15 @@ const server = createCoordinatorServer({
   jobs,
   workers,
   clients,
-  storage,
+  storageNodes,
   workerRegistrationGuard,
+  storageRegistrationGuard,
   scheduler,
 });
 
 server.listen(config.port, () => {
   console.log(`[coordinator] Listening on ${config.publicUrl}`);
   console.log(`[coordinator] Persistence: ${config.persistenceDriver}`);
-  console.log(`[coordinator] Storage: ${config.storageDriver}`);
 });
 
 setInterval(() => {
@@ -40,6 +42,10 @@ setInterval(() => {
 setInterval(() => {
   void markStaleClientsOffline();
 }, config.clientHeartbeatIntervalMs);
+
+setInterval(() => {
+  void markStaleStorageOffline();
+}, config.storageHeartbeatIntervalMs);
 
 setInterval(() => {
   void scheduler.schedule();
@@ -111,6 +117,18 @@ async function markStaleClientsOffline(): Promise<void> {
         `[coordinator] Job ${job.id} failed because client ${client.clientId} is offline`,
       );
     }
+  }
+}
+
+async function markStaleStorageOffline(): Promise<void> {
+  const staleStorageNodes = await storageNodes.markStaleStorageOffline(
+    config.storageHeartbeatTimeoutMs,
+  );
+
+  for (const node of staleStorageNodes) {
+    console.warn(
+      `[coordinator] Storage ${node.storageId} marked offline after missed heartbeat`,
+    );
   }
 }
 

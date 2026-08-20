@@ -12,14 +12,21 @@
 - `CLIENT_CALLBACK_SIGNING_KEY` - секрет подписи callback token для результата worker -> client.
 - `ADMIN_API_KEY` - ключ доступа к debug/admin endpoints.
 - `WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS` - лимит неверных worker registration ключей с одного IP до бана.
+- `STORAGE_REGISTRATION_KEY` - ключ, по которому storage-node регистрируется в coordinator.
+- `STORAGE_SERVICE_KEY` - ключ служебных запросов coordinator <-> storage-node после регистрации.
+- `STORAGE_ACCESS_SIGNING_KEY` - секрет подписи storage-access token для прямой связи client/worker -> storage-node.
+- `STORAGE_REGISTRATION_MAX_INVALID_ATTEMPTS` - лимит неверных storage registration ключей с одного IP до бана.
 - `CLIENT_REGISTRATION_KEY` - ключ, по которому service client регистрируется в coordinator.
 - `WORKER_HEARTBEAT_INTERVAL_MS` - интервал heartbeat worker'ов.
 - `WORKER_HEARTBEAT_TIMEOUT_MS` - время, после которого worker считается недоступным.
 - `CLIENT_HEARTBEAT_INTERVAL_MS` - интервал heartbeat service clients.
 - `CLIENT_HEARTBEAT_TIMEOUT_MS` - время, после которого service client считается недоступным.
+- `STORAGE_HEARTBEAT_INTERVAL_MS` - интервал heartbeat storage-node.
+- `STORAGE_HEARTBEAT_TIMEOUT_MS` - время, после которого storage-node считается недоступным.
 - `SCHEDULER_INTERVAL_MS` - базовый интервал scheduler loop.
 - `WORKER_DISPATCH_TOKEN_TTL_MS` - срок жизни token для прямой отправки job клиентом на worker.
 - `CLIENT_CALLBACK_TOKEN_TTL_MS` - срок жизни token для callback результата от worker к client.
+- `STORAGE_ACCESS_TOKEN_TTL_MS` - срок жизни token для прямого upload/download в storage-node.
 - `JOB_ASSIGNMENT_TIMEOUT_MS` - timeout assignment, после которого coordinator освобождает worker capacity.
 - `API_RATE_LIMIT_WINDOW_MS` - окно rate limit.
 - `API_RATE_LIMIT_MAX_REQUESTS` - максимум запросов с одного direct IP за окно.
@@ -30,11 +37,6 @@
 - `POSTGRES_URL` - строка подключения к Postgres, используется только coordinator.
 - `POSTGRES_SSL` - включить SSL для подключения к Postgres.
 - `POSTGRES_MAX_CONNECTIONS` - максимальный размер pool coordinator.
-- `STORAGE_DRIVER` - `local` сейчас, `s3` зарезервирован для production backend.
-- `STORAGE_LOCAL_ROOT` - папка local object storage для dev.
-- `STORAGE_PUBLIC_BASE_URL` - публичная база URL, если local storage отдается через reverse proxy.
-- `STORAGE_BUCKET` - имя bucket для будущего S3-compatible backend.
-- `STORAGE_SIGNED_URL_TTL_MS` - TTL будущих signed storage URLs.
 
 ## Правила
 

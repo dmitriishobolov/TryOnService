@@ -9,13 +9,14 @@ API для клиентов и интеграций должен отвечат�
 - создание job assignment на примерку;
 - регистрацию service client при запуске;
 - прием heartbeat от service client;
+- выдачу storage-access для прямого upload/download в storage-node;
 - получение статуса job;
 - получение состояния обработки без обязательного хранения клиентского результата;
 - отмену job, если сценарий это поддерживает.
 
 `POST /jobs` принимает запросы только от зарегистрированных service clients: нужен `x-client-key`, обязательный `sourceClientId`, а callback URL берется из client registry. Клиентский `callbackUrl` из payload не используется как источник доверия.
 
-`POST /storage/objects` нужен для dev/local загрузки файлов в object storage. Клиент или worker отправляет JSON с `dataBase64`, получает `StorageObjectRef` и дальше передает refs в `payload.inputFiles` или `result.files`. Для production этот endpoint должен уступить место signed upload URLs.
+`POST /storage/access` выдает клиенту или worker'у подходящий storage-node и scoped signed token. После этого файлы загружаются и читаются напрямую через storage-node, а coordinator получает только `StorageObjectRef` в payload/result.
 
 ## Worker endpoints
 
@@ -28,6 +29,16 @@ API для worker'ов должен отвечать за:
 - сообщение об ошибках выполнения;
 - отмену pending assignment через worker `POST /jobs/:jobId/cancel`, когда клиент пропал или assignment истек.
 
+## Storage endpoints
+
+Storage-node API на стороне coordinator отвечает за:
+
+- регистрацию storage-node через `POST /storage/register` и `x-storage-registration-key`;
+- heartbeat через `POST /storage/:storageId/heartbeat` и `x-storage-service-key`;
+- выдачу storage-access через `POST /storage/access` для clients и worker'ов.
+
+Coordinator не принимает `dataBase64` и не отдает бинарные файлы. Его storage API - это control-plane: выбрать storage-node, проверить ключи, подписать token и сохранить registry state.
+
 ## Assignment flow
 
 `POST /jobs` не отправляет heavy payload на worker. Coordinator выбирает доступный worker, резервирует его capacity, создает `assigned` job, отправляет worker-у lightweight prepare-запрос и только после подтверждения возвращает клиенту:
@@ -35,6 +46,9 @@ API для worker'ов должен отвечать за:
 - `job` - состояние job в coordinator.
 - `worker` - endpoint выбранного worker'а и signed dispatch token.
 - `workerRequest` - payload, который client отправляет в `POST /jobs` выбранного worker'а.
+- `storage` - endpoint storage-node и storage-access token, если доступный storage-node найден.
+
+Если в `payload.inputFiles` есть файлы, coordinator требует, чтобы все `StorageObjectRef` указывали на один `storageId`, а object keys лежали под общим prefix. Worker получает read-only token именно на этот storage-node и prefix. Для записи generated files worker может запросить отдельный write/read-write token через `POST /storage/access`.
 
 Dispatch token подписан `WORKER_DISPATCH_SIGNING_KEY`, но сам секрет клиенту не передается. Worker проверяет token локально и принимает только job, где token имеет purpose `worker-dispatch` и привязан к его `workerId` и `jobId`.
 
@@ -52,6 +66,8 @@ Dispatch token подписан `WORKER_DISPATCH_SIGNING_KEY`, но сам се�
 
 `POST /workers/register` проверяет `x-worker-registration-key`. Если ключ неверный, coordinator считает ошибку по прямому remote IP. После превышения `WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS` IP получает `403 worker_registration_ip_banned` и остается заблокированным до перезапуска coordinator.
 
+`POST /storage/register` использует такую же схему с `x-storage-registration-key` и лимитом `STORAGE_REGISTRATION_MAX_INVALID_ATTEMPTS`. Заблокированный IP получает `403 storage_registration_ip_banned` до перезапуска coordinator.
+
 Для бана используется socket remote address, а не `x-forwarded-for`. Заголовки `x-forwarded-for` и `x-real-ip` используются отдельно, только когда coordinator собирает публичный endpoint зарегистрированного worker/client.
 
 ## Ключи и лимиты
@@ -59,16 +75,17 @@ Dispatch token подписан `WORKER_DISPATCH_SIGNING_KEY`, но сам се�
 - `x-client-key` - регистрация/heartbeat service clients и создание jobs.
 - `x-worker-registration-key` - только регистрация worker'а.
 - `x-worker-service-key` - heartbeat worker'а, prepare assignment, progress/result и cancel.
+- `x-storage-registration-key` - только регистрация storage-node.
+- `x-storage-service-key` - heartbeat/health storage-node.
+- `x-storage-access-token` - не используется coordinator-ом; с ним client/worker ходят напрямую в storage-node.
 - `x-admin-key` - debug/admin ручки `GET /health`, `GET /jobs`, `GET /jobs/:id`.
-- `POST /storage/objects` принимает `x-client-key` или `x-worker-service-key`.
-- `GET /storage/objects/:key` доступен только по `x-admin-key` и предназначен для dev/debug.
 - `API_RATE_LIMIT_WINDOW_MS` и `API_RATE_LIMIT_MAX_REQUESTS` задают простой fixed-window rate limit по direct remote IP.
 - `MAX_JSON_BODY_BYTES` ограничивает размер входящих JSON body.
 
 ## Правила
 
 - В API не должно быть тяжелой бизнес-логики обработки изображений.
-- Coordinator API не должен становиться permanent file data-plane; local storage upload нужен для dev, production должен использовать presigned URLs.
+- Coordinator API не должен становиться file data-plane; direct upload/download идет через storage-node.
 - API coordinator не должен проксировать клиентский результат.
 - Все входящие payloads валидируются через контракты из `apps/shared/contracts`.
 - Ошибки должны возвращаться в едином формате, чтобы client и worker могли одинаково их обрабатывать.

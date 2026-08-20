@@ -7,9 +7,11 @@
     "build": "tsc -p tsconfig.json",
     "build:dist": "npm run build && node scripts/build-dist.mjs",
     "dev:coordinator": "tsx apps/coordinator/index.ts",
+    "dev:storage": "tsx apps/storage/index.ts",
     "dev:worker": "tsx apps/worker/index.ts",
     "dev:telegram": "tsx apps/client/telegram/index.ts",
     "start:coordinator": "node dist/apps/coordinator/index.js",
+    "start:storage": "node dist/apps/storage/index.js",
     "start:worker": "node dist/apps/worker/index.js",
     "start:telegram": "node dist/apps/client/telegram/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"

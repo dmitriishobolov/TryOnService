@@ -1,11 +1,11 @@
 # Coordinator Persistence
 
-Persistence слой выбирает, где coordinator хранит состояние jobs, worker registry и client registry.
+Persistence слой выбирает, где coordinator хранит состояние jobs, worker registry, client registry и storage-node registry.
 
 ## Backends
 
 - `memory` - dev backend по умолчанию. Быстрый локальный запуск, состояние теряется при рестарте.
-- `postgres` - production-направление. Coordinator сам создает таблицы `tryon_jobs`, `tryon_workers`, `tryon_clients` и `tryon_storage_objects`, если их еще нет.
+- `postgres` - production-направление. Coordinator сам создает таблицы `tryon_jobs`, `tryon_workers`, `tryon_clients`, `tryon_storage_nodes` и `tryon_storage_objects`, если их еще нет.
 
 ## Важная граница
 

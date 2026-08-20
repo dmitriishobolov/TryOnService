@@ -2,16 +2,16 @@
 
 Runner - место, где живут процессы обработки данных клиента. Он получает job по контракту, готовит входные данные, вызывает нужную модель из `apps/worker/models`, сохраняет или передает результат и сообщает статус coordinator.
 
-Текущий runner запускает mock model, сообщает progress/final status в coordinator и, если в job есть `callbackUrl`, отправляет результат клиентскому callback endpoint. Payload ответа клиента не обязан храниться в coordinator. В сценариях с изображениями runner должен читать входные `StorageObjectRef` из job payload и возвращать generated files как `result.files`.
+Текущий runner запускает mock model, сообщает progress/final status в coordinator и, если в job есть `callbackUrl`, отправляет результат клиентскому callback endpoint. Payload ответа клиента не обязан храниться в coordinator. В сценариях с изображениями runner должен читать входные `StorageObjectRef` из job payload через storage-access из `workerRequest` или отдельный `POST /storage/access`, а generated files возвращать как `result.files`.
 
 ## Типовой пайплайн
 
 1. Принять job и проверить payload.
-2. Загрузить или подготовить исходные изображения из object storage.
+2. Загрузить или подготовить исходные изображения из storage-node.
 3. Привести данные к формату выбранной AI-модели.
 4. Вызвать adapter из `models`.
 5. Проверить и нормализовать результат.
-6. Сохранить артефакты в object storage и вернуть ссылки на них.
+6. Сохранить артефакты в storage-node и вернуть ссылки на них.
 7. Отправить финальный статус в coordinator.
 8. Очистить временные файлы.
 

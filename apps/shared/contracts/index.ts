@@ -2,6 +2,8 @@ export const WORKER_HEARTBEAT_INTERVAL_MS = 5_000;
 export const WORKER_HEARTBEAT_TIMEOUT_MS = 15_000;
 export const CLIENT_HEARTBEAT_INTERVAL_MS = 5_000;
 export const CLIENT_HEARTBEAT_TIMEOUT_MS = 15_000;
+export const STORAGE_HEARTBEAT_INTERVAL_MS = 5_000;
+export const STORAGE_HEARTBEAT_TIMEOUT_MS = 15_000;
 
 export type ClientType = "telegram";
 export type ClientStatus = "ready" | "offline";
@@ -15,6 +17,8 @@ export type JobStatus =
   | "cancelled";
 
 export type WorkerStatus = "ready" | "busy" | "offline";
+export type StorageStatus = "ready" | "offline";
+export type StorageAccessScope = "read" | "write" | "read-write";
 
 export interface TelegramClientRef {
   type: "telegram";
@@ -28,6 +32,7 @@ export type StorageObjectDriver = "local" | "s3";
 
 export interface StorageObjectRef {
   driver: StorageObjectDriver;
+  storageId?: string;
   key: string;
   bucket?: string;
   contentType?: string;
@@ -38,14 +43,58 @@ export interface StorageObjectRef {
   expiresAt?: string;
 }
 
-export interface StorageObjectUploadRequest {
-  key?: string;
-  contentType?: string;
-  dataBase64: string;
+export interface StorageRegistrationRequest {
+  storageId: string;
+  port: number;
+  publicProtocol?: PublicProtocol;
+  publicUrl?: string;
+  driver: StorageObjectDriver;
+  capacityBytes?: number;
 }
 
-export interface StorageObjectUploadResponse {
-  object: StorageObjectRef;
+export interface StorageRegistrationResponse {
+  storageId: string;
+  heartbeatIntervalMs: number;
+}
+
+export interface StorageHeartbeatRequest {
+  storageId: string;
+  status: StorageStatus;
+  usedBytes?: number;
+  capacityBytes?: number;
+}
+
+export interface RegisteredStorageNode {
+  storageId: string;
+  baseUrl: string;
+  driver: StorageObjectDriver;
+  status: StorageStatus;
+  usedBytes?: number;
+  capacityBytes?: number;
+  registeredAt: string;
+  lastHeartbeatAt: string;
+}
+
+export interface StorageAccessRequest {
+  requesterId: string;
+  requesterType: "client" | "worker";
+  scope: StorageAccessScope;
+  storageId?: string;
+  keyPrefix?: string;
+}
+
+export interface StorageAccessAssignment {
+  storageId: string;
+  baseUrl: string;
+  objectBaseUrl: string;
+  accessToken: string;
+  accessTokenExpiresAt: string;
+  scope: StorageAccessScope;
+  keyPrefix?: string;
+}
+
+export interface StorageAccessResponse {
+  storage: StorageAccessAssignment;
 }
 
 export interface CreateTryOnJobRequest {
@@ -158,6 +207,7 @@ export interface WorkerJobRequest {
   jobId: string;
   client: ClientRef;
   payload: CreateTryOnJobRequest["payload"];
+  storage?: StorageAccessAssignment;
   callbackUrl?: string;
   coordinator: {
     progressUrl: string;
@@ -194,6 +244,7 @@ export interface WorkerDispatchAssignment {
 export interface TryOnJobAssignmentResponse {
   job: TryOnJob;
   worker: WorkerDispatchAssignment;
+  storage?: StorageAccessAssignment;
   workerRequest: WorkerJobRequest;
 }
 
@@ -262,6 +313,7 @@ export function isStorageObjectRef(value: unknown): value is StorageObjectRef {
 
   return (
     (value.driver === "local" || value.driver === "s3") &&
+    (value.storageId === undefined || typeof value.storageId === "string") &&
     typeof value.key === "string" &&
     value.key.length > 0 &&
     (value.bucket === undefined || typeof value.bucket === "string") &&
@@ -277,15 +329,58 @@ export function isStorageObjectRef(value: unknown): value is StorageObjectRef {
   );
 }
 
-export function isStorageObjectUploadRequest(
+export function isStorageRegistrationRequest(
   value: unknown,
-): value is StorageObjectUploadRequest {
+): value is StorageRegistrationRequest {
+  if (!isObject(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.storageId === "string" &&
+    value.storageId.length > 0 &&
+    typeof value.port === "number" &&
+    Number.isInteger(value.port) &&
+    value.port > 0 &&
+    value.port <= 65_535 &&
+    (value.publicProtocol === undefined ||
+      value.publicProtocol === "http" ||
+      value.publicProtocol === "https") &&
+    (value.publicUrl === undefined ||
+      (typeof value.publicUrl === "string" && value.publicUrl.length > 0)) &&
+    (value.driver === "local" || value.driver === "s3") &&
+    (value.capacityBytes === undefined ||
+      (typeof value.capacityBytes === "number" && value.capacityBytes > 0))
+  );
+}
+
+export function isStorageHeartbeatRequest(
+  value: unknown,
+): value is StorageHeartbeatRequest {
   return (
     isObject(value) &&
-    typeof value.dataBase64 === "string" &&
-    value.dataBase64.length > 0 &&
-    (value.key === undefined || typeof value.key === "string") &&
-    (value.contentType === undefined || typeof value.contentType === "string")
+    typeof value.storageId === "string" &&
+    (value.status === "ready" || value.status === "offline") &&
+    (value.usedBytes === undefined ||
+      (typeof value.usedBytes === "number" && value.usedBytes >= 0)) &&
+    (value.capacityBytes === undefined ||
+      (typeof value.capacityBytes === "number" && value.capacityBytes > 0))
+  );
+}
+
+export function isStorageAccessRequest(
+  value: unknown,
+): value is StorageAccessRequest {
+  return (
+    isObject(value) &&
+    typeof value.requesterId === "string" &&
+    value.requesterId.length > 0 &&
+    (value.requesterType === "client" || value.requesterType === "worker") &&
+    (value.scope === "read" ||
+      value.scope === "write" ||
+      value.scope === "read-write") &&
+    (value.storageId === undefined || typeof value.storageId === "string") &&
+    (value.keyPrefix === undefined || typeof value.keyPrefix === "string")
   );
 }
 

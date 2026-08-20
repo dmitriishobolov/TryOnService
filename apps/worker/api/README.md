@@ -12,6 +12,7 @@
 - отправка прогресса выполнения;
 - отправка финального результата;
 - отправка структурированной ошибки.
+- запрос storage-access у coordinator, если runner нужен отдельный scoped доступ к файлам.
 
 ## Правила
 
@@ -21,6 +22,7 @@
 - `POST /assignments`, `GET /health` и `POST /jobs/:jobId/cancel` защищены `x-worker-service-key`.
 - `POST /jobs` не принимает service key как обходной доступ: нужен `x-job-dispatch-token` с purpose `worker-dispatch`.
 - Callback к service client отправляется с `x-client-callback-token`, полученным от coordinator при prepare.
+- Доступ к object storage не идет через coordinator; worker получает `StorageAccessAssignment` в `workerRequest` или запрашивает его через `POST /storage/access`.
 - Signed dispatch token сам по себе недостаточен: worker также требует заранее подготовленный pending assignment.
 - Pending assignments учитываются как занятые slots, чтобы coordinator видел реальную нагрузку сети.
 - Сетевые ошибки не должны падать неуправляемо внутри runner: API слой должен возвращать понятную ошибку.

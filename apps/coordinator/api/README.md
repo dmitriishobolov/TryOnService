@@ -66,13 +66,13 @@ Dispatch token подписан `WORKER_DISPATCH_SIGNING_KEY`, но сам се�
 
 ## Registration Security
 
-`POST /workers/register` проверяет `x-worker-registration-key` и `x-worker-service-key`. Если registration key или instance service key неверный, coordinator считает ошибку по прямому remote IP. После превышения `WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS` IP получает `403 worker_registration_ip_banned`. В memory backend ban живет до restart, в Postgres backend хранится в `tryon_registration_bans`.
+`POST /workers/register` проверяет общий `x-worker-registration-key`. Если registration key неверный, coordinator считает ошибку по прямому remote IP. После превышения `WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS` IP получает `403 worker_registration_ip_banned`. В memory backend ban живет до restart, в Postgres backend хранится в `tryon_registration_bans`.
 
-`POST /storage/register` использует такую же схему с `x-storage-registration-key`, `x-storage-service-key` и лимитом `STORAGE_REGISTRATION_MAX_INVALID_ATTEMPTS`. Заблокированный IP получает `403 storage_registration_ip_banned`.
+`POST /storage/register` использует такую же схему с общим `x-storage-registration-key` и лимитом `STORAGE_REGISTRATION_MAX_INVALID_ATTEMPTS`. Заблокированный IP получает `403 storage_registration_ip_banned`.
 
 `POST /clients/register` также считает неверные `x-client-key` по direct remote IP. После `CLIENT_REGISTRATION_MAX_INVALID_ATTEMPTS` неверных попыток IP получает `403 client_registration_ip_banned`.
 
-При `REQUIRE_WORKER_INSTANCE_KEYS=true` registration допускает только workerId, который есть в `WORKER_KEYS`. При `REQUIRE_STORAGE_INSTANCE_KEYS=true` storageId должен быть в `STORAGE_KEYS`. При `REQUIRE_CLIENT_INSTANCE_KEYS=true` `CLIENT_REGISTRATION_KEY` перестает быть fallback, и каждый clientId должен иметь запись в `CLIENT_KEYS`.
+При `REQUIRE_CLIENT_INSTANCE_KEYS=true` `CLIENT_REGISTRATION_KEY` перестает быть fallback, и каждый clientId должен иметь запись в `CLIENT_KEYS`.
 
 При `REQUIRE_HTTPS_ENDPOINTS=true` registration отклоняет public endpoints без `https`. mTLS реализуется на reverse proxy/private network уровне перед Node.js процессами.
 
@@ -83,10 +83,10 @@ Security events пишутся в audit store; в Postgres это `tryon_securit
 ## Ключи и лимиты
 
 - `x-client-key` - регистрация/heartbeat service clients и создание jobs; в production должен быть per-client key из `CLIENT_KEYS`.
-- `x-worker-registration-key` - registration gate worker'а; на registration также нужен `x-worker-service-key`.
-- `x-worker-service-key` - heartbeat worker'а, prepare assignment, progress/result и cancel; в production должен быть per-worker key из `WORKER_KEYS`.
-- `x-storage-registration-key` - registration gate storage-node; на registration также нужен `x-storage-service-key`.
-- `x-storage-service-key` - heartbeat/health storage-node; в production должен быть per-storage key из `STORAGE_KEYS`.
+- `x-worker-registration-key` - registration gate worker'а.
+- `x-worker-service-key` - heartbeat worker'а, prepare assignment, progress/result и cancel после регистрации.
+- `x-storage-registration-key` - registration gate storage-node.
+- `x-storage-service-key` - heartbeat/health storage-node после регистрации.
 - `x-storage-access-token` - не используется coordinator-ом; с ним client/worker ходят напрямую в storage-node.
 - `x-admin-key` - debug/admin ручки `GET /health`, `GET /jobs`, `GET /jobs/:id`.
 - `GET /security/events?limit=100` - admin endpoint для просмотра audit events; требует `x-admin-key`.

@@ -30,7 +30,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 2. Request валидируется через контракты из `apps/shared`.
 3. Coordinator находит callback URL зарегистрированного service client, если запрос пришел с `sourceClientId`.
 4. Coordinator выбирает доступный worker и storage-node из `registry`, резервирует worker capacity и создает job со статусом `assigned`.
-5. Coordinator вызывает `POST /assignments` выбранного worker'а по per-worker service key из `WORKER_KEYS` или dev fallback `WORKER_SERVICE_KEY`, чтобы подготовить будущий client dispatch и передать worker-у signed callback token.
+5. Coordinator вызывает `POST /assignments` выбранного worker'а по общему `WORKER_SERVICE_KEY`, чтобы подготовить будущий client dispatch и передать worker-у signed callback token.
 6. API возвращает клиенту `job`, `worker`, `storage` и готовый `workerRequest` с signed dispatch token. Callback token клиенту не возвращается.
 7. Client отправляет `workerRequest` напрямую worker'у, а файлы читает/пишет напрямую через storage-node по storage-access token.
 8. Worker сообщает progress/result status обратно в coordinator и результат в callback клиента.
@@ -41,13 +41,13 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - `GET /jobs` - список jobs из активного persistence backend; требует `x-admin-key`.
 - `GET /jobs/:id` - состояние конкретной job; требует `x-admin-key`.
 - `GET /security/events?limit=100` - последние security audit events; требует `x-admin-key`.
-- `POST /storage/register` - регистрация storage-node; требует `x-storage-registration-key` и `x-storage-service-key`.
+- `POST /storage/register` - регистрация storage-node; требует `x-storage-registration-key`.
 - `POST /storage/:storageId/heartbeat` - heartbeat storage-node; требует `x-storage-service-key`.
 - `POST /storage/access` - выдача подходящего storage-node и scoped token для прямого upload/download; требует `x-client-key` для clients или `x-worker-service-key` для worker'ов.
 - `POST /jobs` - создание job assignment зарегистрированным клиентом; требует `x-client-key`, валидный `sourceClientId`, возвращает выбранный worker endpoint, `workerRequest` и dispatch token.
 - `POST /clients/register` - регистрация service client; требует `x-client-key`.
 - `POST /clients/:clientId/heartbeat` - heartbeat service client; требует `x-client-key`.
-- `POST /workers/register` - регистрация worker'а; требует `x-worker-registration-key` и `x-worker-service-key`.
+- `POST /workers/register` - регистрация worker'а; требует `x-worker-registration-key`.
 - `POST /workers/:workerId/heartbeat` - heartbeat worker'а; требует `x-worker-service-key`.
 - `POST /jobs/:jobId/progress` - обновление прогресса от worker'а; требует `x-worker-service-key`.
 - `POST /jobs/:jobId/result` - финальный status от worker'а; требует `x-worker-service-key`; клиентский результат не обязан попадать в coordinator.
@@ -61,9 +61,9 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - Coordinator не должен быть data-plane для файлов: client/worker общаются с storage-node напрямую.
 - Перед выдачей worker клиенту coordinator должен подготовить pending assignment на worker-е.
 - `callbackUrl` при создании job не должен доверяться клиентскому payload: coordinator берет его только из registry зарегистрированного service client.
-- Регистрация worker'ов должна быть защищена отдельным registration key и подтверждением per-worker service key.
-- Служебное общение worker/coordinator должно быть защищено per-worker key; общий `WORKER_SERVICE_KEY` допустим только как dev fallback.
-- Регистрация и служебное общение storage/coordinator должны быть защищены per-storage key; общий `STORAGE_SERVICE_KEY` допустим только как dev fallback.
+- Регистрация worker'ов должна быть защищена отдельным общим registration key.
+- Служебное общение worker/coordinator должно быть защищено общим `WORKER_SERVICE_KEY`.
+- Регистрация storage-node должна быть защищена отдельным общим registration key, а служебное общение storage/coordinator - общим `STORAGE_SERVICE_KEY`.
 - Регистрация service clients и создание jobs должны быть защищены per-client key; общий `CLIENT_REGISTRATION_KEY` допустим только как dev fallback.
 - Неверные попытки регистрации worker'а, service client и storage-node считаются по IP и после лимита переводят IP в ban; в Postgres режиме ban переживает restart coordinator.
 - Недоступный worker должен автоматически выпадать из активного пула после пропущенных heartbeat.

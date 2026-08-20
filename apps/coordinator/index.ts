@@ -159,8 +159,7 @@ function cancelWorkerJob(worker: RegisteredWorker, jobId: string): Promise<unkno
     `${worker.baseUrl}/jobs/${jobId}/cancel`,
     {},
     {
-      "x-worker-service-key":
-        config.workerKeys[worker.workerId] ?? config.workerServiceKey,
+      "x-worker-service-key": config.workerServiceKey,
     },
     {
       retries: config.httpClientRetries,

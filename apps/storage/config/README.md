@@ -10,8 +10,7 @@
 - `STORAGE_PUBLIC_URL` - ручной публичный endpoint, если автоопределение по IP/port не подходит.
 - `COORDINATOR_URL` - адрес coordinator для registration/heartbeat.
 - `STORAGE_REGISTRATION_KEY` - ключ регистрации storage-node в coordinator.
-- `STORAGE_KEY` - per-storage service key для registration proof и heartbeat/health; должен совпадать с `STORAGE_KEYS[STORAGE_ID]` на coordinator.
-- `STORAGE_SERVICE_KEY` - dev fallback service key, если per-storage keys еще не включены.
+- `STORAGE_SERVICE_KEY` - общий service key для heartbeat/health после регистрации.
 - `STORAGE_ACCESS_SIGNING_KEY` - секрет проверки storage-access token; должен совпадать с coordinator.
 - `STORAGE_ACCESS_SIGNING_KEY_VERSION` - версия storage-access signing key; storage-node принимает только token текущей версии.
 - `STORAGE_DRIVER` - `local` сейчас, `s3` зарезервирован как следующий backend.

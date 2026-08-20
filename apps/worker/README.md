@@ -28,7 +28,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 
 1. Worker стартует и загружает config.
 2. Worker формирует `workerId`, `capacity` и список `capabilities`.
-3. Worker регистрируется в coordinator через API, registration key и свой per-worker service key.
+3. Worker регистрируется в coordinator через API и общий registration key.
 4. Worker регулярно отправляет heartbeat.
 5. Coordinator отправляет worker-у lightweight `POST /assignments` с `x-worker-service-key`, чтобы подготовить pending assignment под будущий client dispatch и передать callback token.
 6. Client получает assignment от coordinator и отправляет heavy request на worker endpoint `POST /jobs` с `x-job-dispatch-token`.

@@ -432,11 +432,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
               config,
             )) ||
           (body.requesterType === "worker" &&
-            !hasWorkerServiceAccess(
-              request.headers["x-worker-service-key"],
-              body.requesterId,
-              config,
-            ))
+            !hasWorkerServiceKey(request.headers["x-worker-service-key"], config))
         ) {
           writeError(response, 401, "unauthorized_storage", "Invalid storage key");
           return;
@@ -587,76 +583,6 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        if (config.requireStorageInstanceKeys && !config.storageKeys[body.storageId]) {
-          const attempt = storageRegistrationGuard.registerFailure(ipAddress);
-
-          if (attempt.banned) {
-            persistRegistrationBan(registrationBans, "storage", ipAddress);
-          }
-
-          recordSecurityEvent(audit, {
-            eventType: attempt.banned
-              ? "storage_registration_ip_banned"
-              : "storage_instance_key_required",
-            severity: attempt.banned ? "critical" : "warning",
-            ipAddress,
-            actorType: "storage",
-            actorId: body.storageId,
-            metadata: {
-              failedAttempts: attempt.failedAttempts,
-            },
-          });
-          writeError(
-            response,
-            403,
-            attempt.banned
-              ? "storage_registration_ip_banned"
-              : "storage_instance_key_required",
-            attempt.banned
-              ? "Storage registration source IP is banned"
-              : "Storage node is not configured with a per-instance key",
-          );
-          return;
-        }
-
-        if (
-          !hasStorageServiceAccess(
-            request.headers["x-storage-service-key"],
-            body.storageId,
-            config,
-          )
-        ) {
-          const attempt = storageRegistrationGuard.registerFailure(ipAddress);
-
-          if (attempt.banned) {
-            persistRegistrationBan(registrationBans, "storage", ipAddress);
-          }
-
-          recordSecurityEvent(audit, {
-            eventType: attempt.banned
-              ? "storage_registration_ip_banned"
-              : "invalid_storage_service_key",
-            severity: attempt.banned ? "critical" : "warning",
-            ipAddress,
-            actorType: "storage",
-            actorId: body.storageId,
-            metadata: {
-              failedAttempts: attempt.failedAttempts,
-            },
-          });
-          writeError(
-            response,
-            attempt.banned ? 403 : 401,
-            attempt.banned
-              ? "storage_registration_ip_banned"
-              : "unauthorized_storage_instance",
-            attempt.banned
-              ? "Storage registration source IP is banned"
-              : "Invalid storage instance key",
-          );
-          return;
-        }
-
         if (config.requireHttpsEndpoints && !isHttpsRegistration(body)) {
           recordSecurityEvent(audit, {
             eventType: "insecure_storage_registration",
@@ -803,11 +729,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
 
       if (request.method === "POST" && storageHeartbeatMatch) {
         if (
-          !hasStorageServiceAccess(
-            request.headers["x-storage-service-key"],
-            storageHeartbeatMatch[1],
-            config,
-          )
+          !hasStorageServiceKey(request.headers["x-storage-service-key"], config)
         ) {
           writeError(response, 401, "unauthorized_storage", "Invalid storage key");
           return;
@@ -980,76 +902,6 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        if (config.requireWorkerInstanceKeys && !config.workerKeys[body.workerId]) {
-          const attempt = workerRegistrationGuard.registerFailure(ipAddress);
-
-          if (attempt.banned) {
-            persistRegistrationBan(registrationBans, "worker", ipAddress);
-          }
-
-          recordSecurityEvent(audit, {
-            eventType: attempt.banned
-              ? "worker_registration_ip_banned"
-              : "worker_instance_key_required",
-            severity: attempt.banned ? "critical" : "warning",
-            ipAddress,
-            actorType: "worker",
-            actorId: body.workerId,
-            metadata: {
-              failedAttempts: attempt.failedAttempts,
-            },
-          });
-          writeError(
-            response,
-            403,
-            attempt.banned
-              ? "worker_registration_ip_banned"
-              : "worker_instance_key_required",
-            attempt.banned
-              ? "Worker registration source IP is banned"
-              : "Worker is not configured with a per-instance key",
-          );
-          return;
-        }
-
-        if (
-          !hasWorkerServiceAccess(
-            request.headers["x-worker-service-key"],
-            body.workerId,
-            config,
-          )
-        ) {
-          const attempt = workerRegistrationGuard.registerFailure(ipAddress);
-
-          if (attempt.banned) {
-            persistRegistrationBan(registrationBans, "worker", ipAddress);
-          }
-
-          recordSecurityEvent(audit, {
-            eventType: attempt.banned
-              ? "worker_registration_ip_banned"
-              : "invalid_worker_service_key",
-            severity: attempt.banned ? "critical" : "warning",
-            ipAddress,
-            actorType: "worker",
-            actorId: body.workerId,
-            metadata: {
-              failedAttempts: attempt.failedAttempts,
-            },
-          });
-          writeError(
-            response,
-            attempt.banned ? 403 : 401,
-            attempt.banned
-              ? "worker_registration_ip_banned"
-              : "unauthorized_worker_instance",
-            attempt.banned
-              ? "Worker registration source IP is banned"
-              : "Invalid worker instance key",
-          );
-          return;
-        }
-
         if (config.requireHttpsEndpoints && !isHttpsRegistration(body)) {
           recordSecurityEvent(audit, {
             eventType: "insecure_worker_registration",
@@ -1088,11 +940,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
 
       if (request.method === "POST" && heartbeatMatch) {
         if (
-          !hasWorkerServiceAccess(
-            request.headers["x-worker-service-key"],
-            heartbeatMatch[1],
-            config,
-          )
+          !hasWorkerServiceKey(request.headers["x-worker-service-key"], config)
         ) {
           writeError(response, 401, "unauthorized_worker", "Invalid worker key");
           return;
@@ -1158,11 +1006,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         }
 
         if (
-          !hasWorkerServiceAccess(
-            request.headers["x-worker-service-key"],
-            previous.assignedWorkerId,
-            config,
-          )
+          !hasWorkerServiceKey(request.headers["x-worker-service-key"], config)
         ) {
           writeError(response, 401, "unauthorized_worker", "Invalid worker key");
           return;
@@ -1204,11 +1048,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         }
 
         if (
-          !hasWorkerServiceAccess(
-            request.headers["x-worker-service-key"],
-            previous.assignedWorkerId,
-            config,
-          )
+          !hasWorkerServiceKey(request.headers["x-worker-service-key"], config)
         ) {
           writeError(response, 401, "unauthorized_worker", "Invalid worker key");
           return;
@@ -1252,21 +1092,11 @@ function hasWorkerRegistrationKey(
   return value === config.workerRegistrationKey;
 }
 
-function hasWorkerServiceAccess(
+function hasWorkerServiceKey(
   headerValue: string | string[] | undefined,
-  workerId: string,
   config: CoordinatorConfig,
 ): boolean {
   const value = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-  const workerKey = config.workerKeys[workerId];
-
-  if (workerKey) {
-    return value === workerKey;
-  }
-
-  if (config.requireWorkerInstanceKeys) {
-    return false;
-  }
 
   return value === config.workerServiceKey;
 }
@@ -1280,21 +1110,11 @@ function hasStorageRegistrationKey(
   return value === config.storageRegistrationKey;
 }
 
-function hasStorageServiceAccess(
+function hasStorageServiceKey(
   headerValue: string | string[] | undefined,
-  storageId: string,
   config: CoordinatorConfig,
 ): boolean {
   const value = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-  const storageKey = config.storageKeys[storageId];
-
-  if (storageKey) {
-    return value === storageKey;
-  }
-
-  if (config.requireStorageInstanceKeys) {
-    return false;
-  }
 
   return value === config.storageServiceKey;
 }
@@ -1421,7 +1241,7 @@ function prepareWorkerAssignment(
     `${worker.baseUrl}/assignments`,
     payload,
     {
-      "x-worker-service-key": resolveWorkerServiceKey(worker.workerId, config),
+      "x-worker-service-key": config.workerServiceKey,
     },
     {
       retries: config.httpClientRetries,
@@ -1439,20 +1259,13 @@ function cancelWorkerAssignment(
     `${worker.baseUrl}/jobs/${jobId}/cancel`,
     {},
     {
-      "x-worker-service-key": resolveWorkerServiceKey(worker.workerId, config),
+      "x-worker-service-key": config.workerServiceKey,
     },
     {
       retries: config.httpClientRetries,
       timeoutMs: config.httpClientTimeoutMs,
     },
   );
-}
-
-function resolveWorkerServiceKey(
-  workerId: string,
-  config: CoordinatorConfig,
-): string {
-  return config.workerKeys[workerId] ?? config.workerServiceKey;
 }
 
 function resolveRequiredCapabilities(request: CreateTryOnJobRequest): string[] {

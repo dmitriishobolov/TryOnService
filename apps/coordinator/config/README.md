@@ -7,9 +7,7 @@
 - `COORDINATOR_PORT` - порт HTTP API coordinator.
 - `COORDINATOR_PUBLIC_URL` - публичный URL, если нужен callback или внешняя ссылка на API.
 - `WORKER_REGISTRATION_KEY` - ключ, по которому worker регистрируется в coordinator.
-- `WORKER_SERVICE_KEY` - dev fallback ключ служебных запросов coordinator <-> worker после регистрации.
-- `WORKER_KEYS` - production карта per-worker ключей в формате `workerId=secret,worker2=secret2`.
-- `REQUIRE_WORKER_INSTANCE_KEYS` - если `true`, workerId без записи в `WORKER_KEYS` не регистрируется и не проходит service auth.
+- `WORKER_SERVICE_KEY` - общий ключ служебных запросов coordinator <-> worker после регистрации.
 - `WORKER_DISPATCH_SIGNING_KEY` - секрет подписи dispatch token для прямого client -> worker запроса.
 - `WORKER_DISPATCH_SIGNING_KEY_VERSION` - текущая версия dispatch signing key.
 - `CLIENT_CALLBACK_SIGNING_KEY` - секрет подписи callback token для результата worker -> client.
@@ -17,9 +15,7 @@
 - `ADMIN_API_KEY` - ключ доступа к debug/admin endpoints.
 - `WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS` - лимит неверных worker registration ключей с одного IP до бана.
 - `STORAGE_REGISTRATION_KEY` - ключ, по которому storage-node регистрируется в coordinator.
-- `STORAGE_SERVICE_KEY` - dev fallback ключ служебных запросов coordinator <-> storage-node после регистрации.
-- `STORAGE_KEYS` - production карта per-storage ключей в формате `storageId=secret,storage2=secret2`.
-- `REQUIRE_STORAGE_INSTANCE_KEYS` - если `true`, storageId без записи в `STORAGE_KEYS` не регистрируется и не проходит service auth.
+- `STORAGE_SERVICE_KEY` - общий ключ служебных запросов coordinator <-> storage-node после регистрации.
 - `STORAGE_ACCESS_SIGNING_KEY` - секрет подписи storage-access token для прямой связи client/worker -> storage-node.
 - `STORAGE_ACCESS_SIGNING_KEY_VERSION` - текущая версия storage-access signing key.
 - `STORAGE_REGISTRATION_MAX_INVALID_ATTEMPTS` - лимит неверных storage registration ключей с одного IP до бана.

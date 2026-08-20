@@ -14,14 +14,10 @@ export interface CoordinatorConfig {
   publicUrl: string;
   workerRegistrationKey: string;
   workerServiceKey: string;
-  workerKeys: Record<string, string>;
-  requireWorkerInstanceKeys: boolean;
   workerDispatchSigningKey: string;
   workerDispatchSigningKeyVersion: string;
   storageRegistrationKey: string;
   storageServiceKey: string;
-  storageKeys: Record<string, string>;
-  requireStorageInstanceKeys: boolean;
   storageAccessSigningKey: string;
   storageAccessSigningKeyVersion: string;
   clientCallbackSigningKey: string;
@@ -148,11 +144,6 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
       "dev-worker-registration-key",
     ),
     workerServiceKey: readString("WORKER_SERVICE_KEY", "dev-worker-service-key"),
-    workerKeys: readKeyMap("WORKER_KEYS"),
-    requireWorkerInstanceKeys: readBoolean(
-      "REQUIRE_WORKER_INSTANCE_KEYS",
-      false,
-    ),
     workerDispatchSigningKey: readString(
       "WORKER_DISPATCH_SIGNING_KEY",
       "dev-worker-dispatch-signing-key",
@@ -166,11 +157,6 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
       "dev-storage-registration-key",
     ),
     storageServiceKey: readString("STORAGE_SERVICE_KEY", "dev-storage-service-key"),
-    storageKeys: readKeyMap("STORAGE_KEYS"),
-    requireStorageInstanceKeys: readBoolean(
-      "REQUIRE_STORAGE_INSTANCE_KEYS",
-      false,
-    ),
     storageAccessSigningKey: readString(
       "STORAGE_ACCESS_SIGNING_KEY",
       "dev-storage-access-signing-key",

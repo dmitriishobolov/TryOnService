@@ -12,8 +12,7 @@
 - `WORKER_CAPABILITIES` - список поддерживаемых моделей или пайплайнов.
 - `COORDINATOR_URL` - адрес coordinator API.
 - `WORKER_REGISTRATION_KEY` - ключ для регистрации в coordinator.
-- `WORKER_KEY` - per-worker service key для registration proof, heartbeat, progress/result и приема prepare/cancel от coordinator; должен совпадать с `WORKER_KEYS[WORKER_ID]` на coordinator.
-- `WORKER_SERVICE_KEY` - dev fallback service key, если per-worker keys еще не включены.
+- `WORKER_SERVICE_KEY` - общий service key для heartbeat, progress/result и приема prepare/cancel от coordinator после регистрации.
 - `WORKER_DISPATCH_SIGNING_KEY` - секрет проверки dispatch token, который coordinator выдал клиенту.
 - `WORKER_DISPATCH_SIGNING_KEY_VERSION` - версия dispatch signing key; worker принимает только token текущей версии.
 - `WORKER_HEARTBEAT_INTERVAL_MS` - интервал heartbeat worker'а.

@@ -86,7 +86,6 @@ export class CoordinatorClient {
   registrationHeaders(): Record<string, string> {
     return {
       "x-worker-registration-key": this.config.registrationKey,
-      "x-worker-service-key": this.config.serviceKey,
     };
   }
 

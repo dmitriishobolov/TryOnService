@@ -14,7 +14,7 @@ TryOnService - сервис примерки на базе AI API. Проект 
 - Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, получает assignment, отправляет job worker'у напрямую и выводит пользователю ответ worker'а;
 - coordinator защищает регистрацию worker'ов, service clients и storage-node от перебора ключа: после достижения лимита неверных попыток IP блокируется; при `COORDINATOR_PERSISTENCE=postgres` ban сохраняется в БД и переживает restart;
 - registration, service-to-service, dispatch token, client callback, storage access и admin/debug доступ используют разные ключи;
-- для production можно включить per-instance identity через `WORKER_KEYS`, `STORAGE_KEYS`, `CLIENT_KEYS` и флаги `REQUIRE_WORKER_INSTANCE_KEYS`, `REQUIRE_STORAGE_INSTANCE_KEYS`, `REQUIRE_CLIENT_INSTANCE_KEYS`;
+- для клиентов можно включить per-client identity через `CLIENT_KEYS` и `REQUIRE_CLIENT_INSTANCE_KEYS`; worker/storage регистрируются по общим registration keys для быстрого горизонтального масштабирования;
 - signed tokens содержат `tokenId` и `keyVersion`: worker dispatch и client callback защищены от replay, а storage-access ограничивается TTL, storageId, scope и ownership prefix;
 - coordinator пишет security audit events в memory/Postgres backend;
 - HTTP API имеют лимиты размера JSON body, базовый rate limit и timeout/retry для исходящих service calls;
@@ -101,7 +101,7 @@ Coordinator:
 Object storage node:
 
 - при старте выбирает свободный порт, регистрируется в coordinator по `STORAGE_REGISTRATION_KEY` и сообщает публичный endpoint;
-- отправляет heartbeat coordinator-у по `STORAGE_KEY` или dev fallback `STORAGE_SERVICE_KEY`;
+- отправляет heartbeat coordinator-у по `STORAGE_SERVICE_KEY`;
 - принимает `PUT /objects/<key>` и `GET /objects/<key>` только с signed token purpose `storage-access`;
 - хранит файлы локально в dev backend или станет точкой расширения под S3-compatible backend.
 
@@ -175,8 +175,7 @@ npm run dev:telegram
 Секреты разделены по зонам ответственности:
 
 - `WORKER_REGISTRATION_KEY` - registration gate для worker'ов в `POST /workers/register`, передается как `x-worker-registration-key`.
-- `WORKER_SERVICE_KEY` - dev fallback для служебных вызовов coordinator <-> worker: heartbeat, prepare, progress, result, cancel; передается как `x-worker-service-key`.
-- `WORKER_KEYS` - production карта `workerId=secret,otherWorker=secret`, которая задает per-worker service key. Worker доказывает владение ключом уже при регистрации через `x-worker-service-key`; при `REQUIRE_WORKER_INSTANCE_KEYS=true` worker без записи в карте не регистрируется и не проходит heartbeat/progress/result.
+- `WORKER_SERVICE_KEY` - общий service key для heartbeat, prepare, progress, result и cancel после регистрации; передается как `x-worker-service-key`.
 - `WORKER_DISPATCH_SIGNING_KEY` - подпись dispatch token, который coordinator выдает клиенту для прямого `POST /jobs` на worker.
 - `WORKER_DISPATCH_SIGNING_KEY_VERSION` - версия ключа подписи dispatch token; worker принимает только токены текущей версии.
 - `CLIENT_REGISTRATION_KEY` - dev fallback для регистрации и heartbeat service clients, а также создания jobs в coordinator; передается как `x-client-key`.
@@ -185,8 +184,7 @@ npm run dev:telegram
 - `CLIENT_CALLBACK_SIGNING_KEY_VERSION` - версия callback signing key; Telegram client отклоняет токены другой версии.
 - `ADMIN_API_KEY` - доступ к debug/admin endpoints coordinator: `GET /health`, `GET /jobs`, `GET /jobs/:id`; передается как `x-admin-key`.
 - `STORAGE_REGISTRATION_KEY` - registration gate для storage-node в `POST /storage/register`, передается как `x-storage-registration-key`.
-- `STORAGE_SERVICE_KEY` - dev fallback для служебных вызовов coordinator <-> storage-node: heartbeat и health; передается как `x-storage-service-key`.
-- `STORAGE_KEYS` - production карта `storageId=secret`, которая задает per-storage service key. Storage-node доказывает владение ключом уже при регистрации через `x-storage-service-key`; при `REQUIRE_STORAGE_INSTANCE_KEYS=true` storage-node без записи в карте не регистрируется и не проходит heartbeat.
+- `STORAGE_SERVICE_KEY` - общий service key для heartbeat/health storage-node после регистрации; передается как `x-storage-service-key`.
 - `STORAGE_ACCESS_SIGNING_KEY` - подпись scoped token, по которому client/worker ходят напрямую в storage-node.
 - `STORAGE_ACCESS_SIGNING_KEY_VERSION` - версия storage-access signing key; storage-node принимает только токены текущей версии.
 
@@ -291,20 +289,19 @@ npm run build:dist
 - `COORDINATOR_PUBLIC_URL` - публичный URL coordinator для status callbacks от worker'ов.
 - `COORDINATOR_URL` - адрес coordinator для worker и Telegram client.
 - `WORKER_REGISTRATION_KEY` - ключ регистрации worker'ов в coordinator.
-- `WORKER_SERVICE_KEY` - dev fallback ключ служебного общения coordinator <-> worker.
+- `WORKER_SERVICE_KEY` - общий ключ служебного общения coordinator <-> worker.
 - `WORKER_DISPATCH_SIGNING_KEY`, `WORKER_DISPATCH_SIGNING_KEY_VERSION` - секрет и версия подписи dispatch token для прямого client -> worker запроса.
 - `CLIENT_CALLBACK_SIGNING_KEY`, `CLIENT_CALLBACK_SIGNING_KEY_VERSION` - секрет и версия подписи callback token для worker -> client результата.
 - `CLIENT_REGISTRATION_KEY` - dev fallback ключ регистрации service clients в coordinator и создания jobs.
 - `CLIENT_KEYS` - per-client ключи в формате `clientId=secret,client2=secret2`.
 - `TELEGRAM_CLIENT_KEY` - конкретный ключ Telegram client; должен совпадать с записью `CLIENT_KEYS` для `TELEGRAM_CLIENT_ID`, если включен `REQUIRE_CLIENT_INSTANCE_KEYS=true`.
-- `WORKER_KEYS`, `WORKER_KEY`, `STORAGE_KEYS`, `STORAGE_KEY` - per-instance service keys для production.
-- `REQUIRE_WORKER_INSTANCE_KEYS`, `REQUIRE_STORAGE_INSTANCE_KEYS`, `REQUIRE_CLIENT_INSTANCE_KEYS` - запрет fallback на общие dev keys.
+- `REQUIRE_CLIENT_INSTANCE_KEYS` - запрет fallback на общий client key.
 - `REQUIRE_HTTPS_ENDPOINTS` - запрет регистрации non-HTTPS public endpoints.
 - `CLIENT_REGISTRATION_MAX_INVALID_ATTEMPTS` - сколько неверных client registration-ключей с одного IP допускается до бана; по умолчанию `5`.
 - `ADMIN_API_KEY` - ключ доступа к debug/admin endpoints coordinator.
 - `WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS` - сколько неверных registration-ключей с одного IP допускается до бана; по умолчанию `5`.
 - `STORAGE_REGISTRATION_KEY` - ключ регистрации storage-node в coordinator.
-- `STORAGE_SERVICE_KEY` - dev fallback ключ heartbeat/health для storage-node.
+- `STORAGE_SERVICE_KEY` - общий ключ heartbeat/health для storage-node.
 - `STORAGE_ACCESS_SIGNING_KEY`, `STORAGE_ACCESS_SIGNING_KEY_VERSION` - секрет и версия подписи storage-access token.
 - `STORAGE_REGISTRATION_MAX_INVALID_ATTEMPTS` - сколько неверных storage registration-ключей с одного IP допускается до бана.
 - `STORAGE_HEARTBEAT_INTERVAL_MS`, `STORAGE_HEARTBEAT_TIMEOUT_MS` - heartbeat storage-node и timeout исключения из активного пула.

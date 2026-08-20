@@ -104,10 +104,7 @@ export function loadStorageConfig(): StorageConfig {
       "STORAGE_REGISTRATION_KEY",
       "dev-storage-registration-key",
     ),
-    serviceKey: readString(
-      "STORAGE_KEY",
-      readString("STORAGE_SERVICE_KEY", "dev-storage-service-key"),
-    ),
+    serviceKey: readString("STORAGE_SERVICE_KEY", "dev-storage-service-key"),
     accessSigningKey: readString(
       "STORAGE_ACCESS_SIGNING_KEY",
       "dev-storage-access-signing-key",

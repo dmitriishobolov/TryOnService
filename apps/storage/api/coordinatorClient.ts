@@ -46,7 +46,6 @@ export class StorageCoordinatorClient {
   private registrationHeaders(): Record<string, string> {
     return {
       "x-storage-registration-key": this.config.registrationKey,
-      "x-storage-service-key": this.config.serviceKey,
     };
   }
 

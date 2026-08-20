@@ -87,10 +87,7 @@ export function loadWorkerConfig(): WorkerConfig {
       "WORKER_REGISTRATION_KEY",
       "dev-worker-registration-key",
     ),
-    serviceKey: readString(
-      "WORKER_KEY",
-      readString("WORKER_SERVICE_KEY", "dev-worker-service-key"),
-    ),
+    serviceKey: readString("WORKER_SERVICE_KEY", "dev-worker-service-key"),
     dispatchSigningKey: readString(
       "WORKER_DISPATCH_SIGNING_KEY",
       "dev-worker-dispatch-signing-key",

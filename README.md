@@ -1,45 +1,45 @@
 # TryOnService
 
-TryOnService - сервис примерки на базе AI API. Проект проектируется как расширяемая Node.js + TypeScript система, где клиентские запросы попадают в coordinator, а тяжелую обработку выполняют независимые worker-серверы.
+TryOnService - сервис примерки на базе AI API. Проект проектируется как расширяемая Node.js + TypeScript система, где coordinator подбирает подходящий worker для клиента, а тяжелую обработку выполняют независимые worker-серверы.
 
-Главная идея архитектуры: coordinator отвечает за прием запросов, очередь, расписание и учет доступных worker'ов; worker при запуске сам регистрируется в coordinator через API и ключ доступа, после чего может получать задания и выполнять пайплайны обработки. Благодаря этому новые worker'ы можно добавлять горизонтально по мере роста нагрузки.
+Главная идея архитектуры: coordinator не должен становиться узким местом для клиентских результатов. Он ведет registry worker'ов и service clients, выбирает подходящий worker, создает job assignment и возвращает клиенту endpoint worker'а с подписанным dispatch token. После этого клиент отправляет job worker'у напрямую, а worker отправляет результат напрямую в callback клиента.
 
 ## Статус проекта
 
 Сейчас реализован первый вертикальный срез на Node.js/TypeScript:
 
-- coordinator принимает jobs, регистрирует worker'ы и service clients, получает heartbeat и назначает queued job доступному worker'у;
-- worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat и обрабатывает назначенные jobs через mock AI model;
-- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, создает job и выводит пользователю ответ worker'а.
+- coordinator регистрирует worker'ы и service clients, получает heartbeat, создает job assignment и возвращает клиенту выбранный worker;
+- worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat и принимает jobs напрямую от клиентов по signed dispatch token;
+- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, получает assignment, отправляет job worker'у напрямую и выводит пользователю ответ worker'а.
 - coordinator защищает регистрацию worker'ов от перебора ключа: после превышения лимита неверных попыток IP блокируется до перезапуска coordinator.
 
 ## Как устроен сервис
 
 ```mermaid
 flowchart LR
-    Client["Client integrations"] --> CoordinatorAPI["Coordinator API"]
+    Client["Client integrations"] -->|"request assignment"| CoordinatorAPI["Coordinator API"]
     CoordinatorAPI --> Jobs["Jobs"]
     CoordinatorAPI --> Registry["Worker/client registry"]
     CoordinatorAPI --> Security["Registration guard"]
-    Registry --> Scheduler["Scheduler"]
-    Jobs --> Scheduler
-    Scheduler --> WorkerAPI["Worker API/client"]
+    CoordinatorAPI -->|"worker endpoint + dispatch token"| Client
+    Client -->|"direct job dispatch"| WorkerAPI["Worker API"]
     WorkerAPI --> Runner["Runner"]
     Runner --> Models["AI API models"]
     Models --> AI["External AI APIs"]
-    Runner --> CoordinatorAPI
+    Runner -->|"status only"| CoordinatorAPI
+    Runner -->|"result callback"| Client
 ```
 
-1. Клиент или интеграция отправляет запрос на примерку в coordinator.
-2. Coordinator валидирует запрос, создает job и хранит состояние обработки.
-3. Client и worker при запуске регистрируются в coordinator и регулярно подтверждают доступность.
-4. Scheduler выбирает подходящий worker для job с учетом доступности, лимитов и возможностей.
-5. Worker запускает runner, который готовит данные клиента, вызывает нужную реализацию AI API из `models`, возвращает status в coordinator и отправляет результат на callback зарегистрированного клиента.
+1. Client и worker при запуске регистрируются в coordinator и регулярно подтверждают доступность.
+2. Клиент отправляет запрос на assignment в coordinator.
+3. Coordinator валидирует запрос, находит callback URL клиента, выбирает доступный worker, резервирует capacity и возвращает assignment.
+4. Клиент отправляет `workerRequest` напрямую на worker endpoint с `x-job-dispatch-token`.
+5. Worker запускает runner, вызывает нужную реализацию AI API из `models`, отправляет status-only update в coordinator и результат на callback клиента.
 
 ## Структура репозитория
 
 - [apps](apps/README.md) - все приложения и общие пакеты монорепозитория.
-- [apps/coordinator](apps/coordinator/README.md) - сервис-координатор: API, очередь jobs, registry worker'ов/service clients, scheduler и coordinator utilities.
+- [apps/coordinator](apps/coordinator/README.md) - сервис-координатор: API assignment, jobs state, registry worker'ов/service clients, assignment cleanup и coordinator utilities.
 - [apps/worker](apps/worker/README.md) - исполняющий сервис: регистрация в coordinator, запуск пайплайнов, вызовы AI API.
 - [apps/shared](apps/shared/README.md) - общие контракты, DTO, типы и схемы валидации.
 - [apps/client](apps/client/README.md) - клиентские интеграции, через которые пользователи создают задачи.
@@ -52,14 +52,16 @@ Coordinator:
 - принимает внешние запросы от клиентов и внутренних сервисов;
 - хранит состояние jobs и историю переходов;
 - ведет реестр worker'ов и service clients, их heartbeat, capacity и capabilities;
-- назначает задания worker'ам и контролирует retries/timeouts.
+- подбирает worker и выдает клиенту signed assignment для прямой отправки job;
+- чистит просроченные assignments и освобождает capacity worker'а;
 - блокирует IP, которые пытаются подобрать `WORKER_REGISTRATION_KEY` через регистрацию worker'а.
 
 Worker:
 
 - при старте читает конфиг и регистрируется в coordinator по API key;
 - сообщает о готовности, capacity и поддерживаемых моделях/пайплайнах;
-- получает или принимает jobs, запускает runner и обновляет статус выполнения;
+- принимает jobs от клиентов по signed dispatch token, запускает runner и обновляет статус выполнения;
+- отправляет клиентский результат напрямую в callback URL из assignment;
 - изолирует конкретные AI API в `apps/worker/models`.
 
 Shared:
@@ -125,15 +127,20 @@ Worker и service client регистрируются в coordinator по раз
 
 ## Проверка без Telegram
 
-Можно проверить цепочку coordinator + worker обычным HTTP-запросом:
+Можно проверить matchmaking coordinator + прямую отправку job worker'у через PowerShell:
 
-```bash
-curl -X POST http://localhost:3000/jobs \
-  -H "Content-Type: application/json" \
-  -d "{\"client\":{\"type\":\"telegram\",\"chatId\":\"local-dev\"},\"payload\":{\"command\":\"request\"}}"
+```powershell
+$assignment = curl.exe -s -X POST http://localhost:3000/jobs `
+  -H "Content-Type: application/json" `
+  --data '{"client":{"type":"telegram","chatId":"local-dev"},"payload":{"command":"request"}}' | ConvertFrom-Json
+
+curl.exe -s -X POST $assignment.worker.jobUrl `
+  -H "Content-Type: application/json" `
+  -H "x-job-dispatch-token: $($assignment.worker.dispatchToken)" `
+  --data ($assignment.workerRequest | ConvertTo-Json -Depth 10 -Compress)
 ```
 
-После обработки job в `GET http://localhost:3000/jobs` появится результат `Ответ от сервера.`.
+После обработки job в `GET http://localhost:3000/jobs` статус станет `succeeded`. Сам клиентский ответ не проходит через coordinator: worker отправляет его только в callback URL клиента, если он был указан в assignment.
 
 ## Сборка deploy-пакетов
 
@@ -173,13 +180,15 @@ npm run build:dist
 
 Минимально важные адреса:
 
-- `COORDINATOR_PUBLIC_URL` - публичный URL coordinator, который он передает worker'ам для callbacks.
+- `COORDINATOR_PUBLIC_URL` - публичный URL coordinator для status callbacks от worker'ов.
 - `COORDINATOR_URL` - адрес coordinator для worker и Telegram client.
 - `WORKER_REGISTRATION_KEY` - ключ регистрации worker'ов в coordinator.
 - `WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS` - сколько неверных registration-ключей с одного IP допускается до бана; по умолчанию `5`.
 - `WORKER_PORT` - порт worker; coordinator использует его вместе с IP registration-запроса, чтобы отправлять jobs на worker.
 - `WORKER_PUBLIC_PROTOCOL` - протокол публичного worker endpoint, обычно `http` или `https`.
 - `WORKER_PUBLIC_URL` - опциональный ручной override для worker endpoint, если автоопределение по IP/port не подходит.
+- `WORKER_DISPATCH_TOKEN_TTL_MS` - срок жизни signed token, по которому клиент может отправить конкретную job конкретному worker'у.
+- `JOB_ASSIGNMENT_TIMEOUT_MS` - сколько coordinator держит assignment в статусе `assigned`, если клиент не успел отправить job worker'у.
 - `TELEGRAM_CLIENT_PUBLIC_PROTOCOL` - протокол публичного Telegram callback endpoint.
 - `TELEGRAM_CLIENT_PUBLIC_URL` - опциональный ручной override для Telegram callback endpoint, если автоопределение по IP/port не подходит.
 - `CLIENT_REGISTRATION_KEY` - ключ регистрации service clients в coordinator.

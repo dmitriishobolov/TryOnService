@@ -12,9 +12,12 @@ import {
   type ClientRegistrationRequest,
   type ClientRegistrationResponse,
   type CreateTryOnJobRequest,
+  type TryOnJobAssignmentResponse,
+  type WorkerJobRequest,
   type WorkerRegistrationRequest,
   type WorkerRegistrationResponse,
 } from "../../shared/contracts/index.js";
+import { createDispatchToken } from "../../shared/dispatchToken.js";
 import {
   readJsonBody,
   requestUrl,
@@ -88,6 +91,14 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
+        if (
+          body.sourceClientId &&
+          !hasClientKey(request.headers["x-client-key"], config)
+        ) {
+          writeError(response, 401, "unauthorized_client", "Invalid client key");
+          return;
+        }
+
         const requestWithCallback = resolveJobCallback(body, clients);
 
         if (!requestWithCallback) {
@@ -100,10 +111,67 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        const job = jobs.create(requestWithCallback);
-        void scheduler.schedule();
+        const worker = workers.findAvailable(
+          config.workerHeartbeatTimeoutMs,
+          resolveRequiredCapabilities(body),
+        );
 
-        writeJson(response, 202, job);
+        if (!worker) {
+          writeError(
+            response,
+            503,
+            "no_available_worker",
+            "No worker is currently available for this job",
+          );
+          return;
+        }
+
+        const reservedWorker = workers.reserve(worker.workerId);
+
+        if (!reservedWorker) {
+          writeError(
+            response,
+            409,
+            "worker_not_available",
+            "Selected worker is no longer available",
+          );
+          return;
+        }
+
+        const dispatchTokenExpiresAt = new Date(
+          Date.now() + config.workerDispatchTokenTtlMs,
+        ).toISOString();
+        const job = jobs.createAssigned(
+          requestWithCallback,
+          reservedWorker.workerId,
+          dispatchTokenExpiresAt,
+        );
+        const workerRequest = createWorkerJobRequest(
+          job.id,
+          requestWithCallback,
+          config,
+        );
+        const dispatchToken = createDispatchToken(
+          {
+            jobId: job.id,
+            workerId: reservedWorker.workerId,
+            expiresAt: dispatchTokenExpiresAt,
+          },
+          config.workerRegistrationKey,
+        );
+        const assignment: TryOnJobAssignmentResponse = {
+          job,
+          worker: {
+            workerId: reservedWorker.workerId,
+            baseUrl: reservedWorker.baseUrl,
+            jobUrl: `${reservedWorker.baseUrl}/jobs`,
+            dispatchToken,
+            dispatchTokenExpiresAt,
+          },
+          workerRequest,
+        };
+
+        writeJson(response, 201, assignment);
         return;
       }
 
@@ -394,6 +462,31 @@ function resolveJobCallback(
     ...request,
     callbackUrl: client.callbackUrl,
   };
+}
+
+function createWorkerJobRequest(
+  jobId: string,
+  request: CreateTryOnJobRequest,
+  config: CoordinatorConfig,
+): WorkerJobRequest {
+  return {
+    jobId,
+    client: request.client,
+    payload: request.payload,
+    callbackUrl: request.callbackUrl,
+    coordinator: {
+      progressUrl: `${config.publicUrl}/jobs/${jobId}/progress`,
+      resultUrl: `${config.publicUrl}/jobs/${jobId}/result`,
+    },
+  };
+}
+
+function resolveRequiredCapabilities(request: CreateTryOnJobRequest): string[] {
+  if (request.payload.command === "request") {
+    return ["try-on.mock"];
+  }
+
+  return [];
 }
 
 function resolveServiceBaseUrl(

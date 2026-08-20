@@ -41,7 +41,6 @@ setInterval(() => {
     );
   }
 
-  void scheduler.schedule();
 }, config.workerHeartbeatIntervalMs);
 
 setInterval(() => {
@@ -55,3 +54,7 @@ setInterval(() => {
     );
   }
 }, config.clientHeartbeatIntervalMs);
+
+setInterval(() => {
+  void scheduler.schedule();
+}, config.schedulerIntervalMs);

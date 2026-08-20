@@ -3,7 +3,7 @@ import type {
   ClientRegistrationRequest,
   ClientRegistrationResponse,
   CreateTryOnJobRequest,
-  TryOnJob,
+  TryOnJobAssignmentResponse,
 } from "../../shared/contracts/index.js";
 import { postJson } from "../../shared/http.js";
 import type { TelegramClientConfig } from "./config.js";
@@ -45,7 +45,7 @@ export class TelegramCoordinatorClient {
     chatId: string;
     username?: string;
     text?: string;
-  }): Promise<TryOnJob> {
+  }): Promise<TryOnJobAssignmentResponse> {
     const payload: CreateTryOnJobRequest = {
       sourceClientId: this.config.clientId,
       client: {
@@ -59,7 +59,11 @@ export class TelegramCoordinatorClient {
       },
     };
 
-    return postJson<TryOnJob>(`${this.config.coordinatorUrl}/jobs`, payload);
+    return postJson<TryOnJobAssignmentResponse>(
+      `${this.config.coordinatorUrl}/jobs`,
+      payload,
+      this.headers(),
+    );
   }
 
   private headers(): Record<string, string> {

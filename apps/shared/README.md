@@ -11,6 +11,7 @@
 - `env.ts` - простой загрузчик `.env` без внешней runtime-зависимости.
 - `http.ts` - JSON helpers, единый формат API errors и `postJson`.
 - `net.ts` - подбор ближайшего свободного порта для сервисов, которые слушают HTTP callback/API.
+- `dispatchToken.ts` - создание и проверка signed token для прямой отправки job от client к worker.
 
 ## Что хранить в shared
 

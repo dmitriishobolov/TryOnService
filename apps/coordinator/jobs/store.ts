@@ -27,6 +27,30 @@ export class InMemoryJobStore {
     return job;
   }
 
+  createAssigned(
+    request: CreateTryOnJobRequest,
+    workerId: string,
+    dispatchTokenExpiresAt: string,
+  ): TryOnJob {
+    const now = new Date().toISOString();
+    const job: TryOnJob = {
+      id: randomUUID(),
+      status: "assigned",
+      client: request.client,
+      payload: request.payload,
+      callbackUrl: request.callbackUrl,
+      assignedWorkerId: workerId,
+      assignedAt: now,
+      dispatchTokenExpiresAt,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.jobs.set(job.id, job);
+
+    return job;
+  }
+
   get(jobId: string): TryOnJob | undefined {
     return this.jobs.get(jobId);
   }
@@ -39,6 +63,20 @@ export class InMemoryJobStore {
     return this.list().filter((job) => job.status === "queued");
   }
 
+  findExpiredAssignments(timeoutMs: number): TryOnJob[] {
+    const now = Date.now();
+
+    return this.list().filter((job) => {
+      if (job.status !== "assigned") {
+        return false;
+      }
+
+      const assignedAt = new Date(job.assignedAt ?? job.updatedAt).getTime();
+
+      return now - assignedAt > timeoutMs;
+    });
+  }
+
   markAssigned(jobId: string, workerId: string): TryOnJob | undefined {
     const job = this.jobs.get(jobId);
 
@@ -49,6 +87,7 @@ export class InMemoryJobStore {
     return this.update(jobId, {
       status: "assigned",
       assignedWorkerId: workerId,
+      assignedAt: new Date().toISOString(),
     });
   }
 
@@ -82,6 +121,19 @@ export class InMemoryJobStore {
     return this.update(jobId, {
       status: "queued",
       assignedWorkerId: undefined,
+      assignedAt: undefined,
+      dispatchTokenExpiresAt: undefined,
+    });
+  }
+
+  markAssignmentExpired(jobId: string): TryOnJob | undefined {
+    return this.update(jobId, {
+      status: "failed",
+      error: {
+        code: "assignment_expired",
+        message: "Worker assignment expired before direct client dispatch",
+        retryable: true,
+      },
     });
   }
 

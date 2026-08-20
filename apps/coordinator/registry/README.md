@@ -33,6 +33,6 @@ Service client проходит похожий цикл: стартует, вы�
 ## Правила
 
 - Registry должен поддерживать горизонтальное масштабирование: несколько worker'ов могут иметь одинаковые capabilities.
-- Scheduler не должен назначать jobs worker'у, у которого истек heartbeat.
+- Coordinator API не должен выдавать assignment worker'у, у которого истек heartbeat.
 - Обновление registration должно быть идемпотентным: перезапуск worker'а не должен создавать дубликаты.
 - Client registry нужен coordinator, чтобы подставлять callback URL в job по `sourceClientId`.

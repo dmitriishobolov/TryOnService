@@ -51,6 +51,8 @@ export interface TryOnJob {
   payload: CreateTryOnJobRequest["payload"];
   callbackUrl?: string;
   assignedWorkerId?: string;
+  assignedAt?: string;
+  dispatchTokenExpiresAt?: string;
   result?: TryOnJobResult;
   error?: TryOnJobError;
   createdAt: string;
@@ -134,6 +136,20 @@ export interface WorkerJobRequest {
     progressUrl: string;
     resultUrl: string;
   };
+}
+
+export interface WorkerDispatchAssignment {
+  workerId: string;
+  baseUrl: string;
+  jobUrl: string;
+  dispatchToken: string;
+  dispatchTokenExpiresAt: string;
+}
+
+export interface TryOnJobAssignmentResponse {
+  job: TryOnJob;
+  worker: WorkerDispatchAssignment;
+  workerRequest: WorkerJobRequest;
 }
 
 export interface WorkerJobAcceptedResponse {
@@ -299,7 +315,10 @@ export function isJobResultUpdateRequest(
   }
 
   if (value.status === "succeeded") {
-    return isObject(value.result) && typeof value.result.message === "string";
+    return (
+      value.result === undefined ||
+      (isObject(value.result) && typeof value.result.message === "string")
+    );
   }
 
   if (value.status === "failed") {

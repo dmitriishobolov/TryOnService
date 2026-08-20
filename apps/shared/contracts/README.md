@@ -13,6 +13,7 @@
 - регистрацию worker;
 - heartbeat worker;
 - назначение job;
+- assignment response для прямой связи client -> worker;
 - обновление прогресса;
 - capabilities worker'а.
 

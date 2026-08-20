@@ -1,6 +1,6 @@
 # Telegram Client
 
-Папка для Telegram-интеграции TryOnService. Здесь находится бот, callback server и HTTP client к coordinator. Сейчас бот создает demo job по команде `/request` или кнопке `Request`, а после обработки отправляет пользователю текст результата.
+Папка для Telegram-интеграции TryOnService. Здесь находится бот, callback server, HTTP client к coordinator и HTTP client к worker. Сейчас бот создает demo request по команде `/request` или кнопке `Request`, получает assignment от coordinator, отправляет job worker'у напрямую и после callback отправляет пользователю текст результата.
 
 ## Запуск
 
@@ -13,21 +13,24 @@ npm run dev:telegram
 
 Telegram client автоматически регистрируется в coordinator через `POST /clients/register`, передает свой фактический callback-порт и дальше отправляет heartbeat.
 
+Для обработки запроса Telegram client вызывает `POST /jobs` coordinator, получает выбранный worker, `workerRequest` и `dispatchToken`, затем отправляет `POST /jobs` напрямую на worker endpoint с header `x-job-dispatch-token`.
+
 Deploy-пакет собирается командой `npm run build:dist` в `dist/packages/telegram-client`.
 
 ## Ожидаемый поток
 
 1. Пользователь открывает `/start`, бот регистрирует меню команд и показывает кнопку `Request`.
 2. Пользователь отправляет `/request` или нажимает кнопку.
-3. Telegram client создает job через coordinator API и передает `sourceClientId`.
-4. Coordinator находит callback URL зарегистрированного Telegram client.
-5. Worker обрабатывает job и отправляет callback в `POST /callbacks/jobs`.
-6. Telegram client отправляет пользователю сообщение `Ответ от сервера.`.
+3. Telegram client запрашивает assignment через coordinator API и передает `sourceClientId`.
+4. Coordinator находит callback URL Telegram client, выбирает worker и возвращает signed dispatch token.
+5. Telegram client отправляет `workerRequest` напрямую выбранному worker'у.
+6. Worker обрабатывает job и отправляет callback в `POST /callbacks/jobs`.
+7. Telegram client отправляет пользователю сообщение `Ответ от сервера.`.
 
 ## Реализовано сейчас
 
 - `/start` настраивает команды бота через Telegram Bot API и показывает кнопку `Request`.
-- `/request` или кнопка `Request` создают job в coordinator.
+- `/request` или кнопка `Request` создают assignment в coordinator и отправляют job worker'у напрямую.
 - client registration и heartbeat в coordinator.
 - автоматический выбор ближайшего свободного callback-порта.
 - `POST /callbacks/jobs` принимает ответ worker'а и отправляет пользователю текст результата.

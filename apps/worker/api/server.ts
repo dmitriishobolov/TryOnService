@@ -5,6 +5,7 @@ import {
   isWorkerJobRequest,
   type WorkerJobAcceptedResponse,
 } from "../../shared/contracts/index.js";
+import { verifyDispatchToken } from "../../shared/dispatchToken.js";
 import {
   readJsonBody,
   requestUrl,
@@ -47,20 +48,20 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
       }
 
       if (request.method === "POST" && url.pathname === "/jobs") {
-        if (!hasWorkerKey(request.headers["x-worker-key"], config)) {
-          writeError(response, 401, "unauthorized_worker", "Invalid worker key");
+        const body = await readJsonBody(request);
+
+        if (!isWorkerJobRequest(body)) {
+          writeError(response, 400, "invalid_worker_job", "Invalid worker job payload");
+          return;
+        }
+
+        if (!hasWorkerJobAccess(request.headers, body.jobId, config)) {
+          writeError(response, 401, "unauthorized_worker_job", "Invalid job token");
           return;
         }
 
         if (getRunningJobs() >= config.capacity) {
           writeError(response, 429, "worker_busy", "Worker has no free capacity");
-          return;
-        }
-
-        const body = await readJsonBody(request);
-
-        if (!isWorkerJobRequest(body)) {
-          writeError(response, 400, "invalid_worker_job", "Invalid worker job payload");
           return;
         }
 
@@ -101,4 +102,27 @@ function hasWorkerKey(
   const value = Array.isArray(headerValue) ? headerValue[0] : headerValue;
 
   return value === config.registrationKey;
+}
+
+function hasWorkerJobAccess(
+  headers: Record<string, string | string[] | undefined>,
+  jobId: string,
+  config: WorkerConfig,
+): boolean {
+  if (hasWorkerKey(headers["x-worker-key"], config)) {
+    return true;
+  }
+
+  const token = firstHeaderValue(headers["x-job-dispatch-token"]);
+  const verification = verifyDispatchToken(token, config.registrationKey);
+
+  return (
+    verification.valid &&
+    verification.payload?.jobId === jobId &&
+    verification.payload.workerId === config.workerId
+  );
+}
+
+function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
 }

@@ -31,6 +31,8 @@ const services = [
       "CLIENT_HEARTBEAT_INTERVAL_MS",
       "CLIENT_HEARTBEAT_TIMEOUT_MS",
       "SCHEDULER_INTERVAL_MS",
+      "WORKER_DISPATCH_TOKEN_TTL_MS",
+      "JOB_ASSIGNMENT_TIMEOUT_MS",
     ],
   },
   {

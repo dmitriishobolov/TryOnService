@@ -35,7 +35,6 @@ export async function runWorkerJob(
     const update: JobResultUpdateRequest = {
       jobId: job.jobId,
       status: "succeeded",
-      result,
     };
 
     await coordinator.reportResult(update);

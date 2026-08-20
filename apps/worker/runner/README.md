@@ -2,7 +2,7 @@
 
 Runner - место, где живут процессы обработки данных клиента. Он получает job по контракту, готовит входные данные, вызывает нужную модель из `apps/worker/models`, сохраняет или передает результат и сообщает статус coordinator.
 
-Текущий runner запускает mock model, сообщает progress/result в coordinator и, если в job есть `callbackUrl`, отправляет результат клиентскому callback endpoint.
+Текущий runner запускает mock model, сообщает progress/final status в coordinator и, если в job есть `callbackUrl`, отправляет результат клиентскому callback endpoint. Payload ответа клиента не обязан храниться в coordinator.
 
 ## Типовой пайплайн
 

@@ -6,11 +6,11 @@
 
 API для клиентов и интеграций должен отвечать за:
 
-- создание job на примерку;
+- создание job assignment на примерку;
 - регистрацию service client при запуске;
 - прием heartbeat от service client;
 - получение статуса job;
-- получение результата обработки;
+- получение состояния обработки без обязательного хранения клиентского результата;
 - отмену job, если сценарий это поддерживает.
 
 ## Worker endpoints
@@ -19,9 +19,19 @@ API для worker'ов должен отвечать за:
 
 - регистрацию worker'а при запуске;
 - прием heartbeat;
-- выдачу или подтверждение назначенной job;
+- прием progress/result status по job, которую client отправил worker'у напрямую;
 - обновление прогресса и финального статуса;
 - сообщение об ошибках выполнения.
+
+## Assignment flow
+
+`POST /jobs` не отправляет job на worker. Coordinator выбирает доступный worker, резервирует его capacity, создает `assigned` job и возвращает клиенту:
+
+- `job` - состояние job в coordinator.
+- `worker` - endpoint выбранного worker'а и signed dispatch token.
+- `workerRequest` - payload, который client отправляет в `POST /jobs` выбранного worker'а.
+
+Dispatch token подписан `WORKER_REGISTRATION_KEY`, но сам ключ клиенту не передается. Worker проверяет token локально и принимает только job, где token привязан к его `workerId` и `jobId`.
 
 ## Защита worker registration
 
@@ -32,6 +42,7 @@ API для worker'ов должен отвечать за:
 ## Правила
 
 - В API не должно быть тяжелой бизнес-логики обработки изображений.
+- API coordinator не должен проксировать клиентский результат.
 - Все входящие payloads валидируются через контракты из `apps/shared/contracts`.
 - Ошибки должны возвращаться в едином формате, чтобы client и worker могли одинаково их обрабатывать.
 - API key для worker registration и service-to-service операций не должен логироваться.

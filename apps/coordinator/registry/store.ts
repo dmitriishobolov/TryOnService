@@ -108,17 +108,24 @@ export class WorkerRegistry {
     return [...this.workers.values()];
   }
 
-  findAvailable(heartbeatTimeoutMs: number): RegisteredWorker | undefined {
+  findAvailable(
+    heartbeatTimeoutMs: number,
+    requiredCapabilities: string[] = [],
+  ): RegisteredWorker | undefined {
     const now = Date.now();
 
     return this.list().find((worker) => {
       const lastHeartbeatAt = new Date(worker.lastHeartbeatAt).getTime();
       const isFresh = now - lastHeartbeatAt <= heartbeatTimeoutMs;
+      const hasRequiredCapabilities = requiredCapabilities.every((required) =>
+        worker.capabilities.some((capability) => capability.name === required),
+      );
 
       return (
         isFresh &&
         worker.status !== "offline" &&
-        worker.runningJobs < worker.capacity
+        worker.runningJobs < worker.capacity &&
+        hasRequiredCapabilities
       );
     });
   }

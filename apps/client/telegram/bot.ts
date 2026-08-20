@@ -1,6 +1,7 @@
 import { sleep } from "../../shared/http.js";
 import type { TelegramClientConfig } from "./config.js";
 import type { TelegramCoordinatorClient } from "./coordinatorClient.js";
+import type { TelegramWorkerClient } from "./workerClient.js";
 
 interface TelegramApiResponse<T> {
   ok: boolean;
@@ -38,6 +39,7 @@ export class TelegramBot {
   constructor(
     private readonly config: TelegramClientConfig,
     private readonly coordinator: TelegramCoordinatorClient,
+    private readonly worker: TelegramWorkerClient,
   ) {}
 
   async startPolling(): Promise<void> {
@@ -98,15 +100,20 @@ export class TelegramBot {
     const chatId = String(message.chat.id);
 
     try {
-      const job = await this.coordinator.createRequestJob({
+      const assignment = await this.coordinator.createRequestJob({
         chatId,
         username: message.from?.username,
         text: message.text,
       });
 
-      await this.sendMessage(chatId, `Запрос ${job.id} создан. Ожидаю ответ от сервера.`);
+      await this.worker.dispatchJob(assignment);
+
+      await this.sendMessage(
+        chatId,
+        `Запрос ${assignment.job.id} отправлен на сервер. Ожидаю ответ.`,
+      );
     } catch (error) {
-      console.error("[telegram] Failed to create coordinator job", error);
+      console.error("[telegram] Failed to create or dispatch job", error);
       await this.sendMessage(
         chatId,
         "Не удалось создать запрос. Попробуйте еще раз позже.",

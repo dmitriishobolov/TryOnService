@@ -4,6 +4,7 @@ import { TelegramBot } from "./bot.js";
 import { createTelegramCallbackServer } from "./callbackServer.js";
 import { loadTelegramClientConfig } from "./config.js";
 import { TelegramCoordinatorClient } from "./coordinatorClient.js";
+import { TelegramWorkerClient } from "./workerClient.js";
 import type { Server } from "node:http";
 
 loadEnvFile();
@@ -20,7 +21,8 @@ if (selectedPort !== config.port) {
 }
 
 const coordinator = new TelegramCoordinatorClient(config);
-const bot = new TelegramBot(config, coordinator);
+const worker = new TelegramWorkerClient();
+const bot = new TelegramBot(config, coordinator, worker);
 const callbackServer = createTelegramCallbackServer(bot);
 let isRegistered = false;
 

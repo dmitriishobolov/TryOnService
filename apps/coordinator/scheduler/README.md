@@ -1,28 +1,26 @@
 # Scheduler
 
-Scheduler отвечает за выбор worker'а для job и контроль выполнения назначенных задач. Он связывает очередь jobs с registry доступных worker'ов.
+Scheduler в текущей архитектуре отвечает не за отправку job worker'у, а за housekeeping назначений. Выбор worker'а происходит синхронно в `POST /jobs`, где coordinator возвращает клиенту assignment.
 
 ## Задачи scheduler
 
-- находить jobs в статусе `queued`;
-- выбирать worker по availability, capacity и capabilities;
-- назначать job worker'у;
-- отправлять job на worker endpoint;
-- возвращать job в очередь и помечать worker offline, если dispatch не удался.
+- находить jobs в статусе `assigned`, которые не перешли в `running` до `JOB_ASSIGNMENT_TIMEOUT_MS`;
+- переводить просроченный assignment в `failed`;
+- освобождать зарезервированную capacity worker'а;
+- логировать просрочки assignment.
 
-## Критерии выбора worker
+## Где выбирается worker
 
-Минимальный вариант выбора:
+Worker выбирается в coordinator API по минимальным критериям:
 
 - worker активен и не просрочил heartbeat;
-- worker поддерживает нужный тип обработки;
 - у worker есть свободная capacity;
-- job не превышает лимиты worker'а.
+- capabilities worker'а позволяют выполнить job.
 
 ## Правила
 
 - Логика scheduler должна быть отделена от HTTP API.
-- Назначение job должно быть атомарным: одна job не должна уйти двум worker'ам.
+- Assignment job должно быть атомарным: одна job не должна получить два worker'а.
 - Retry policy должна быть явной и наблюдаемой через логи/метрики.
 
-В текущей реализации scheduler работает in-memory: он резервирует worker, переводит job в `assigned`, отправляет `POST /jobs` на worker и освобождает capacity после финального результата.
+В текущей реализации scheduler работает in-memory и чистит только просроченные assignments. Data-plane остается прямым: client -> worker -> client callback.

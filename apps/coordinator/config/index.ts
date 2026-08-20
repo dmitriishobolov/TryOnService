@@ -16,6 +16,8 @@ export interface CoordinatorConfig {
   clientHeartbeatIntervalMs: number;
   clientHeartbeatTimeoutMs: number;
   schedulerIntervalMs: number;
+  workerDispatchTokenTtlMs: number;
+  jobAssignmentTimeoutMs: number;
 }
 
 function readNumber(name: string, fallback: number): number {
@@ -73,5 +75,7 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
       CLIENT_HEARTBEAT_TIMEOUT_MS,
     ),
     schedulerIntervalMs: readNumber("SCHEDULER_INTERVAL_MS", 1_000),
+    workerDispatchTokenTtlMs: readNumber("WORKER_DISPATCH_TOKEN_TTL_MS", 30_000),
+    jobAssignmentTimeoutMs: readNumber("JOB_ASSIGNMENT_TIMEOUT_MS", 30_000),
   };
 }

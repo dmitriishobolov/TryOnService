@@ -13,12 +13,14 @@ Client слой должен:
 - принимать пользовательский ввод;
 - приводить его к контракту создания job;
 - регистрироваться в coordinator как service client, если интеграции нужен callback endpoint;
-- отправлять запрос в coordinator;
+- запрашивать assignment в coordinator;
+- отправлять `workerRequest` напрямую выбранному worker'у с dispatch token;
 - показывать пользователю статус и результат;
 - не выполнять AI-обработку самостоятельно.
 
 ## Правила
 
 - В client не должно быть секретов coordinator или AI provider'ов, кроме тех, которые нужны самой интеграции.
+- Client не должен знать `WORKER_REGISTRATION_KEY`; для прямой отправки job используется signed dispatch token из assignment.
 - Бизнес-логика пайплайна находится в worker runner.
 - Форматы запросов берутся из `apps/shared/contracts`.

@@ -14,6 +14,8 @@
 - `CLIENT_HEARTBEAT_INTERVAL_MS` - интервал heartbeat service clients.
 - `CLIENT_HEARTBEAT_TIMEOUT_MS` - время, после которого service client считается недоступным.
 - `SCHEDULER_INTERVAL_MS` - базовый интервал scheduler loop.
+- `WORKER_DISPATCH_TOKEN_TTL_MS` - срок жизни token для прямой отправки job клиентом на worker.
+- `JOB_ASSIGNMENT_TIMEOUT_MS` - timeout assignment, после которого coordinator освобождает worker capacity.
 
 ## Правила
 

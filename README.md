@@ -83,6 +83,7 @@ Coordinator не принимает и не отдает бинарные фай
 - [apps/shared](apps/shared/README.md) - общие контракты, DTO, типы и схемы валидации.
 - [apps/client](apps/client/README.md) - клиентские интеграции, через которые пользователи создают задачи.
 - `DemoPhotos/` - локальная игнорируемая папка для демонстрационных фотографий, не хранится в git.
+- `devtest/` - генерируемая и игнорируемая папка для изолированного локального test runtime: compiled app, logs и local object storage.
 
 ## Основные зоны ответственности
 
@@ -169,6 +170,26 @@ npm run dev:telegram
 Если storage-node, worker, coordinator и Telegram client запускаются не на одной машине, задайте публичные URL через `COORDINATOR_PUBLIC_URL` и `COORDINATOR_URL`. Адреса storage-node, worker'а и Telegram client callback server coordinator определяет сам по IP registration-запроса и выбранному порту.
 
 Если автоопределение публичного endpoint не подходит из-за NAT, reverse proxy или домена, задайте override через `STORAGE_PUBLIC_URL`, `WORKER_PUBLIC_URL` или `TELEGRAM_CLIENT_PUBLIC_URL`.
+
+### Devtest одной командой
+
+Для проверки всей локальной инфраструктуры без записи runtime-данных в исходники или `dist` используйте:
+
+```bash
+npm run devtest
+```
+
+Команда пересобирает TypeScript в `devtest/app`, создает `devtest/.env`, запускает coordinator, storage-node, worker и Telegram client из папки `devtest`, а логи пишет в `devtest/logs`. Local object storage в этом режиме находится в `devtest/runtime/storage/objects`.
+
+`devtest/.env` собирается из `.env.example` и файла `DEVTEST_ENV_FILE` (`.env` по умолчанию), но devtest принудительно использует `COORDINATOR_PERSISTENCE=memory`, `REQUIRE_HTTPS_ENDPOINTS=false` и локальные public URL. Если `TELEGRAM_BOT_TOKEN` не настроен и оставлен demo-placeholder, Telegram client будет пропущен; для строгой проверки задайте `DEVTEST_REQUIRE_TELEGRAM=true`.
+
+Для сборки без запуска сервисов:
+
+```bash
+npm run build:devtest
+```
+
+Остановить все devtest-процессы можно через `Ctrl+C` в терминале, где запущен `npm run devtest`. Папка `devtest/` игнорируется git и может быть удалена в любой момент.
 
 ## Безопасность
 

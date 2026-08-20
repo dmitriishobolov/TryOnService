@@ -57,13 +57,48 @@ interface BotCommand {
   description: string;
 }
 
+type TelegramReplyMarkup = Record<string, unknown>;
+
 interface ParsedRequestCommand {
   model?: TryOnModelSelection;
   prompt?: string;
 }
 
+interface ChatSession {
+  mode: "awaiting-appearance-photo";
+}
+
+const appearanceAnalysisButtonText = "Разбор внешности";
+const cancelButtonText = "Отмена";
+
+const appearanceAnalysisPrompt = `
+Ты выполняешь разбор внешности только по фотографии реального человека.
+
+Сначала проверь изображение:
+- это должна быть фотография реального человека, а не рисунок, рендер, аватар, мем, игрушка или скриншот;
+- лицо человека должно быть видно достаточно ясно для аккуратного стилевого анализа;
+- если лицо закрыто, слишком темно, размыто, человек снят со спины или на фото нет человека, анализ не выполняй.
+
+Если изображение не подходит, ответь строго этой фразой:
+"Вы загрузили не реальное фото или на фото не видно лица. Пожалуйста, отправьте четкую фотографию реального человека с видимым лицом."
+
+Если изображение подходит, дай конкретный и полезный разбор внешности на русском языке:
+1. Форма лица.
+2. Визуальный контраст внешности.
+3. Видимые пропорции фигуры, без оценочных суждений.
+4. Какие цвета одежды подходят.
+5. Каких цветов лучше избегать.
+6. Подходящие фасоны футболок, рубашек, курток и брюк.
+7. Подходящие аксессуары.
+8. Рекомендации по прическе.
+9. Три наиболее подходящих стилевых направления.
+
+Не пытайся устанавливать личность человека. Не делай выводы о здоровье, этничности, религии, сексуальности, точном возрасте или других чувствительных признаках. Если освещение мешает точно определить цветотип, явно скажи об этом.
+`.trim();
+
 export class TelegramBot {
   private updateOffset = 0;
+  private readonly sessions = new Map<string, ChatSession>();
 
   constructor(
     private readonly config: TelegramClientConfig,
@@ -89,10 +124,15 @@ export class TelegramBot {
     }
   }
 
-  sendMessage(chatId: string, text: string): Promise<unknown> {
+  sendMessage(
+    chatId: string,
+    text: string,
+    replyMarkup?: TelegramReplyMarkup,
+  ): Promise<unknown> {
     return this.callApi("sendMessage", {
       chat_id: chatId,
       text,
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     });
   }
 
@@ -108,22 +148,38 @@ export class TelegramBot {
 
     if (text === "/start") {
       await this.setupCommands();
-      await this.callApi("sendMessage", {
-        chat_id: chatId,
-        text: "Сервис готов. Нажмите Request, чтобы создать запрос.",
-        reply_markup: {
-          keyboard: [[{ text: "Request" }]],
-          resize_keyboard: true,
-          one_time_keyboard: false,
-        },
-      });
+      this.sessions.delete(chatId);
+      await this.sendStartMessage(chatId);
+      return;
+    }
+
+    if (text && isCancelCommand(text)) {
+      this.sessions.delete(chatId);
+      await this.sendMessage(
+        chatId,
+        "Разбор внешности отменен. Можем начать заново, когда будете готовы.",
+        mainMenuMarkup(),
+      );
+      return;
+    }
+
+    if (text && isAppearanceAnalysisCommand(text)) {
+      await this.startAppearanceAnalysis(chatId);
+      return;
+    }
+
+    const session = this.sessions.get(chatId);
+
+    if (session?.mode === "awaiting-appearance-photo") {
+      await this.handleAppearancePhotoStep(message);
       return;
     }
 
     if (!text && message.photo?.length) {
       await this.sendMessage(
         chatId,
-        "Для анализа изображения отправьте фото с подписью /request openai.",
+        "Чтобы сделать разбор внешности, сначала нажмите кнопку «Разбор внешности».",
+        mainMenuMarkup(),
       );
       return;
     }
@@ -132,6 +188,98 @@ export class TelegramBot {
 
     if (parsedRequest) {
       await this.createRequest(message, parsedRequest);
+    }
+  }
+
+  private sendStartMessage(chatId: string): Promise<unknown> {
+    return this.sendMessage(
+      chatId,
+      "Хотите сделать разбор вашей внешности?",
+      mainMenuMarkup(),
+    );
+  }
+
+  private startAppearanceAnalysis(chatId: string): Promise<unknown> {
+    this.sessions.set(chatId, {
+      mode: "awaiting-appearance-photo",
+    });
+
+    return this.sendMessage(
+      chatId,
+      "Отправьте изображение с вашим лицом.",
+      cancelMarkup(),
+    );
+  }
+
+  private async handleAppearancePhotoStep(
+    message: TelegramMessage,
+  ): Promise<void> {
+    const chatId = String(message.chat.id);
+
+    if (!message.photo?.length) {
+      await this.sendMessage(
+        chatId,
+        "Пришлите фото реального человека с хорошо видимым лицом или нажмите «Отмена».",
+        cancelMarkup(),
+      );
+      return;
+    }
+
+    await this.createAppearanceAnalysisRequest(message);
+  }
+
+  private async createAppearanceAnalysisRequest(
+    message: TelegramMessage,
+  ): Promise<void> {
+    const chatId = String(message.chat.id);
+
+    try {
+      const inputFiles = await this.uploadMessagePhotos(message);
+
+      if (!inputFiles?.length) {
+        throw new Error(
+          "No Telegram photos were uploaded for appearance analysis",
+        );
+      }
+
+      const assignment = await this.coordinator.createRequestJob({
+        chatId,
+        username: message.from?.username,
+        text: appearanceAnalysisPrompt,
+        model: createAppearanceAnalysisModelSelection(),
+        inputFiles,
+      });
+
+      this.sessions.delete(chatId);
+
+      if (isQueuedJobResponse(assignment)) {
+        await this.sendMessage(
+          chatId,
+          `Фото принято. Запрос ${assignment.job.id} поставлен в очередь, подберу свободный сервер автоматически.`,
+          mainMenuMarkup(),
+        );
+        void this.waitForAssignmentAndDispatch(
+          chatId,
+          assignment.job.id,
+          assignment.retryAfterMs,
+        );
+        return;
+      }
+
+      await this.worker.dispatchJob(assignment);
+
+      await this.sendMessage(
+        chatId,
+        `Фото принято. Запрос ${assignment.job.id} отправлен на сервер. Ожидаю ответ.`,
+        mainMenuMarkup(),
+      );
+    } catch (error) {
+      console.error("[telegram] Failed to create appearance analysis job", error);
+      await this.sendMessage(
+        chatId,
+        "Не удалось отправить фото на разбор. Попробуйте еще раз или нажмите «Отмена».",
+        cancelMarkup(),
+      );
     }
   }
 
@@ -230,8 +378,16 @@ export class TelegramBot {
         description: "Запустить бота",
       },
       {
+        command: "appearance",
+        description: "Разбор внешности по фото",
+      },
+      {
         command: "request",
         description: "Создать запрос",
+      },
+      {
+        command: "cancel",
+        description: "Отменить текущий сценарий",
       },
     ];
 
@@ -348,6 +504,59 @@ function isQueuedJobResponse(
   response: TryOnJobCreateResponse,
 ): response is TryOnJobQueuedResponse {
   return "queued" in response;
+}
+
+function mainMenuMarkup(): TelegramReplyMarkup {
+  return {
+    keyboard: [[{ text: appearanceAnalysisButtonText }]],
+    resize_keyboard: true,
+    one_time_keyboard: false,
+  };
+}
+
+function cancelMarkup(): TelegramReplyMarkup {
+  return {
+    keyboard: [[{ text: cancelButtonText }]],
+    resize_keyboard: true,
+    one_time_keyboard: false,
+  };
+}
+
+function isAppearanceAnalysisCommand(text: string): boolean {
+  const normalized = normalizeCommandText(text);
+
+  return (
+    normalized === normalizeCommandText(appearanceAnalysisButtonText) ||
+    normalized === "/appearance"
+  );
+}
+
+function isCancelCommand(text: string): boolean {
+  const normalized = normalizeCommandText(text);
+
+  return (
+    normalized === normalizeCommandText(cancelButtonText) ||
+    normalized === "/cancel" ||
+    normalized === "cancel"
+  );
+}
+
+function normalizeCommandText(text: string): string {
+  return text.trim().toLowerCase();
+}
+
+function createAppearanceAnalysisModelSelection(): TryOnModelSelection {
+  return {
+    provider: "openai",
+    task: "appearance-analysis",
+    options: {
+      imageDetail: "high",
+      textVerbosity: "high",
+      reasoningEffort: "low",
+      reasoningMode: "standard",
+      store: false,
+    },
+  };
 }
 
 function parseRequestCommand(text: string): ParsedRequestCommand | undefined {

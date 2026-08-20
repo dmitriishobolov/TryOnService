@@ -1,6 +1,6 @@
 # Telegram Client
 
-Папка для Telegram-интеграции TryOnService. Здесь находится бот, callback server, HTTP client к coordinator и HTTP client к worker. Сейчас бот создает demo request по команде `/request` или кнопке `Request`, умеет отправлять фото с подписью `/request openai` для OpenAI/ChatGPT анализа, получает assignment или queued-ответ от coordinator, при необходимости polling-ом ждет свободный worker, отправляет job worker'у напрямую и после callback отправляет пользователю текст результата.
+Папка для Telegram-интеграции TryOnService. Здесь находится бот, callback server, HTTP client к coordinator и HTTP client к worker. Сейчас бот показывает сценарий разбора внешности по `/start`, создает demo request по команде `/request`, умеет отправлять фото с подписью `/request openai` для OpenAI/ChatGPT анализа, получает assignment или queued-ответ от coordinator, при необходимости polling-ом ждет свободный worker, отправляет job worker'у напрямую и после callback отправляет пользователю текст результата.
 
 Когда запрос содержит фото, Telegram client сначала запрашивает `POST /storage/access`, загружает файл напрямую в storage-node и передает в `POST /jobs` только `StorageObjectRef`.
 
@@ -23,20 +23,24 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 
 ## Ожидаемый поток
 
-1. Пользователь открывает `/start`, бот регистрирует меню команд и показывает кнопку `Request`.
-2. Пользователь отправляет `/request`, нажимает кнопку или отправляет фото с подписью `/request openai`.
-3. Если в запросе есть файлы, Telegram client получает storage-access у coordinator и загружает файлы напрямую в storage-node.
-4. Telegram client запрашивает assignment через coordinator API и передает `sourceClientId`.
-5. Coordinator находит callback URL Telegram client, создает queued job, выбирает worker и отправляет worker-у prepare по этой job, когда capacity доступна.
-6. Coordinator возвращает signed dispatch token только после подтверждения worker prepare.
-7. Telegram client отправляет `workerRequest` напрямую выбранному worker'у.
-8. Worker обрабатывает job и отправляет callback в `POST /callbacks/jobs` с `x-client-callback-token`.
-9. Telegram client отправляет пользователю сообщение `Ответ от сервера.`.
+1. Пользователь открывает `/start`, бот регистрирует меню команд и спрашивает: `Хотите сделать разбор вашей внешности?`.
+2. Пользователь нажимает кнопку `Разбор внешности`, после чего бот просит отправить изображение с лицом и показывает кнопку `Отмена`.
+3. Пользователь отправляет фото; Telegram client загружает его напрямую в storage-node и создает OpenAI job с `payload.model.task=appearance-analysis`.
+4. Если пользователь нажал `Отмена`, бот сбрасывает состояние ожидания фото и возвращает главное меню.
+5. Пользователь также может отправить `/request`, `/request openai` или фото с подписью `/request openai` для ручного legacy/demo flow.
+6. Telegram client запрашивает assignment через coordinator API и передает `sourceClientId`.
+7. Coordinator находит callback URL Telegram client, создает queued job, выбирает worker и отправляет worker-у prepare по этой job, когда capacity доступна.
+8. Coordinator возвращает signed dispatch token только после подтверждения worker prepare.
+9. Telegram client отправляет `workerRequest` напрямую выбранному worker'у.
+10. Worker обрабатывает job и отправляет callback в `POST /callbacks/jobs` с `x-client-callback-token`.
+11. Telegram client отправляет пользователю сообщение с ответом worker'а.
 
 ## Реализовано сейчас
 
-- `/start` настраивает команды бота через Telegram Bot API и показывает кнопку `Request`.
-- `/request` или кнопка `Request` создают mock/demo job в coordinator, ждут assignment при очереди и отправляют job worker'у напрямую.
+- `/start` настраивает команды бота через Telegram Bot API, предлагает разбор внешности и показывает кнопку `Разбор внешности`.
+- `Разбор внешности` переводит чат в состояние ожидания фото; `Отмена` сбрасывает это состояние.
+- Фото в сценарии разбора внешности создает OpenAI job с жестким prompt: если это не фото реального человека или лицо не видно, модель должна ответить отказом без анализа.
+- `/request` создает mock/demo job в coordinator, ждет assignment при очереди и отправляет job worker'у напрямую.
 - Фото с подписью `/request openai` загружается в object storage и создает job с `payload.model.provider=openai`.
 - Чтобы выбрать конкретную OpenAI-модель из запроса клиента, используйте подпись вида `/request openai:gpt-5.6-luna`.
 - HTTP client умеет запросить storage-access у coordinator для загрузки пользовательских фото.

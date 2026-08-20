@@ -7,12 +7,15 @@ import type {
 export class WorkerRegistry {
   private readonly workers = new Map<string, RegisteredWorker>();
 
-  register(request: WorkerRegistrationRequest): RegisteredWorker {
+  register(
+    request: WorkerRegistrationRequest,
+    resolvedBaseUrl: string,
+  ): RegisteredWorker {
     const now = new Date().toISOString();
     const previous = this.workers.get(request.workerId);
     const worker: RegisteredWorker = {
       workerId: request.workerId,
-      baseUrl: request.baseUrl.replace(/\/$/, ""),
+      baseUrl: resolvedBaseUrl.replace(/\/$/, ""),
       status: "ready",
       capacity: request.capacity,
       runningJobs: previous?.runningJobs ?? 0,

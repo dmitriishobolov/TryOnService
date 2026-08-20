@@ -14,7 +14,9 @@ export class CoordinatorClient {
   register(): Promise<WorkerRegistrationResponse> {
     const payload: WorkerRegistrationRequest = {
       workerId: this.config.workerId,
-      baseUrl: this.config.baseUrl,
+      port: this.config.port,
+      publicProtocol: this.config.publicProtocol,
+      publicUrl: this.config.publicUrl,
       capacity: this.config.capacity,
       capabilities: this.config.capabilities,
     };
@@ -42,7 +44,11 @@ export class CoordinatorClient {
   }
 
   reportProgress(update: JobProgressUpdateRequest): Promise<unknown> {
-    return postJson(updateUrl(update.jobId, "progress", this.config), update, this.headers());
+    return postJson(
+      updateUrl(update.jobId, "progress", this.config),
+      update,
+      this.headers(),
+    );
   }
 
   reportResult(update: JobResultUpdateRequest): Promise<unknown> {

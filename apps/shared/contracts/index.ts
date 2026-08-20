@@ -57,9 +57,13 @@ export interface WorkerCapability {
   name: string;
 }
 
+export type WorkerPublicProtocol = "http" | "https";
+
 export interface WorkerRegistrationRequest {
   workerId: string;
-  baseUrl: string;
+  port: number;
+  publicProtocol?: WorkerPublicProtocol;
+  publicUrl?: string;
   capacity: number;
   capabilities: WorkerCapability[];
 }
@@ -161,8 +165,15 @@ export function isWorkerRegistrationRequest(
   return (
     typeof value.workerId === "string" &&
     value.workerId.length > 0 &&
-    typeof value.baseUrl === "string" &&
-    value.baseUrl.length > 0 &&
+    typeof value.port === "number" &&
+    Number.isInteger(value.port) &&
+    value.port > 0 &&
+    value.port <= 65_535 &&
+    (value.publicProtocol === undefined ||
+      value.publicProtocol === "http" ||
+      value.publicProtocol === "https") &&
+    (value.publicUrl === undefined ||
+      (typeof value.publicUrl === "string" && value.publicUrl.length > 0)) &&
     typeof value.capacity === "number" &&
     value.capacity > 0 &&
     Array.isArray(value.capabilities)

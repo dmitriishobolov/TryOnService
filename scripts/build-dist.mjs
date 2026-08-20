@@ -37,7 +37,8 @@ const services = [
     envKeys: [
       "WORKER_PORT",
       "WORKER_ID",
-      "WORKER_BASE_URL",
+      "WORKER_PUBLIC_PROTOCOL",
+      "WORKER_PUBLIC_URL",
       "WORKER_CAPACITY",
       "WORKER_CAPABILITIES",
       "WORKER_HEARTBEAT_INTERVAL_MS",

@@ -23,7 +23,14 @@ const server = createWorkerServer({
 });
 
 server.listen(config.port, async () => {
-  console.log(`[worker] Listening on ${config.baseUrl}`);
+  console.log(`[worker] Listening on ${config.localUrl}`);
+
+  if (config.publicUrl) {
+    console.log(`[worker] Public URL override: ${config.publicUrl}`);
+  } else {
+    console.log("[worker] Public URL will be inferred by coordinator");
+  }
+
   await registerWorker();
 });
 

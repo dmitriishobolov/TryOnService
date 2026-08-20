@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import type { Server } from "node:http";
+import type { IncomingMessage, Server } from "node:http";
 
 import {
   isCreateTryOnJobRequest,
@@ -7,6 +7,7 @@ import {
   isJobResultUpdateRequest,
   isWorkerHeartbeatRequest,
   isWorkerRegistrationRequest,
+  type WorkerRegistrationRequest,
   type WorkerRegistrationResponse,
 } from "../../shared/contracts/index.js";
 import {
@@ -97,7 +98,8 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        const worker = workers.register(body);
+        const resolvedBaseUrl = resolveWorkerBaseUrl(request, body);
+        const worker = workers.register(body, resolvedBaseUrl);
         const payload: WorkerRegistrationResponse = {
           workerId: worker.workerId,
           heartbeatIntervalMs: config.workerHeartbeatIntervalMs,
@@ -235,4 +237,73 @@ function hasWorkerKey(
   const value = Array.isArray(headerValue) ? headerValue[0] : headerValue;
 
   return value === config.workerRegistrationKey;
+}
+
+function resolveWorkerBaseUrl(
+  request: IncomingMessage,
+  registration: WorkerRegistrationRequest,
+): string {
+  if (registration.publicUrl) {
+    return registration.publicUrl.replace(/\/$/, "");
+  }
+
+  const protocol = registration.publicProtocol ?? "http";
+  const host = resolveRequesterHost(request);
+
+  return `${protocol}://${formatHostForUrl(host)}:${registration.port}`;
+}
+
+function resolveRequesterHost(request: IncomingMessage): string {
+  const forwardedFor = firstHeaderValue(request.headers["x-forwarded-for"]);
+  const realIp = firstHeaderValue(request.headers["x-real-ip"]);
+  const rawHost =
+    forwardedFor?.split(",")[0]?.trim() ||
+    realIp ||
+    request.socket.remoteAddress;
+
+  if (!rawHost) {
+    throw new Error("Cannot resolve worker registration source address");
+  }
+
+  return normalizeRemoteAddress(rawHost);
+}
+
+function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function normalizeRemoteAddress(address: string): string {
+  const trimmed = address.trim();
+
+  if (trimmed.startsWith("[") && trimmed.includes("]")) {
+    return trimmed.slice(1, trimmed.indexOf("]"));
+  }
+
+  if (trimmed.startsWith("::ffff:")) {
+    return trimmed.slice("::ffff:".length);
+  }
+
+  if (trimmed === "::1") {
+    return "localhost";
+  }
+
+  const ipv4WithOptionalPort = /^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$/.exec(
+    trimmed,
+  );
+
+  if (ipv4WithOptionalPort) {
+    return ipv4WithOptionalPort[1];
+  }
+
+  const hostWithPort = /^([^:]+):\d+$/.exec(trimmed);
+
+  if (hostWithPort) {
+    return hostWithPort[1];
+  }
+
+  return trimmed;
+}
+
+function formatHostForUrl(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 }

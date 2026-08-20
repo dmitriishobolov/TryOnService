@@ -103,7 +103,7 @@ npm run dev:telegram
 - worker: `http://localhost:4001`
 - telegram callback server: `http://localhost:4100`
 
-Если worker, coordinator и Telegram client запускаются не на одной машине, задайте публичные URL через `COORDINATOR_PUBLIC_URL`, `WORKER_BASE_URL` и `TELEGRAM_CLIENT_PUBLIC_URL`.
+Если worker, coordinator и Telegram client запускаются не на одной машине, задайте публичные URL через `COORDINATOR_PUBLIC_URL`, `COORDINATOR_URL` и `TELEGRAM_CLIENT_PUBLIC_URL`. Адрес worker'а coordinator определяет сам по IP registration-запроса и `WORKER_PORT`.
 
 ## Проверка без Telegram
 
@@ -157,7 +157,9 @@ npm run build:dist
 
 - `COORDINATOR_PUBLIC_URL` - публичный URL coordinator, который он передает worker'ам для callbacks.
 - `COORDINATOR_URL` - адрес coordinator для worker и Telegram client.
-- `WORKER_BASE_URL` - адрес worker, по которому coordinator отправляет jobs.
+- `WORKER_PORT` - порт worker; coordinator использует его вместе с IP registration-запроса, чтобы отправлять jobs на worker.
+- `WORKER_PUBLIC_PROTOCOL` - протокол публичного worker endpoint, обычно `http` или `https`.
+- `WORKER_PUBLIC_URL` - опциональный ручной override для worker endpoint, если автоопределение по IP/port не подходит.
 - `TELEGRAM_CLIENT_PUBLIC_URL` - адрес Telegram client callback server, по которому worker вернет ответ для пользователя.
 
 ## Расширение системы

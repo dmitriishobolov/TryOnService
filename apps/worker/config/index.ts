@@ -3,12 +3,15 @@ import { hostname } from "node:os";
 import {
   WORKER_HEARTBEAT_INTERVAL_MS,
   type WorkerCapability,
+  type WorkerPublicProtocol,
 } from "../../shared/contracts/index.js";
 
 export interface WorkerConfig {
   port: number;
   workerId: string;
-  baseUrl: string;
+  localUrl: string;
+  publicProtocol: WorkerPublicProtocol;
+  publicUrl?: string;
   coordinatorUrl: string;
   registrationKey: string;
   capacity: number;
@@ -37,6 +40,20 @@ function readString(name: string, fallback: string): string {
   return process.env[name]?.trim() || fallback;
 }
 
+function readOptionalString(name: string): string | undefined {
+  return process.env[name]?.trim() || undefined;
+}
+
+function readPublicProtocol(): WorkerPublicProtocol {
+  const value = readString("WORKER_PUBLIC_PROTOCOL", "http");
+
+  if (value !== "http" && value !== "https") {
+    throw new Error("WORKER_PUBLIC_PROTOCOL must be http or https");
+  }
+
+  return value;
+}
+
 function readCapabilities(): WorkerCapability[] {
   const raw = readString("WORKER_CAPABILITIES", "try-on.mock");
 
@@ -54,7 +71,9 @@ export function loadWorkerConfig(): WorkerConfig {
   return {
     port,
     workerId,
-    baseUrl: readString("WORKER_BASE_URL", `http://localhost:${port}`),
+    localUrl: `http://localhost:${port}`,
+    publicProtocol: readPublicProtocol(),
+    publicUrl: readOptionalString("WORKER_PUBLIC_URL"),
     coordinatorUrl: readString("COORDINATOR_URL", "http://localhost:3000"),
     registrationKey: readString(
       "WORKER_REGISTRATION_KEY",

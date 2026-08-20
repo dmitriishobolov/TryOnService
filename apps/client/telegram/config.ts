@@ -1,8 +1,18 @@
+import {
+  CLIENT_HEARTBEAT_INTERVAL_MS,
+  type PublicProtocol,
+} from "../../shared/contracts/index.js";
+
 export interface TelegramClientConfig {
   port: number;
-  publicUrl: string;
+  localUrl: string;
+  clientId: string;
+  publicProtocol: PublicProtocol;
+  publicUrl?: string;
   coordinatorUrl: string;
+  registrationKey: string;
   botToken: string;
+  heartbeatIntervalMs: number;
   pollingTimeoutSeconds: number;
 }
 
@@ -26,6 +36,10 @@ function readString(name: string, fallback: string): string {
   return process.env[name]?.trim() || fallback;
 }
 
+function readOptionalString(name: string): string | undefined {
+  return process.env[name]?.trim() || undefined;
+}
+
 function readRequiredString(name: string): string {
   const value = process.env[name]?.trim();
 
@@ -36,14 +50,35 @@ function readRequiredString(name: string): string {
   return value;
 }
 
+function readPublicProtocol(): PublicProtocol {
+  const value = readString("TELEGRAM_CLIENT_PUBLIC_PROTOCOL", "http");
+
+  if (value !== "http" && value !== "https") {
+    throw new Error("TELEGRAM_CLIENT_PUBLIC_PROTOCOL must be http or https");
+  }
+
+  return value;
+}
+
 export function loadTelegramClientConfig(): TelegramClientConfig {
   const port = readNumber("TELEGRAM_CLIENT_PORT", 4100);
 
   return {
     port,
-    publicUrl: readString("TELEGRAM_CLIENT_PUBLIC_URL", `http://localhost:${port}`),
+    localUrl: `http://localhost:${port}`,
+    clientId: readString("TELEGRAM_CLIENT_ID", "telegram-client-1"),
+    publicProtocol: readPublicProtocol(),
+    publicUrl: readOptionalString("TELEGRAM_CLIENT_PUBLIC_URL"),
     coordinatorUrl: readString("COORDINATOR_URL", "http://localhost:3000"),
+    registrationKey: readString(
+      "CLIENT_REGISTRATION_KEY",
+      "dev-client-registration-key",
+    ),
     botToken: readRequiredString("TELEGRAM_BOT_TOKEN"),
+    heartbeatIntervalMs: readNumber(
+      "CLIENT_HEARTBEAT_INTERVAL_MS",
+      CLIENT_HEARTBEAT_INTERVAL_MS,
+    ),
     pollingTimeoutSeconds: readNumber("TELEGRAM_POLLING_TIMEOUT_SECONDS", 25),
   };
 }

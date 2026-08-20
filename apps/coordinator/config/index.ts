@@ -1,4 +1,6 @@
 import {
+  CLIENT_HEARTBEAT_INTERVAL_MS,
+  CLIENT_HEARTBEAT_TIMEOUT_MS,
   WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_HEARTBEAT_TIMEOUT_MS,
 } from "../../shared/contracts/index.js";
@@ -7,8 +9,11 @@ export interface CoordinatorConfig {
   port: number;
   publicUrl: string;
   workerRegistrationKey: string;
+  clientRegistrationKey: string;
   workerHeartbeatIntervalMs: number;
   workerHeartbeatTimeoutMs: number;
+  clientHeartbeatIntervalMs: number;
+  clientHeartbeatTimeoutMs: number;
   schedulerIntervalMs: number;
 }
 
@@ -42,6 +47,10 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
       "WORKER_REGISTRATION_KEY",
       "dev-worker-registration-key",
     ),
+    clientRegistrationKey: readString(
+      "CLIENT_REGISTRATION_KEY",
+      "dev-client-registration-key",
+    ),
     workerHeartbeatIntervalMs: readNumber(
       "WORKER_HEARTBEAT_INTERVAL_MS",
       WORKER_HEARTBEAT_INTERVAL_MS,
@@ -49,6 +58,14 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
     workerHeartbeatTimeoutMs: readNumber(
       "WORKER_HEARTBEAT_TIMEOUT_MS",
       WORKER_HEARTBEAT_TIMEOUT_MS,
+    ),
+    clientHeartbeatIntervalMs: readNumber(
+      "CLIENT_HEARTBEAT_INTERVAL_MS",
+      CLIENT_HEARTBEAT_INTERVAL_MS,
+    ),
+    clientHeartbeatTimeoutMs: readNumber(
+      "CLIENT_HEARTBEAT_TIMEOUT_MS",
+      CLIENT_HEARTBEAT_TIMEOUT_MS,
     ),
     schedulerIntervalMs: readNumber("SCHEDULER_INTERVAL_MS", 1_000),
   };

@@ -1,7 +1,10 @@
 export const WORKER_HEARTBEAT_INTERVAL_MS = 5_000;
 export const WORKER_HEARTBEAT_TIMEOUT_MS = 15_000;
+export const CLIENT_HEARTBEAT_INTERVAL_MS = 5_000;
+export const CLIENT_HEARTBEAT_TIMEOUT_MS = 15_000;
 
 export type ClientType = "telegram";
+export type ClientStatus = "ready" | "offline";
 
 export type JobStatus =
   | "queued"
@@ -22,6 +25,7 @@ export interface TelegramClientRef {
 export type ClientRef = TelegramClientRef;
 
 export interface CreateTryOnJobRequest {
+  sourceClientId?: string;
   client: ClientRef;
   payload: {
     command: "request";
@@ -57,12 +61,12 @@ export interface WorkerCapability {
   name: string;
 }
 
-export type WorkerPublicProtocol = "http" | "https";
+export type PublicProtocol = "http" | "https";
 
 export interface WorkerRegistrationRequest {
   workerId: string;
   port: number;
-  publicProtocol?: WorkerPublicProtocol;
+  publicProtocol?: PublicProtocol;
   publicUrl?: string;
   capacity: number;
   capabilities: WorkerCapability[];
@@ -71,6 +75,36 @@ export interface WorkerRegistrationRequest {
 export interface WorkerRegistrationResponse {
   workerId: string;
   heartbeatIntervalMs: number;
+}
+
+export interface ClientRegistrationRequest {
+  clientId: string;
+  type: ClientType;
+  port: number;
+  publicProtocol?: PublicProtocol;
+  publicUrl?: string;
+  callbackPath: string;
+}
+
+export interface ClientRegistrationResponse {
+  clientId: string;
+  callbackUrl: string;
+  heartbeatIntervalMs: number;
+}
+
+export interface ClientHeartbeatRequest {
+  clientId: string;
+  status: ClientStatus;
+}
+
+export interface RegisteredClient {
+  clientId: string;
+  type: ClientType;
+  baseUrl: string;
+  callbackUrl: string;
+  status: ClientStatus;
+  registeredAt: string;
+  lastHeartbeatAt: string;
 }
 
 export interface WorkerHeartbeatRequest {
@@ -151,6 +185,8 @@ export function isCreateTryOnJobRequest(
     typeof client.chatId === "string" &&
     client.chatId.length > 0 &&
     payload.command === "request" &&
+    (value.sourceClientId === undefined ||
+      typeof value.sourceClientId === "string") &&
     (value.callbackUrl === undefined || typeof value.callbackUrl === "string")
   );
 }
@@ -177,6 +213,41 @@ export function isWorkerRegistrationRequest(
     typeof value.capacity === "number" &&
     value.capacity > 0 &&
     Array.isArray(value.capabilities)
+  );
+}
+
+export function isClientRegistrationRequest(
+  value: unknown,
+): value is ClientRegistrationRequest {
+  if (!isObject(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.clientId === "string" &&
+    value.clientId.length > 0 &&
+    value.type === "telegram" &&
+    typeof value.port === "number" &&
+    Number.isInteger(value.port) &&
+    value.port > 0 &&
+    value.port <= 65_535 &&
+    (value.publicProtocol === undefined ||
+      value.publicProtocol === "http" ||
+      value.publicProtocol === "https") &&
+    (value.publicUrl === undefined ||
+      (typeof value.publicUrl === "string" && value.publicUrl.length > 0)) &&
+    typeof value.callbackPath === "string" &&
+    value.callbackPath.startsWith("/")
+  );
+}
+
+export function isClientHeartbeatRequest(
+  value: unknown,
+): value is ClientHeartbeatRequest {
+  return (
+    isObject(value) &&
+    typeof value.clientId === "string" &&
+    (value.status === "ready" || value.status === "offline")
   );
 }
 

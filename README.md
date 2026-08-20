@@ -8,9 +8,9 @@ TryOnService - сервис примерки на базе AI API. Проект 
 
 Сейчас реализован первый вертикальный срез на Node.js/TypeScript:
 
-- coordinator принимает jobs, регистрирует worker'ы, получает heartbeat и назначает queued job доступному worker'у;
-- worker при запуске регистрируется в coordinator, каждые 5 секунд отправляет heartbeat и обрабатывает назначенные jobs через mock AI model;
-- Telegram client показывает команду `/request`, кнопку `Request`, создает job в coordinator и выводит пользователю ответ worker'а.
+- coordinator принимает jobs, регистрирует worker'ы и service clients, получает heartbeat и назначает queued job доступному worker'у;
+- worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat и обрабатывает назначенные jobs через mock AI model;
+- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, создает job и выводит пользователю ответ worker'а.
 
 ## Как устроен сервис
 
@@ -30,9 +30,9 @@ flowchart LR
 
 1. Клиент или интеграция отправляет запрос на примерку в coordinator.
 2. Coordinator валидирует запрос, создает job и хранит состояние обработки.
-3. Worker при запуске регистрируется в coordinator, передает свои возможности и регулярно подтверждает доступность.
+3. Client и worker при запуске регистрируются в coordinator и регулярно подтверждают доступность.
 4. Scheduler выбирает подходящий worker для job с учетом доступности, лимитов и возможностей.
-5. Worker запускает runner, который готовит данные клиента, вызывает нужную реализацию AI API из `models` и возвращает результат/status в coordinator.
+5. Worker запускает runner, который готовит данные клиента, вызывает нужную реализацию AI API из `models`, возвращает status в coordinator и отправляет результат на callback зарегистрированного клиента.
 
 ## Структура репозитория
 
@@ -49,7 +49,7 @@ Coordinator:
 
 - принимает внешние запросы от клиентов и внутренних сервисов;
 - хранит состояние jobs и историю переходов;
-- ведет реестр worker'ов, их heartbeat, capacity и capabilities;
+- ведет реестр worker'ов и service clients, их heartbeat, capacity и capabilities;
 - назначает задания worker'ам и контролирует retries/timeouts.
 
 Worker:
@@ -103,7 +103,9 @@ npm run dev:telegram
 - worker: `http://localhost:4001`
 - telegram callback server: `http://localhost:4100`
 
-Если worker, coordinator и Telegram client запускаются не на одной машине, задайте публичные URL через `COORDINATOR_PUBLIC_URL`, `COORDINATOR_URL` и `TELEGRAM_CLIENT_PUBLIC_URL`. Адрес worker'а coordinator определяет сам по IP registration-запроса и `WORKER_PORT`.
+Если основной порт worker или Telegram client занят, сервис автоматически выберет ближайший свободный порт и зарегистрирует в coordinator фактический порт.
+
+Если worker, coordinator и Telegram client запускаются не на одной машине, задайте публичные URL через `COORDINATOR_PUBLIC_URL` и `COORDINATOR_URL`. Адреса worker'а и Telegram client callback server coordinator определяет сам по IP registration-запроса и выбранному порту.
 
 ## Проверка без Telegram
 
@@ -160,7 +162,9 @@ npm run build:dist
 - `WORKER_PORT` - порт worker; coordinator использует его вместе с IP registration-запроса, чтобы отправлять jobs на worker.
 - `WORKER_PUBLIC_PROTOCOL` - протокол публичного worker endpoint, обычно `http` или `https`.
 - `WORKER_PUBLIC_URL` - опциональный ручной override для worker endpoint, если автоопределение по IP/port не подходит.
-- `TELEGRAM_CLIENT_PUBLIC_URL` - адрес Telegram client callback server, по которому worker вернет ответ для пользователя.
+- `TELEGRAM_CLIENT_PUBLIC_PROTOCOL` - протокол публичного Telegram callback endpoint.
+- `TELEGRAM_CLIENT_PUBLIC_URL` - опциональный ручной override для Telegram callback endpoint, если автоопределение по IP/port не подходит.
+- `CLIENT_REGISTRATION_KEY` - ключ регистрации service clients в coordinator.
 
 ## Расширение системы
 

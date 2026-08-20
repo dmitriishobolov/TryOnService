@@ -37,6 +37,8 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - `GET /jobs` - список jobs в in-memory storage.
 - `GET /jobs/:id` - состояние конкретной job.
 - `POST /jobs` - создание job клиентом.
+- `POST /clients/register` - регистрация service client.
+- `POST /clients/:clientId/heartbeat` - heartbeat service client.
 - `POST /workers/register` - регистрация worker'а.
 - `POST /workers/:workerId/heartbeat` - heartbeat worker'а.
 - `POST /jobs/:jobId/progress` - обновление прогресса от worker'а.
@@ -46,5 +48,6 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 
 - Coordinator является источником правды по состоянию jobs.
 - Регистрация worker'ов должна быть защищена ключом.
+- Регистрация service clients должна быть защищена отдельным ключом.
 - Недоступный worker должен автоматически выпадать из активного пула после пропущенных heartbeat.
 - Повторные запросы worker'а на обновление статуса должны обрабатываться идемпотентно.

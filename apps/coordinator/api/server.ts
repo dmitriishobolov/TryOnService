@@ -2,11 +2,16 @@ import { createServer } from "node:http";
 import type { IncomingMessage, Server } from "node:http";
 
 import {
+  isClientHeartbeatRequest,
+  isClientRegistrationRequest,
   isCreateTryOnJobRequest,
   isJobProgressUpdateRequest,
   isJobResultUpdateRequest,
   isWorkerHeartbeatRequest,
   isWorkerRegistrationRequest,
+  type ClientRegistrationRequest,
+  type ClientRegistrationResponse,
+  type CreateTryOnJobRequest,
   type WorkerRegistrationRequest,
   type WorkerRegistrationResponse,
 } from "../../shared/contracts/index.js";
@@ -18,6 +23,7 @@ import {
 } from "../../shared/http.js";
 import type { CoordinatorConfig } from "../config/index.js";
 import type { InMemoryJobStore } from "../jobs/store.js";
+import type { ClientRegistry } from "../registry/clientStore.js";
 import type { WorkerRegistry } from "../registry/store.js";
 import type { Scheduler } from "../scheduler/index.js";
 
@@ -25,11 +31,12 @@ interface CoordinatorServerDeps {
   config: CoordinatorConfig;
   jobs: InMemoryJobStore;
   workers: WorkerRegistry;
+  clients: ClientRegistry;
   scheduler: Scheduler;
 }
 
 export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
-  const { config, jobs, workers, scheduler } = deps;
+  const { config, jobs, workers, clients, scheduler } = deps;
 
   return createServer(async (request, response) => {
     const url = requestUrl(request);
@@ -39,6 +46,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         writeJson(response, 200, {
           status: "ok",
           workers: workers.list(),
+          clients: clients.list(),
           queuedJobs: jobs.findQueued().length,
         });
         return;
@@ -73,10 +81,91 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        const job = jobs.create(body);
+        const requestWithCallback = resolveJobCallback(body, clients);
+
+        if (!requestWithCallback) {
+          writeError(
+            response,
+            409,
+            "client_not_registered",
+            "Source client is not registered",
+          );
+          return;
+        }
+
+        const job = jobs.create(requestWithCallback);
         void scheduler.schedule();
 
         writeJson(response, 202, job);
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/clients/register") {
+        if (!hasClientKey(request.headers["x-client-key"], config)) {
+          writeError(response, 401, "unauthorized_client", "Invalid client key");
+          return;
+        }
+
+        const body = await readJsonBody(request);
+
+        if (!isClientRegistrationRequest(body)) {
+          writeError(
+            response,
+            400,
+            "invalid_client_registration",
+            "Invalid client registration payload",
+          );
+          return;
+        }
+
+        const resolvedBaseUrl = resolveServiceBaseUrl(request, body);
+        const client = clients.register(body, resolvedBaseUrl);
+        const payload: ClientRegistrationResponse = {
+          clientId: client.clientId,
+          callbackUrl: client.callbackUrl,
+          heartbeatIntervalMs: config.clientHeartbeatIntervalMs,
+        };
+
+        writeJson(response, 200, payload);
+        return;
+      }
+
+      const clientHeartbeatMatch = /^\/clients\/([^/]+)\/heartbeat$/.exec(
+        url.pathname,
+      );
+
+      if (request.method === "POST" && clientHeartbeatMatch) {
+        if (!hasClientKey(request.headers["x-client-key"], config)) {
+          writeError(response, 401, "unauthorized_client", "Invalid client key");
+          return;
+        }
+
+        const body = await readJsonBody(request);
+
+        if (
+          !isClientHeartbeatRequest(body) ||
+          body.clientId !== clientHeartbeatMatch[1]
+        ) {
+          writeError(
+            response,
+            400,
+            "invalid_client_heartbeat",
+            "Invalid client heartbeat payload",
+          );
+          return;
+        }
+
+        const client = clients.heartbeat(body);
+
+        if (!client) {
+          writeError(response, 404, "client_not_found", "Client is not registered");
+          return;
+        }
+
+        writeJson(response, 200, {
+          ok: true,
+          client,
+        });
         return;
       }
 
@@ -98,7 +187,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        const resolvedBaseUrl = resolveWorkerBaseUrl(request, body);
+        const resolvedBaseUrl = resolveServiceBaseUrl(request, body);
         const worker = workers.register(body, resolvedBaseUrl);
         const payload: WorkerRegistrationResponse = {
           workerId: worker.workerId,
@@ -239,9 +328,38 @@ function hasWorkerKey(
   return value === config.workerRegistrationKey;
 }
 
-function resolveWorkerBaseUrl(
+function hasClientKey(
+  headerValue: string | string[] | undefined,
+  config: CoordinatorConfig,
+): boolean {
+  const value = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+
+  return value === config.clientRegistrationKey;
+}
+
+function resolveJobCallback(
+  request: CreateTryOnJobRequest,
+  clients: ClientRegistry,
+): CreateTryOnJobRequest | undefined {
+  if (request.callbackUrl || !request.sourceClientId) {
+    return request;
+  }
+
+  const client = clients.get(request.sourceClientId);
+
+  if (!client) {
+    return undefined;
+  }
+
+  return {
+    ...request,
+    callbackUrl: client.callbackUrl,
+  };
+}
+
+function resolveServiceBaseUrl(
   request: IncomingMessage,
-  registration: WorkerRegistrationRequest,
+  registration: WorkerRegistrationRequest | ClientRegistrationRequest,
 ): string {
   if (registration.publicUrl) {
     return registration.publicUrl.replace(/\/$/, "");

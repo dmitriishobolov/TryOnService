@@ -10,7 +10,7 @@ Worker можно масштабировать горизонтально: по�
 npm run dev:worker
 ```
 
-По умолчанию worker слушает порт `4001`, регистрируется в `http://localhost:3000` и отправляет heartbeat каждые 5 секунд. Публичный адрес worker'а не нужно указывать напрямую: coordinator определяет IP по registration-запросу и собирает endpoint из `WORKER_PUBLIC_PROTOCOL` + IP + `WORKER_PORT`.
+По умолчанию worker пытается слушать порт `4001`. Если порт занят, worker выберет ближайший свободный порт, зарегистрирует его в coordinator и будет отправлять heartbeat каждые 5 секунд. Публичный адрес worker'а не нужно указывать напрямую: coordinator определяет IP по registration-запросу и собирает endpoint из `WORKER_PUBLIC_PROTOCOL` + IP + фактический worker port.
 
 Если worker стоит за reverse proxy, NAT или доменом, где автоопределение не подходит, можно задать `WORKER_PUBLIC_URL` как ручной override.
 

@@ -1,4 +1,7 @@
+import type { Server } from "node:http";
+
 import { loadEnvFile } from "../shared/env.js";
+import { findAvailablePort } from "../shared/net.js";
 import { CoordinatorClient } from "./api/coordinatorClient.js";
 import { createWorkerServer } from "./api/server.js";
 import { loadWorkerConfig } from "./config/index.js";
@@ -6,6 +9,16 @@ import { loadWorkerConfig } from "./config/index.js";
 loadEnvFile();
 
 const config = loadWorkerConfig();
+const selectedPort = await findAvailablePort(config.port);
+
+if (selectedPort !== config.port) {
+  console.warn(
+    `[worker] Port ${config.port} is busy, using free port ${selectedPort}`,
+  );
+  config.port = selectedPort;
+  config.localUrl = `http://localhost:${selectedPort}`;
+}
+
 const coordinator = new CoordinatorClient(config);
 let runningJobs = 0;
 let isRegistered = false;
@@ -22,17 +35,17 @@ const server = createWorkerServer({
   },
 });
 
-server.listen(config.port, async () => {
-  console.log(`[worker] Listening on ${config.localUrl}`);
+await listen(server, config.port);
 
-  if (config.publicUrl) {
-    console.log(`[worker] Public URL override: ${config.publicUrl}`);
-  } else {
-    console.log("[worker] Public URL will be inferred by coordinator");
-  }
+console.log(`[worker] Listening on ${config.localUrl}`);
 
-  await registerWorker();
-});
+if (config.publicUrl) {
+  console.log(`[worker] Public URL override: ${config.publicUrl}`);
+} else {
+  console.log("[worker] Public URL will be inferred by coordinator");
+}
+
+await registerWorker();
 
 async function registerWorker(): Promise<void> {
   try {
@@ -58,3 +71,17 @@ setInterval(() => {
     console.error("[worker] Failed to send heartbeat", error);
   });
 }, config.heartbeatIntervalMs);
+
+function listen(server: Server, port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (error: Error) => {
+      reject(error);
+    };
+
+    server.once("error", onError);
+    server.listen(port, "0.0.0.0", () => {
+      server.off("error", onError);
+      resolve();
+    });
+  });
+}

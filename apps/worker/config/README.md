@@ -5,6 +5,9 @@
 ## Рекомендуемые настройки
 
 - `WORKER_ID` - стабильный идентификатор worker'а. Если не задан, может генерироваться при старте.
+- `WORKER_PORT` - желаемый порт worker'а; если занят, worker выберет ближайший свободный.
+- `WORKER_PUBLIC_PROTOCOL` - протокол endpoint, который coordinator соберет по IP registration-запроса.
+- `WORKER_PUBLIC_URL` - опциональный ручной override публичного endpoint worker'а.
 - `WORKER_CAPACITY` - количество jobs, которые worker может выполнять параллельно.
 - `WORKER_CAPABILITIES` - список поддерживаемых моделей или пайплайнов.
 - `COORDINATOR_URL` - адрес coordinator API.

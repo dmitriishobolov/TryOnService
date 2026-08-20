@@ -2,15 +2,15 @@ import { hostname } from "node:os";
 
 import {
   WORKER_HEARTBEAT_INTERVAL_MS,
+  type PublicProtocol,
   type WorkerCapability,
-  type WorkerPublicProtocol,
 } from "../../shared/contracts/index.js";
 
 export interface WorkerConfig {
   port: number;
   workerId: string;
   localUrl: string;
-  publicProtocol: WorkerPublicProtocol;
+  publicProtocol: PublicProtocol;
   publicUrl?: string;
   coordinatorUrl: string;
   registrationKey: string;
@@ -44,7 +44,7 @@ function readOptionalString(name: string): string | undefined {
   return process.env[name]?.trim() || undefined;
 }
 
-function readPublicProtocol(): WorkerPublicProtocol {
+function readPublicProtocol(): PublicProtocol {
   const value = readString("WORKER_PUBLIC_PROTOCOL", "http");
 
   if (value !== "http" && value !== "https") {

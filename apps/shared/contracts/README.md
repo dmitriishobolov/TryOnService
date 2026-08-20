@@ -8,6 +8,8 @@
 - получение статуса job;
 - результат обработки;
 - ошибки API;
+- регистрацию service client;
+- heartbeat service client;
 - регистрацию worker;
 - heartbeat worker;
 - назначение job;

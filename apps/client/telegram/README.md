@@ -9,7 +9,9 @@ $env:TELEGRAM_BOT_TOKEN="your-telegram-bot-token"
 npm run dev:telegram
 ```
 
-По умолчанию callback server слушает `http://localhost:4100`.
+По умолчанию callback server пытается слушать порт `4100`. Если порт занят, Telegram client выберет ближайший свободный порт и зарегистрирует его в coordinator.
+
+Telegram client автоматически регистрируется в coordinator через `POST /clients/register`, передает свой фактический callback-порт и дальше отправляет heartbeat.
 
 Deploy-пакет собирается командой `npm run build:dist` в `dist/packages/telegram-client`.
 

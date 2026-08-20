@@ -339,7 +339,7 @@ npm run build:dist
 - Новый сценарий обработки данных клиента добавляйте в [apps/worker/runner](apps/worker/runner/README.md).
 - Новый endpoint coordinator добавляйте в [apps/coordinator/api](apps/coordinator/api/README.md).
 - Новое состояние job или worker сначала описывайте в [apps/shared/contracts](apps/shared/contracts/README.md).
-- Новую клиентскую интеграцию добавляйте в [apps/client](apps/client/README.md).
+- Новую клиентскую интеграцию добавляйте в [apps/client](apps/client/README.md), подробный порядок для website, Discord и других клиентов описан в [apps/client/NEW_CLIENT_GUIDE.md](apps/client/NEW_CLIENT_GUIDE.md).
 
 ## Принципы разработки
 

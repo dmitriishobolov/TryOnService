@@ -5,6 +5,7 @@
 ## Текущие направления
 
 - [telegram](telegram/README.md) - Telegram bot/client с командой `/request`, callback server, автоматической регистрацией в coordinator и heartbeat.
+- [NEW_CLIENT_GUIDE.md](NEW_CLIENT_GUIDE.md) - подробная универсальная инструкция по добавлению website, Discord и других будущих клиентов.
 
 ## Роль client слоя
 
@@ -30,3 +31,7 @@ Client слой должен:
 - Client не должен хранить пользовательские фото как постоянное хранилище сервиса: после direct upload в storage-node локальные временные файлы можно очищать.
 - Бизнес-логика пайплайна находится в worker runner.
 - Форматы запросов берутся из `apps/shared/contracts`.
+
+## Добавление новых клиентов
+
+Для новой интеграции создавайте отдельную папку `apps/client/<client-name>` и начинайте с [инструкции по добавлению нового клиента](NEW_CLIENT_GUIDE.md). Сейчас публичные контракты реализуют только `telegram`, поэтому website, Discord или другой новый канал сначала требует расширения `ClientType`, `ClientRef` и runtime validators в `apps/shared/contracts`.

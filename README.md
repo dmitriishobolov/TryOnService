@@ -151,6 +151,8 @@ $env:BUILD_ENV_FILE=".env.production"
 npm run build:dist
 ```
 
+По умолчанию `BUILD_ENV_FILE=.env` указан в `.env.example`, поэтому обычная сборка берет настройки из локального `.env`.
+
 Минимально важные адреса:
 
 - `COORDINATOR_PUBLIC_URL` - публичный URL coordinator, который он передает worker'ам для callbacks.

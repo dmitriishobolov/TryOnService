@@ -20,6 +20,18 @@ export type JobStatus =
 export type WorkerStatus = "ready" | "busy" | "offline";
 export type StorageStatus = "ready" | "offline";
 export type StorageAccessScope = "read" | "write" | "read-write";
+export type TryOnModelProvider =
+  | "mock"
+  | "pruna"
+  | "pixelcut"
+  | "tryoncloud"
+  | "genlook"
+  | "wearfits"
+  | "openai";
+export type TryOnModelTask =
+  | "try-on"
+  | "appearance-analysis"
+  | "wardrobe-recommendation";
 
 export interface TelegramClientRef {
   type: "telegram";
@@ -98,11 +110,19 @@ export interface StorageAccessResponse {
   storage: StorageAccessAssignment;
 }
 
+export interface TryOnModelSelection {
+  provider: TryOnModelProvider;
+  task?: TryOnModelTask;
+  providerModel?: string;
+  options?: Record<string, unknown>;
+}
+
 export interface CreateTryOnJobRequest {
   sourceClientId: string;
   client: ClientRef;
   payload: {
     command: "request";
+    model?: TryOnModelSelection;
     text?: string;
     inputFiles?: StorageObjectRef[];
   };
@@ -319,10 +339,48 @@ export function isCreateTryOnJobRequest(
     typeof client.chatId === "string" &&
     client.chatId.length > 0 &&
     payload.command === "request" &&
+    (payload.model === undefined || isTryOnModelSelection(payload.model)) &&
     (payload.inputFiles === undefined ||
       (Array.isArray(payload.inputFiles) &&
         payload.inputFiles.every(isStorageObjectRef))) &&
     (value.callbackUrl === undefined || typeof value.callbackUrl === "string")
+  );
+}
+
+export function isTryOnModelSelection(value: unknown): value is TryOnModelSelection {
+  if (!isObject(value)) {
+    return false;
+  }
+
+  return (
+    isTryOnModelProvider(value.provider) &&
+    (value.task === undefined || isTryOnModelTask(value.task)) &&
+    (value.providerModel === undefined ||
+      (typeof value.providerModel === "string" &&
+        value.providerModel.length > 0)) &&
+    (value.options === undefined || isObject(value.options))
+  );
+}
+
+export function isTryOnModelProvider(
+  value: unknown,
+): value is TryOnModelProvider {
+  return (
+    value === "mock" ||
+    value === "pruna" ||
+    value === "pixelcut" ||
+    value === "tryoncloud" ||
+    value === "genlook" ||
+    value === "wearfits" ||
+    value === "openai"
+  );
+}
+
+function isTryOnModelTask(value: unknown): value is TryOnModelTask {
+  return (
+    value === "try-on" ||
+    value === "appearance-analysis" ||
+    value === "wardrobe-recommendation"
   );
 }
 
@@ -490,7 +548,12 @@ export function isWorkerJobRequest(value: unknown): value is WorkerJobRequest {
     typeof value.jobId === "string" &&
     value.client.type === "telegram" &&
     typeof value.client.chatId === "string" &&
-    value.payload.command === "request"
+    value.payload.command === "request" &&
+    (value.payload.model === undefined ||
+      isTryOnModelSelection(value.payload.model)) &&
+    (value.payload.inputFiles === undefined ||
+      (Array.isArray(value.payload.inputFiles) &&
+        value.payload.inputFiles.every(isStorageObjectRef)))
   );
 }
 

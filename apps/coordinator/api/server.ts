@@ -1460,7 +1460,9 @@ function cancelWorkerAssignment(
 
 function resolveRequiredCapabilities(request: CreateTryOnJobRequest): string[] {
   if (request.payload.command === "request") {
-    return ["try-on"];
+    const provider = request.payload.model?.provider;
+
+    return provider ? ["try-on", `try-on.${provider}`] : ["try-on"];
   }
 
   return [];

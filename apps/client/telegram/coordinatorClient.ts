@@ -4,7 +4,9 @@ import type {
   ClientRegistrationResponse,
   CreateTryOnJobRequest,
   StorageAccessResponse,
+  StorageObjectRef,
   TryOnJobCreateResponse,
+  TryOnModelSelection,
 } from "../../shared/contracts/index.js";
 import { getJson, postJson } from "../../shared/http.js";
 import type { TelegramClientConfig } from "./config.js";
@@ -48,6 +50,8 @@ export class TelegramCoordinatorClient {
     chatId: string;
     username?: string;
     text?: string;
+    model?: TryOnModelSelection;
+    inputFiles?: StorageObjectRef[];
   }): Promise<TryOnJobCreateResponse> {
     const payload: CreateTryOnJobRequest = {
       sourceClientId: this.config.clientId,
@@ -59,6 +63,8 @@ export class TelegramCoordinatorClient {
       payload: {
         command: "request",
         text: params.text,
+        model: params.model,
+        inputFiles: params.inputFiles,
       },
     };
 

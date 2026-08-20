@@ -5,6 +5,7 @@
 ## Что описывать контрактами
 
 - создание job;
+- выбор AI provider-а и provider model в `CreateTryOnJobRequest.payload.model`;
 - получение статуса job;
 - результат обработки;
 - storage object refs для входных и выходных файлов, включая `storageId` узла, где лежит объект;

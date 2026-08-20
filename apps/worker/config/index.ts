@@ -3,20 +3,14 @@ import { hostname } from "node:os";
 import {
   WORKER_HEARTBEAT_INTERVAL_MS,
   type PublicProtocol,
+  type TryOnModelProvider,
   type WorkerCapability,
 } from "../../shared/contracts/index.js";
-
-export type TryOnModelProvider =
-  | "mock"
-  | "pruna"
-  | "pixelcut"
-  | "tryoncloud"
-  | "genlook"
-  | "wearfits";
 
 export type TryOnCloudMode = "developer" | "platform";
 export type GenlookUploadMode = "multipart" | "url";
 export type WearfitsImageInputMode = "base64" | "url";
+export type OpenAiImageDetail = "low" | "auto" | "high";
 
 export interface PrunaTryOnConfig {
   apiKey?: string;
@@ -66,6 +60,18 @@ export interface WearfitsTryOnConfig {
   preserveBackground: boolean;
 }
 
+export interface OpenAiTryOnConfig {
+  apiKey?: string;
+  baseUrl: string;
+  model: string;
+  imageDetail: OpenAiImageDetail;
+  maxOutputTokens: number;
+  organization?: string;
+  project?: string;
+  systemPrompt: string;
+  wardrobePrompt: string;
+}
+
 export interface WorkerConfig {
   port: number;
   workerId: string;
@@ -80,7 +86,6 @@ export interface WorkerConfig {
   capacity: number;
   capabilities: WorkerCapability[];
   heartbeatIntervalMs: number;
-  tryOnModelProvider: TryOnModelProvider;
   tryOnPersonImageIndex: number;
   tryOnGarmentImageIndex: number;
   tryOnModelPollIntervalMs: number;
@@ -92,6 +97,7 @@ export interface WorkerConfig {
   tryOnCloud: TryOnCloudConfig;
   genlook: GenlookTryOnConfig;
   wearfits: WearfitsTryOnConfig;
+  openai: OpenAiTryOnConfig;
   apiRateLimitWindowMs: number;
   apiRateLimitMaxRequests: number;
   httpClientTimeoutMs: number;
@@ -183,25 +189,6 @@ function readPublicProtocol(): PublicProtocol {
   return value;
 }
 
-function readTryOnModelProvider(): TryOnModelProvider {
-  const value = readString("TRYON_MODEL_PROVIDER", "mock").toLowerCase();
-
-  if (
-    value !== "mock" &&
-    value !== "pruna" &&
-    value !== "pixelcut" &&
-    value !== "tryoncloud" &&
-    value !== "genlook" &&
-    value !== "wearfits"
-  ) {
-    throw new Error(
-      "TRYON_MODEL_PROVIDER must be mock, pruna, pixelcut, tryoncloud, genlook or wearfits",
-    );
-  }
-
-  return value;
-}
-
 function readTryOnCloudMode(): TryOnCloudMode {
   const value = readString("TRYONCLOUD_MODE", "developer").toLowerCase();
 
@@ -232,25 +219,55 @@ function readWearfitsImageInputMode(): WearfitsImageInputMode {
   return value;
 }
 
-function readCapabilities(provider: TryOnModelProvider): WorkerCapability[] {
+function readOpenAiImageDetail(): OpenAiImageDetail {
+  const value = readString("OPENAI_IMAGE_DETAIL", "auto").toLowerCase();
+
+  if (value !== "low" && value !== "auto" && value !== "high") {
+    throw new Error("OPENAI_IMAGE_DETAIL must be low, auto or high");
+  }
+
+  return value;
+}
+
+function readCapabilities(): WorkerCapability[] {
   const raw = readOptionalString("WORKER_CAPABILITIES");
   const names = new Set(
-    (raw ?? "try-on,try-on.mock")
+    (raw ?? "")
       .split(",")
       .map((name) => name.trim())
       .filter(Boolean),
   );
 
   names.add("try-on");
-  names.add(`try-on.${provider}`);
+  names.add("try-on.mock");
+  syncProviderCapability(names, "pruna", "PRUNA_API_KEY");
+  syncProviderCapability(names, "pixelcut", "PIXELCUT_API_KEY");
+  syncProviderCapability(names, "tryoncloud", "TRYONCLOUD_API_KEY");
+  syncProviderCapability(names, "genlook", "GENLOOK_API_KEY");
+  syncProviderCapability(names, "wearfits", "WEARFITS_API_KEY");
+  syncProviderCapability(names, "openai", "OPENAI_API_KEY");
 
   return [...names].map((name) => ({ name }));
+}
+
+function syncProviderCapability(
+  names: Set<string>,
+  provider: TryOnModelProvider,
+  apiKeyName: string,
+): void {
+  const capability = `try-on.${provider}`;
+
+  if (readOptionalString(apiKeyName)) {
+    names.add(capability);
+    return;
+  }
+
+  names.delete(capability);
 }
 
 export function loadWorkerConfig(): WorkerConfig {
   const port = readNumber("WORKER_PORT", 4001);
   const workerId = readString("WORKER_ID", `${hostname()}-${port}`);
-  const tryOnModelProvider = readTryOnModelProvider();
 
   const config: WorkerConfig = {
     port,
@@ -273,12 +290,11 @@ export function loadWorkerConfig(): WorkerConfig {
       "dev-v1",
     ),
     capacity: readNumber("WORKER_CAPACITY", 1),
-    capabilities: readCapabilities(tryOnModelProvider),
+    capabilities: readCapabilities(),
     heartbeatIntervalMs: readNumber(
       "WORKER_HEARTBEAT_INTERVAL_MS",
       WORKER_HEARTBEAT_INTERVAL_MS,
     ),
-    tryOnModelProvider,
     tryOnPersonImageIndex: readNonNegativeInteger("TRYON_PERSON_IMAGE_INDEX", 0),
     tryOnGarmentImageIndex: readNonNegativeInteger("TRYON_GARMENT_IMAGE_INDEX", 1),
     tryOnModelPollIntervalMs: readNumber("TRYON_MODEL_POLL_INTERVAL_MS", 2_000),
@@ -340,6 +356,23 @@ export function loadWorkerConfig(): WorkerConfig {
       quality: readString("WEARFITS_QUALITY", "standard"),
       preserveBackground: readBoolean("WEARFITS_PRESERVE_BACKGROUND", true),
     },
+    openai: {
+      apiKey: readOptionalString("OPENAI_API_KEY"),
+      baseUrl: readString("OPENAI_API_BASE_URL", "https://api.openai.com"),
+      model: readString("OPENAI_MODEL", "gpt-5"),
+      imageDetail: readOpenAiImageDetail(),
+      maxOutputTokens: readNumber("OPENAI_MAX_OUTPUT_TOKENS", 1_200),
+      organization: readOptionalString("OPENAI_ORGANIZATION"),
+      project: readOptionalString("OPENAI_PROJECT"),
+      systemPrompt: readString(
+        "OPENAI_SYSTEM_PROMPT",
+        "You are a careful fashion assistant. Analyze only visible style, clothing, colors, proportions, and wardrobe context. Do not identify the person or infer sensitive attributes.",
+      ),
+      wardrobePrompt: readString(
+        "OPENAI_WARDROBE_PROMPT",
+        "Analyze the user's appearance from the image and suggest a practical wardrobe direction: colors, silhouettes, fit notes, outfit ideas, and what garments would pair well. Answer in Russian.",
+      ),
+    },
     apiRateLimitWindowMs: readNumber("API_RATE_LIMIT_WINDOW_MS", 60_000),
     apiRateLimitMaxRequests: readNumber("API_RATE_LIMIT_MAX_REQUESTS", 120),
     httpClientTimeoutMs: readNumber("HTTP_CLIENT_TIMEOUT_MS", 5_000),
@@ -347,37 +380,5 @@ export function loadWorkerConfig(): WorkerConfig {
     maxJsonBodyBytes: readNumber("MAX_JSON_BODY_BYTES", 1_048_576),
   };
 
-  validateSelectedProviderConfig(config);
-
   return config;
-}
-
-function validateSelectedProviderConfig(config: WorkerConfig): void {
-  const requiredApiKeys: Record<TryOnModelProvider, string | undefined> = {
-    mock: "ok",
-    pruna: config.pruna.apiKey,
-    pixelcut: config.pixelcut.apiKey,
-    tryoncloud: config.tryOnCloud.apiKey,
-    genlook: config.genlook.apiKey,
-    wearfits: config.wearfits.apiKey,
-  };
-
-  if (!requiredApiKeys[config.tryOnModelProvider]) {
-    throw new Error(
-      `${config.tryOnModelProvider} provider requires ${apiKeyEnvName(config.tryOnModelProvider)}`,
-    );
-  }
-}
-
-function apiKeyEnvName(provider: TryOnModelProvider): string {
-  const names: Record<TryOnModelProvider, string> = {
-    mock: "no api key",
-    pruna: "PRUNA_API_KEY",
-    pixelcut: "PIXELCUT_API_KEY",
-    tryoncloud: "TRYONCLOUD_API_KEY",
-    genlook: "GENLOOK_API_KEY",
-    wearfits: "WEARFITS_API_KEY",
-  };
-
-  return names[provider];
 }

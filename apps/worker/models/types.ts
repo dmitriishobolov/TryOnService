@@ -1,13 +1,11 @@
 import type {
   StorageObjectRef,
   TryOnJobResult,
+  TryOnModelProvider,
   WorkerJobRequest,
 } from "../../shared/contracts/index.js";
 import type { CoordinatorClient } from "../api/coordinatorClient.js";
-import type {
-  TryOnModelProvider,
-  WorkerConfig,
-} from "../config/index.js";
+import type { WorkerConfig } from "../config/index.js";
 
 export interface TryOnModelInput {
   job: WorkerJobRequest;

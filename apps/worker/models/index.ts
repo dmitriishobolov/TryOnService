@@ -1,7 +1,10 @@
-import type { TryOnJobResult } from "../../shared/contracts/index.js";
-import type { TryOnModelProvider } from "../config/index.js";
+import type {
+  TryOnJobResult,
+  TryOnModelProvider,
+} from "../../shared/contracts/index.js";
 import { genlookTryOnAdapter } from "./genlook/index.js";
 import { runMockTryOnModel } from "./mock/index.js";
+import { openAiTryOnAdapter } from "./openai/index.js";
 import { pixelcutTryOnAdapter } from "./pixelcut/index.js";
 import { prunaTryOnAdapter } from "./pruna/index.js";
 import { tryOnCloudAdapter } from "./tryoncloud/index.js";
@@ -23,17 +26,23 @@ const adapters = new Map<TryOnModelProvider, TryOnModelAdapter>(
     tryOnCloudAdapter,
     genlookTryOnAdapter,
     wearfitsTryOnAdapter,
+    openAiTryOnAdapter,
   ].map((adapter) => [adapter.provider, adapter]),
 );
 
 export function runSelectedTryOnModel(
   input: TryOnModelInput,
 ): Promise<TryOnJobResult> {
-  const adapter = adapters.get(input.config.tryOnModelProvider);
+  const provider = resolveRequestedProvider(input);
+  const adapter = adapters.get(provider);
 
   if (!adapter) {
-    throw new Error(`Unsupported TryOn model provider: ${input.config.tryOnModelProvider}`);
+    throw new Error(`Unsupported TryOn model provider: ${provider}`);
   }
 
   return adapter.run(input);
+}
+
+function resolveRequestedProvider(input: TryOnModelInput): TryOnModelProvider {
+  return input.job.payload.model?.provider ?? "mock";
 }

@@ -10,8 +10,8 @@ TryOnService - сервис примерки на базе AI API. Проект 
 
 - coordinator регистрирует worker'ы и service clients, получает heartbeat, ведет очередь jobs, выбирает worker по capacity/capabilities, готовит assignment на worker-е и возвращает клиенту выбранный worker;
 - object storage node регистрируется в coordinator по отдельному ключу, отправляет heartbeat и принимает streaming upload/download от клиентов и worker'ов по короткоживущему signed storage token;
-- worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat с учетом running jobs и pending assignments, принимает jobs напрямую от клиентов только после prepare от coordinator и выбирает AI provider через `TRYON_MODEL_PROVIDER`;
-- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, получает assignment или `queued`-ответ, polling-ом дожидается свободного worker'а, отправляет job worker'у напрямую и выводит пользователю ответ worker'а;
+- worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat с учетом running jobs и pending assignments, принимает jobs напрямую от клиентов только после prepare от coordinator и выбирает AI provider из `payload.model.provider` конкретной job;
+- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, получает assignment или `queued`-ответ, polling-ом дожидается свободного worker'а, отправляет job worker'у напрямую и выводит пользователю ответ worker'а; фото с подписью `/request openai` отправляется на OpenAI/ChatGPT vision adapter;
 - coordinator защищает регистрацию worker'ов, service clients и storage-node от перебора ключа: после достижения лимита неверных попыток IP блокируется; при `COORDINATOR_PERSISTENCE=postgres` ban сохраняется в БД и переживает restart;
 - registration, service-to-service, dispatch token, client callback, storage access и admin/debug доступ используют разные ключи;
 - clients, worker и storage-node регистрируются по общим registration keys для быстрого горизонтального масштабирования;
@@ -48,7 +48,7 @@ flowchart LR
 
 1. Client, worker и storage-node при запуске регистрируются в coordinator и регулярно подтверждают доступность.
 2. Клиент запрашивает у coordinator storage-access, получает подходящий storage-node и короткоживущий token, затем загружает изображения напрямую в storage-node.
-3. Клиент отправляет запрос на assignment в coordinator, передавая в payload только `StorageObjectRef` со `storageId`, metadata и пользовательский контекст.
+3. Клиент отправляет запрос на assignment в coordinator, передавая в payload выбранную модель (`payload.model`), `StorageObjectRef` со `storageId`, metadata и пользовательский контекст.
 4. Coordinator валидирует запрос, находит callback URL клиента, создает queued job и пытается сразу выбрать доступный worker и storage-node.
 5. Coordinator отправляет worker-у lightweight prepare-запрос: `jobId`, client/callback metadata, required capabilities, срок жизни dispatch token и signed callback token для ответа клиенту.
 6. Если worker подтвердил prepare, coordinator возвращает клиенту assignment с worker endpoint, `workerRequest`, signed dispatch token и scoped storage-access для worker'а. Если свободного worker/storage нет, coordinator возвращает `202 queued`, а client polling-ом вызывает `GET /jobs/:id/assignment`.
@@ -113,8 +113,9 @@ Worker:
 - при старте читает конфиг и регистрируется в coordinator по registration key и своему service key;
 - сообщает о готовности, capacity и поддерживаемых моделях/пайплайнах;
 - держит pending assignments, принимает jobs от клиентов по signed dispatch token, запускает runner и обновляет статус выполнения;
-- выбирает adapter из `apps/worker/models` через `TRYON_MODEL_PROVIDER`: доступны `mock`, `pruna`, `pixelcut`, `tryoncloud`, `genlook`, `wearfits`;
-- для реальных provider-ов ожидает в `payload.inputFiles` фото пользователя и фото одежды/товара, индексы задаются `TRYON_PERSON_IMAGE_INDEX` и `TRYON_GARMENT_IMAGE_INDEX`;
+- выбирает adapter из `apps/worker/models` через `payload.model.provider`: доступны `mock`, `pruna`, `pixelcut`, `tryoncloud`, `genlook`, `wearfits`, `openai`;
+- объявляет provider-specific capabilities только для настроенных API keys, чтобы coordinator не выдавал job на неподходящий worker;
+- для virtual try-on provider-ов ожидает в `payload.inputFiles` фото пользователя и фото одежды/товара, индексы задаются `TRYON_PERSON_IMAGE_INDEX` и `TRYON_GARMENT_IMAGE_INDEX`; OpenAI adapter использует фото пользователя для анализа внешности и wardrobe-рекомендаций;
 - отправляет клиентский результат напрямую в callback URL из assignment;
 - изолирует конкретные AI API в `apps/worker/models`.
 
@@ -255,7 +256,7 @@ $uploaded = curl.exe -s -X PUT $uploadUrl `
 $assignment = curl.exe -s -X POST http://localhost:3000/jobs `
   -H "Content-Type: application/json" `
   -H "x-client-key: $clientKey" `
-  --data (@{sourceClientId="smoke-client";client=@{type="telegram";chatId="local-dev"};payload=@{command="request";inputFiles=@($uploaded.object)}} | ConvertTo-Json -Depth 10 -Compress) | ConvertFrom-Json
+  --data (@{sourceClientId="smoke-client";client=@{type="telegram";chatId="local-dev"};payload=@{command="request";model=@{provider="mock";task="try-on"};inputFiles=@($uploaded.object)}} | ConvertTo-Json -Depth 10 -Compress) | ConvertFrom-Json
 
 curl.exe -s -X POST $assignment.worker.jobUrl `
   -H "Content-Type: application/json" `

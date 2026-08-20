@@ -44,22 +44,28 @@ export function selectTryOnInputFiles(
   job: WorkerJobRequest,
   config: WorkerConfig,
 ): TryOnInputFiles {
-  const files = job.payload.inputFiles ?? [];
-  const requiredLength =
-    Math.max(config.tryOnPersonImageIndex, config.tryOnGarmentImageIndex) + 1;
+  return {
+    person: selectInputFile(job, config.tryOnPersonImageIndex, "person"),
+    garment: selectInputFile(job, config.tryOnGarmentImageIndex, "garment"),
+  };
+}
 
-  if (files.length < requiredLength) {
+export function selectInputFile(
+  job: WorkerJobRequest,
+  index: number,
+  role: "person" | "garment",
+): StorageObjectRef {
+  const files = job.payload.inputFiles ?? [];
+
+  if (files.length <= index) {
     throw new TryOnModelError(
-      "tryon_input_files_required",
-      `TRYON_MODEL_PROVIDER=${config.tryOnModelProvider} requires person image at inputFiles[${config.tryOnPersonImageIndex}] and garment image at inputFiles[${config.tryOnGarmentImageIndex}]`,
+      `tryon_${role}_input_file_required`,
+      `${job.payload.model?.provider ?? "mock"} requires ${role} image at inputFiles[${index}]`,
       false,
     );
   }
 
-  return {
-    person: files[config.tryOnPersonImageIndex],
-    garment: files[config.tryOnGarmentImageIndex],
-  };
+  return files[index];
 }
 
 export function ensurePublicImageUrl(

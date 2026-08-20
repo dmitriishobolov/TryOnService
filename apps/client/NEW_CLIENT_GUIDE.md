@@ -256,6 +256,11 @@ content-type: application/json
   },
   "payload": {
     "command": "request",
+    "model": {
+      "provider": "openai",
+      "task": "wardrobe-recommendation",
+      "providerModel": "gpt-5"
+    },
     "text": "try this outfit",
     "inputFiles": [
       {
@@ -283,6 +288,10 @@ content-type: application/json
   },
   "payload": {
     "command": "request",
+    "model": {
+      "provider": "pixelcut",
+      "task": "try-on"
+    },
     "inputFiles": [
       {
         "driver": "local",
@@ -295,6 +304,8 @@ content-type: application/json
 ```
 
 Coordinator сам подставит trusted callback URL из registry по `sourceClientId`. Не передавайте callback URL от пользователя как источник доверия.
+
+`payload.model` выбирает provider для конкретной job. Например, `openai` подходит для анализа фото пользователя и wardrobe-рекомендаций, а virtual try-on provider-ы вроде `pixelcut`, `tryoncloud`, `wearfits`, `pruna` и `genlook` ожидают фото пользователя и фото одежды. Coordinator использует `payload.model.provider`, чтобы найти worker с capability `try-on.<provider>`.
 
 Если coordinator вернул `202`, job поставлена в очередь:
 

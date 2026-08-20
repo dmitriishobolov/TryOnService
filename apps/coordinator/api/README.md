@@ -14,7 +14,7 @@ API для клиентов и интеграций должен отвечат�
 - получение состояния обработки без обязательного хранения клиентского результата;
 - отмену job, если сценарий это поддерживает.
 
-`POST /jobs` принимает запросы только от зарегистрированных service clients: нужен `x-client-key`, обязательный `sourceClientId`, а callback URL берется из client registry. Клиентский `callbackUrl` из payload не используется как источник доверия. Если worker/storage capacity сейчас нет, endpoint возвращает `202` и `{ queued: true, job, retryAfterMs }`.
+`POST /jobs` принимает запросы только от зарегистрированных service clients: нужен `x-client-key`, обязательный `sourceClientId`, а callback URL берется из client registry. Клиентский `callbackUrl` из payload не используется как источник доверия. Если `payload.model.provider` указан, coordinator требует worker capability `try-on.<provider>`; если не указан, используется общий `try-on`. Если worker/storage capacity сейчас нет, endpoint возвращает `202` и `{ queued: true, job, retryAfterMs }`.
 
 `GET /jobs/:jobId/assignment?sourceClientId=<clientId>` позволяет клиенту polling-ом дождаться assignment-а для своей queued job. Endpoint требует `x-client-key` и не выдает assignment для чужого `sourceClientId`.
 

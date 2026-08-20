@@ -9,8 +9,7 @@
 - `WORKER_PUBLIC_PROTOCOL` - протокол endpoint, который coordinator соберет по IP registration-запроса.
 - `WORKER_PUBLIC_URL` - опциональный ручной override публичного endpoint worker'а.
 - `WORKER_CAPACITY` - количество jobs, которые worker может выполнять параллельно.
-- `WORKER_CAPABILITIES` - список поддерживаемых моделей или пайплайнов. Worker автоматически добавляет `try-on` и `try-on.<TRYON_MODEL_PROVIDER>`, чтобы coordinator мог матчить общий TryOn request.
-- `TRYON_MODEL_PROVIDER` - выбранный AI provider: `mock`, `pruna`, `pixelcut`, `tryoncloud`, `genlook` или `wearfits`.
+- `WORKER_CAPABILITIES` - ручные дополнительные capabilities. Worker автоматически добавляет `try-on`, `try-on.mock` и `try-on.<provider>` для provider-ов, чьи API keys заполнены.
 - `TRYON_PERSON_IMAGE_INDEX` - индекс фото пользователя в `payload.inputFiles`.
 - `TRYON_GARMENT_IMAGE_INDEX` - индекс фото одежды/товара в `payload.inputFiles`.
 - `TRYON_MODEL_POLL_INTERVAL_MS` - интервал polling-а async providers.
@@ -28,13 +27,14 @@
 - `TRYONCLOUD_API_KEY`, `TRYONCLOUD_API_BASE_URL`, `TRYONCLOUD_MODE` - настройки TryOnCloud API. `developer` отправляет файлы и получает raw PNG; `platform` требует публичный URL garment image.
 - `GENLOOK_API_KEY`, `GENLOOK_API_BASE_URL`, `GENLOOK_API_KEY_HEADER`, `GENLOOK_API_KEY_PREFIX`, `GENLOOK_UPLOAD_MODE`, `GENLOOK_UPLOAD_PATH`, `GENLOOK_TRYON_PATH`, `GENLOOK_GENERATION_PATH_TEMPLATE` - настройки Genlook. Endpoint paths оставлены конфигурируемыми, потому что dashboard/provider setup может отличаться.
 - `WEARFITS_API_KEY`, `WEARFITS_API_BASE_URL`, `WEARFITS_IMAGE_INPUT_MODE`, `WEARFITS_PRODUCT_CATEGORY`, `WEARFITS_QUALITY`, `WEARFITS_PRESERVE_BACKGROUND` - настройки WEARFITS Virtual Try-On API.
+- `OPENAI_API_KEY`, `OPENAI_API_BASE_URL`, `OPENAI_MODEL`, `OPENAI_IMAGE_DETAIL`, `OPENAI_MAX_OUTPUT_TOKENS`, `OPENAI_ORGANIZATION`, `OPENAI_PROJECT`, `OPENAI_SYSTEM_PROMPT`, `OPENAI_WARDROBE_PROMPT` - настройки OpenAI/ChatGPT vision adapter для анализа внешности и подбора гардероба.
 - `API_RATE_LIMIT_WINDOW_MS` - окно входящего rate limit.
 - `API_RATE_LIMIT_MAX_REQUESTS` - максимум входящих запросов с одного IP за окно.
 - `HTTP_CLIENT_TIMEOUT_MS` - timeout исходящих HTTP-вызовов worker.
 - `HTTP_CLIENT_RETRIES` - количество повторов исходящих HTTP-вызовов worker.
 - `MAX_JSON_BODY_BYTES` - максимальный размер JSON body входящего запроса.
 
-Production API keys не хранятся в git. Для `npm run build:dist` выбранные значения подтягиваются из `BUILD_ENV_FILE` и попадают в готовый пакет worker-а в `dist/packages/worker/.env`.
+Production API keys не хранятся в git. Для `npm run build:dist` значения API keys подтягиваются из `BUILD_ENV_FILE` и попадают в готовый пакет worker-а в `dist/packages/worker/.env`. Конкретный provider выбирает клиент в `payload.model`, а не worker env.
 
 ## Правила
 

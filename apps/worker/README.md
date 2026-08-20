@@ -32,10 +32,10 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 4. Worker регулярно отправляет heartbeat.
 5. Coordinator отправляет worker-у lightweight `POST /assignments` с `x-worker-service-key`, чтобы подготовить pending assignment под будущий client dispatch и передать callback token.
 6. Client получает assignment от coordinator и отправляет heavy request на worker endpoint `POST /jobs` с `x-job-dispatch-token`.
-7. Worker проверяет purpose/signature dispatch token, `workerId`, `jobId`, текущий signing `keyVersion`, одноразовый `tokenId` и pending assignment, скачивает входные файлы по `StorageObjectRef`, запускает runner и вызывает adapter из `models`, выбранный через `TRYON_MODEL_PROVIDER`.
+7. Worker проверяет purpose/signature dispatch token, `workerId`, `jobId`, текущий signing `keyVersion`, одноразовый `tokenId` и pending assignment, скачивает входные файлы по `StorageObjectRef`, запускает runner и вызывает adapter из `models`, выбранный клиентом в `payload.model.provider`.
 8. Worker использует storage-access из `workerRequest` или запрашивает новый через `POST /storage/access`, читает входные файлы и загружает generated files напрямую в storage-node, отправляет progress/final status в coordinator по `x-worker-service-key` и клиентский результат напрямую в callback клиента с `x-client-callback-token`.
 
-По умолчанию runner использует `mock` и возвращает текст `Ответ от сервера.`. Для production можно выбрать `pruna`, `pixelcut`, `tryoncloud`, `genlook` или `wearfits` через env; подробности в [models](models/README.md) и [config](config/README.md).
+Если клиент не указал `payload.model.provider`, runner использует `mock` и возвращает текст `Ответ от сервера.`. Клиент может запросить `pruna`, `pixelcut`, `tryoncloud`, `genlook`, `wearfits` или `openai`; worker примет job только если у него есть соответствующая capability. Подробности в [models](models/README.md) и [config](config/README.md).
 
 ## Принципы
 

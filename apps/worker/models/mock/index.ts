@@ -1,5 +1,5 @@
-import type { TryOnJobResult } from "../../shared/contracts/index.js";
-import { sleep } from "../../shared/http.js";
+import type { TryOnJobResult } from "../../../shared/contracts/index.js";
+import { sleep } from "../../../shared/http.js";
 
 export async function runMockTryOnModel(
   processingDelayMs: number,

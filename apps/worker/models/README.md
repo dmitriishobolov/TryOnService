@@ -13,10 +13,22 @@
 
 Для реальных provider-ов worker ожидает минимум два `payload.inputFiles`: `TRYON_PERSON_IMAGE_INDEX` указывает фото пользователя, `TRYON_GARMENT_IMAGE_INDEX` - фото одежды/товара. Результат каждого provider-а сохраняется напрямую в object storage под `jobs/<jobId>/results/...`; coordinator получает только `StorageObjectRef` в `TryOnJobResult.files`.
 
+## Структура
+
+- `index.ts` - registry/router adapters; runner импортирует только его.
+- `types.ts` - общий контракт `TryOnModelAdapter` и входные типы runner -> model.
+- `providerUtils.ts` - общие helper-ы: storage download/upload, multipart helpers, error mapping, URL/id parsing.
+- `mock/` - локальная mock-модель для devtest и smoke-проверок.
+- `pruna/` - adapter Pruna P-Image-Try-On.
+- `pixelcut/` - adapter Pixelcut Try-On API.
+- `tryoncloud/` - adapter TryOnCloud Developer/Platform API.
+- `genlook/` - adapter Genlook Try-On API.
+- `wearfits/` - adapter WEARFITS Virtual Try-On API.
+
 ## Что здесь размещать
 
-- clients для внешних AI API;
-- adapters под конкретные модели примерки;
+- clients для внешних AI API внутри папки соответствующего provider-а;
+- adapters под конкретные модели примерки внутри папки соответствующего provider-а;
 - нормализацию запросов и ответов provider'а;
 - обработку provider-specific ошибок;
 - retry/timeout policy, если она относится именно к вызову модели.

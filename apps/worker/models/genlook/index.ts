@@ -1,4 +1,4 @@
-import { sleep } from "../../shared/http.js";
+import { sleep } from "../../../shared/http.js";
 import {
   apiKeyHeaders,
   appendImageFile,
@@ -14,8 +14,8 @@ import {
   selectTryOnInputFiles,
   storeResultFromUrl,
   TryOnModelError,
-} from "./providerUtils.js";
-import type { TryOnModelAdapter, TryOnModelInput } from "./types.js";
+} from "../providerUtils.js";
+import type { TryOnModelAdapter, TryOnModelInput } from "../types.js";
 
 const provider = "genlook";
 

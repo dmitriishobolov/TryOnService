@@ -1,4 +1,4 @@
-import { sleep } from "../../shared/http.js";
+import { sleep } from "../../../shared/http.js";
 import {
   createStoredResult,
   downloadInputImage,
@@ -13,9 +13,9 @@ import {
   selectTryOnInputFiles,
   storeResultFromUrl,
   TryOnModelError,
-} from "./providerUtils.js";
-import type { TryOnModelAdapter, TryOnModelInput } from "./types.js";
-import type { StorageObjectRef } from "../../shared/contracts/index.js";
+} from "../providerUtils.js";
+import type { TryOnModelAdapter, TryOnModelInput } from "../types.js";
+import type { StorageObjectRef } from "../../../shared/contracts/index.js";
 
 const provider = "wearfits";
 

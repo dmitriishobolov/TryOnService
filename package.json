@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/clean-dist-apps.mjs && tsc -p tsconfig.json",
     "build:dist": "npm run build && node scripts/build-dist.mjs",
     "build:devtest": "node scripts/devtest.mjs --build-only",
     "devtest": "node scripts/devtest.mjs",

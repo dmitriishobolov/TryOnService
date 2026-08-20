@@ -1,4 +1,4 @@
-import { sleep } from "../../shared/http.js";
+import { sleep } from "../../../shared/http.js";
 import {
   appendImageFile,
   createStoredResult,
@@ -12,12 +12,12 @@ import {
   selectTryOnInputFiles,
   storeResultFromUrl,
   TryOnModelError,
-} from "./providerUtils.js";
+} from "../providerUtils.js";
 import type {
   DownloadedImage,
   TryOnModelAdapter,
   TryOnModelInput,
-} from "./types.js";
+} from "../types.js";
 
 const provider = "pruna";
 

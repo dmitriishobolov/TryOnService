@@ -13,8 +13,8 @@ import {
   storeResultFromResponse,
   storeResultFromUrl,
   TryOnModelError,
-} from "./providerUtils.js";
-import type { TryOnModelAdapter, TryOnModelInput } from "./types.js";
+} from "../providerUtils.js";
+import type { TryOnModelAdapter, TryOnModelInput } from "../types.js";
 
 const provider = "tryoncloud";
 

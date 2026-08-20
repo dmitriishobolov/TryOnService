@@ -1,12 +1,13 @@
 # Worker API
 
-Папка для кода, который связывает worker с coordinator. В зависимости от выбранной модели доставки здесь может быть HTTP client к coordinator, локальные endpoints worker'а или оба варианта.
+Папка для кода, который связывает worker с coordinator. Сейчас здесь есть HTTP client к coordinator и локальный HTTP endpoint worker'а для приема назначенных jobs.
 
 ## Основные операции
 
 - регистрация worker'а в coordinator;
 - отправка heartbeat;
 - получение или подтверждение job;
+- прием `POST /jobs` от coordinator;
 - отправка прогресса выполнения;
 - отправка финального результата;
 - отправка структурированной ошибки.

@@ -12,8 +12,10 @@
 - `WORKER_CAPABILITIES` - список поддерживаемых моделей или пайплайнов.
 - `COORDINATOR_URL` - адрес coordinator API.
 - `WORKER_REGISTRATION_KEY` - ключ для регистрации в coordinator.
-- `AI_API_KEY` - ключ внешнего AI provider, если используется один общий provider.
-- `WORKER_TMP_DIR` - директория для временных файлов обработки.
+- `WORKER_HEARTBEAT_INTERVAL_MS` - интервал heartbeat worker'а.
+- `MOCK_PROCESSING_DELAY_MS` - задержка mock AI model для локальной проверки.
+
+AI provider keys и директории временных файлов появятся здесь, когда runner начнет работать с реальными изображениями и внешними AI API.
 
 ## Правила
 

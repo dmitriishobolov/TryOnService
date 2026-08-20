@@ -30,7 +30,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 2. Worker формирует `workerId`, `capacity` и список `capabilities`.
 3. Worker регистрируется в coordinator через API и registration key.
 4. Worker регулярно отправляет heartbeat.
-5. Worker получает назначенную job или сам забирает job из coordinator, в зависимости от выбранной модели доставки.
+5. Coordinator отправляет назначенную job на локальный worker endpoint `POST /jobs`.
 6. Runner выполняет обработку и вызывает нужные adapters из `models`.
 7. Worker отправляет прогресс, результат или ошибку обратно в coordinator.
 

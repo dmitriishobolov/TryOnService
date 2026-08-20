@@ -26,17 +26,24 @@ import type { InMemoryJobStore } from "../jobs/store.js";
 import type { ClientRegistry } from "../registry/clientStore.js";
 import type { WorkerRegistry } from "../registry/store.js";
 import type { Scheduler } from "../scheduler/index.js";
+import type { IpBanGuard } from "../utils/ipBanGuard.js";
+import {
+  resolveDirectRequestAddress,
+  resolveRequesterHost,
+} from "../utils/requestAddress.js";
 
 interface CoordinatorServerDeps {
   config: CoordinatorConfig;
   jobs: InMemoryJobStore;
   workers: WorkerRegistry;
   clients: ClientRegistry;
+  workerRegistrationGuard: IpBanGuard;
   scheduler: Scheduler;
 }
 
 export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
-  const { config, jobs, workers, clients, scheduler } = deps;
+  const { config, jobs, workers, clients, workerRegistrationGuard, scheduler } =
+    deps;
 
   return createServer(async (request, response) => {
     const url = requestUrl(request);
@@ -170,10 +177,42 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
       }
 
       if (request.method === "POST" && url.pathname === "/workers/register") {
+        const ipAddress = resolveDirectRequestAddress(request);
+
+        if (workerRegistrationGuard.isBanned(ipAddress)) {
+          writeError(
+            response,
+            403,
+            "worker_registration_ip_banned",
+            "Worker registration source IP is banned until coordinator restart",
+          );
+          return;
+        }
+
         if (!hasWorkerKey(request.headers["x-worker-key"], config)) {
+          const attempt = workerRegistrationGuard.registerFailure(ipAddress);
+
+          if (attempt.banned) {
+            console.warn(
+              `[coordinator] Worker registration IP ${ipAddress} banned after ${attempt.failedAttempts} invalid key attempts`,
+            );
+            writeError(
+              response,
+              403,
+              "worker_registration_ip_banned",
+              "Worker registration source IP is banned until coordinator restart",
+            );
+            return;
+          }
+
+          console.warn(
+            `[coordinator] Invalid worker registration key from ${ipAddress}; attempt ${attempt.failedAttempts}/${config.workerRegistrationMaxInvalidAttempts}`,
+          );
           writeError(response, 401, "unauthorized_worker", "Invalid worker key");
           return;
         }
+
+        workerRegistrationGuard.clear(ipAddress);
 
         const body = await readJsonBody(request);
 
@@ -369,57 +408,6 @@ function resolveServiceBaseUrl(
   const host = resolveRequesterHost(request);
 
   return `${protocol}://${formatHostForUrl(host)}:${registration.port}`;
-}
-
-function resolveRequesterHost(request: IncomingMessage): string {
-  const forwardedFor = firstHeaderValue(request.headers["x-forwarded-for"]);
-  const realIp = firstHeaderValue(request.headers["x-real-ip"]);
-  const rawHost =
-    forwardedFor?.split(",")[0]?.trim() ||
-    realIp ||
-    request.socket.remoteAddress;
-
-  if (!rawHost) {
-    throw new Error("Cannot resolve worker registration source address");
-  }
-
-  return normalizeRemoteAddress(rawHost);
-}
-
-function firstHeaderValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
-function normalizeRemoteAddress(address: string): string {
-  const trimmed = address.trim();
-
-  if (trimmed.startsWith("[") && trimmed.includes("]")) {
-    return trimmed.slice(1, trimmed.indexOf("]"));
-  }
-
-  if (trimmed.startsWith("::ffff:")) {
-    return trimmed.slice("::ffff:".length);
-  }
-
-  if (trimmed === "::1") {
-    return "localhost";
-  }
-
-  const ipv4WithOptionalPort = /^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$/.exec(
-    trimmed,
-  );
-
-  if (ipv4WithOptionalPort) {
-    return ipv4WithOptionalPort[1];
-  }
-
-  const hostWithPort = /^([^:]+):\d+$/.exec(trimmed);
-
-  if (hostWithPort) {
-    return hostWithPort[1];
-  }
-
-  return trimmed;
 }
 
 function formatHostForUrl(host: string): string {

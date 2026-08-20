@@ -5,6 +5,7 @@ import { InMemoryJobStore } from "./jobs/store.js";
 import { ClientRegistry } from "./registry/clientStore.js";
 import { WorkerRegistry } from "./registry/store.js";
 import { Scheduler } from "./scheduler/index.js";
+import { IpBanGuard } from "./utils/ipBanGuard.js";
 
 loadEnvFile();
 
@@ -12,12 +13,16 @@ const config = loadCoordinatorConfig();
 const jobs = new InMemoryJobStore();
 const workers = new WorkerRegistry();
 const clients = new ClientRegistry();
+const workerRegistrationGuard = new IpBanGuard(
+  config.workerRegistrationMaxInvalidAttempts,
+);
 const scheduler = new Scheduler(config, jobs, workers);
 const server = createCoordinatorServer({
   config,
   jobs,
   workers,
   clients,
+  workerRegistrationGuard,
   scheduler,
 });
 

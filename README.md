@@ -11,6 +11,7 @@ TryOnService - сервис примерки на базе AI API. Проект 
 - coordinator принимает jobs, регистрирует worker'ы и service clients, получает heartbeat и назначает queued job доступному worker'у;
 - worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat и обрабатывает назначенные jobs через mock AI model;
 - Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, создает job и выводит пользователю ответ worker'а.
+- coordinator защищает регистрацию worker'ов от перебора ключа: после превышения лимита неверных попыток IP блокируется до перезапуска coordinator.
 
 ## Как устроен сервис
 
@@ -18,7 +19,8 @@ TryOnService - сервис примерки на базе AI API. Проект 
 flowchart LR
     Client["Client integrations"] --> CoordinatorAPI["Coordinator API"]
     CoordinatorAPI --> Jobs["Jobs"]
-    CoordinatorAPI --> Registry["Worker registry"]
+    CoordinatorAPI --> Registry["Worker/client registry"]
+    CoordinatorAPI --> Security["Registration guard"]
     Registry --> Scheduler["Scheduler"]
     Jobs --> Scheduler
     Scheduler --> WorkerAPI["Worker API/client"]
@@ -37,7 +39,7 @@ flowchart LR
 ## Структура репозитория
 
 - [apps](apps/README.md) - все приложения и общие пакеты монорепозитория.
-- [apps/coordinator](apps/coordinator/README.md) - сервис-координатор: API, очередь jobs, registry worker'ов и scheduler.
+- [apps/coordinator](apps/coordinator/README.md) - сервис-координатор: API, очередь jobs, registry worker'ов/service clients, scheduler и coordinator utilities.
 - [apps/worker](apps/worker/README.md) - исполняющий сервис: регистрация в coordinator, запуск пайплайнов, вызовы AI API.
 - [apps/shared](apps/shared/README.md) - общие контракты, DTO, типы и схемы валидации.
 - [apps/client](apps/client/README.md) - клиентские интеграции, через которые пользователи создают задачи.
@@ -51,6 +53,7 @@ Coordinator:
 - хранит состояние jobs и историю переходов;
 - ведет реестр worker'ов и service clients, их heartbeat, capacity и capabilities;
 - назначает задания worker'ам и контролирует retries/timeouts.
+- блокирует IP, которые пытаются подобрать `WORKER_REGISTRATION_KEY` через регистрацию worker'а.
 
 Worker:
 
@@ -107,6 +110,19 @@ npm run dev:telegram
 
 Если worker, coordinator и Telegram client запускаются не на одной машине, задайте публичные URL через `COORDINATOR_PUBLIC_URL` и `COORDINATOR_URL`. Адреса worker'а и Telegram client callback server coordinator определяет сам по IP registration-запроса и выбранному порту.
 
+Если автоопределение публичного endpoint не подходит из-за NAT, reverse proxy или домена, задайте override через `WORKER_PUBLIC_URL` или `TELEGRAM_CLIENT_PUBLIC_URL`.
+
+## Безопасность регистрации
+
+Worker и service client регистрируются в coordinator по разным ключам:
+
+- `WORKER_REGISTRATION_KEY` - ключ worker'ов.
+- `CLIENT_REGISTRATION_KEY` - ключ клиентов-интеграций.
+
+Для worker registration есть in-memory защита от перебора: если один direct remote IP отправит больше `WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS` неверных ключей в `POST /workers/register`, coordinator вернет `403 worker_registration_ip_banned` и будет держать этот IP в бане до перезапуска процесса.
+
+Адрес для бана берется из прямого socket remote address, а не из `x-forwarded-for`, чтобы атакующий не мог легко менять IP заголовком. `x-forwarded-for` и `x-real-ip` используются только для автоопределения публичного endpoint worker/client при регистрации.
+
 ## Проверка без Telegram
 
 Можно проверить цепочку coordinator + worker обычным HTTP-запросом:
@@ -159,6 +175,8 @@ npm run build:dist
 
 - `COORDINATOR_PUBLIC_URL` - публичный URL coordinator, который он передает worker'ам для callbacks.
 - `COORDINATOR_URL` - адрес coordinator для worker и Telegram client.
+- `WORKER_REGISTRATION_KEY` - ключ регистрации worker'ов в coordinator.
+- `WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS` - сколько неверных registration-ключей с одного IP допускается до бана; по умолчанию `5`.
 - `WORKER_PORT` - порт worker; coordinator использует его вместе с IP registration-запроса, чтобы отправлять jobs на worker.
 - `WORKER_PUBLIC_PROTOCOL` - протокол публичного worker endpoint, обычно `http` или `https`.
 - `WORKER_PUBLIC_URL` - опциональный ручной override для worker endpoint, если автоопределение по IP/port не подходит.

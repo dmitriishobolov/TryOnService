@@ -9,6 +9,7 @@ export interface CoordinatorConfig {
   port: number;
   publicUrl: string;
   workerRegistrationKey: string;
+  workerRegistrationMaxInvalidAttempts: number;
   clientRegistrationKey: string;
   workerHeartbeatIntervalMs: number;
   workerHeartbeatTimeoutMs: number;
@@ -46,6 +47,10 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
     workerRegistrationKey: readString(
       "WORKER_REGISTRATION_KEY",
       "dev-worker-registration-key",
+    ),
+    workerRegistrationMaxInvalidAttempts: readNumber(
+      "WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS",
+      5,
     ),
     clientRegistrationKey: readString(
       "CLIENT_REGISTRATION_KEY",

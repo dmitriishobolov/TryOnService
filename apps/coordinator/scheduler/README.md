@@ -7,8 +7,8 @@ Scheduler отвечает за выбор worker'а для job и контро�
 - находить jobs в статусе `queued`;
 - выбирать worker по availability, capacity и capabilities;
 - назначать job worker'у;
-- отслеживать timeouts и зависшие назначения;
-- возвращать job в очередь или переводить в `failed`, если retry limit исчерпан.
+- отправлять job на worker endpoint;
+- возвращать job в очередь и помечать worker offline, если dispatch не удался.
 
 ## Критерии выбора worker
 
@@ -24,3 +24,5 @@ Scheduler отвечает за выбор worker'а для job и контро�
 - Логика scheduler должна быть отделена от HTTP API.
 - Назначение job должно быть атомарным: одна job не должна уйти двум worker'ам.
 - Retry policy должна быть явной и наблюдаемой через логи/метрики.
+
+В текущей реализации scheduler работает in-memory: он резервирует worker, переводит job в `assigned`, отправляет `POST /jobs` на worker и освобождает capacity после финального результата.

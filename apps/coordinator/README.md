@@ -21,6 +21,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - [jobs](jobs/README.md) - модель jobs, статусы, хранение и переходы состояния.
 - [registry](registry/README.md) - реестр worker'ов, registration, heartbeat, capacity и capabilities.
 - [scheduler](scheduler/README.md) - логика выбора worker'а, назначения jobs, retries и timeouts.
+- [utils](utils/README.md) - утилитарные функции coordinator: IP extraction, registration guards и helpers без доменной логики.
 
 ## Основной поток
 
@@ -28,12 +29,12 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 2. Request валидируется через контракты из `apps/shared`.
 3. В `jobs` создается новая задача со статусом `queued`.
 4. `scheduler` выбирает подходящий worker из `registry`.
-5. Coordinator назначает job worker'у и переводит ее в `assigned` или `running`.
+5. Coordinator назначает job worker'у и переводит ее в `assigned`, worker затем сообщает `running`.
 6. Worker сообщает промежуточный и финальный статус обратно в coordinator.
 
 ## Реализованные endpoints
 
-- `GET /health` - статус coordinator, worker'ы и количество queued jobs.
+- `GET /health` - статус coordinator, worker'ы, service clients и количество queued jobs.
 - `GET /jobs` - список jobs в in-memory storage.
 - `GET /jobs/:id` - состояние конкретной job.
 - `POST /jobs` - создание job клиентом.
@@ -48,6 +49,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 
 - Coordinator является источником правды по состоянию jobs.
 - Регистрация worker'ов должна быть защищена ключом.
+- Неверные попытки регистрации worker'а считаются по IP и после лимита переводят IP в ban до перезапуска coordinator.
 - Регистрация service clients должна быть защищена отдельным ключом.
 - Недоступный worker должен автоматически выпадать из активного пула после пропущенных heartbeat.
 - Повторные запросы worker'а на обновление статуса должны обрабатываться идемпотентно.

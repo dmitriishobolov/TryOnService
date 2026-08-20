@@ -4,7 +4,7 @@
 
 ## Текущие направления
 
-- `telegram` - будущая Telegram-интеграция.
+- [telegram](telegram/README.md) - Telegram bot/client с командой `/request`, callback server, автоматической регистрацией в coordinator и heartbeat.
 
 ## Роль client слоя
 
@@ -12,6 +12,7 @@ Client слой должен:
 
 - принимать пользовательский ввод;
 - приводить его к контракту создания job;
+- регистрироваться в coordinator как service client, если интеграции нужен callback endpoint;
 - отправлять запрос в coordinator;
 - показывать пользователю статус и результат;
 - не выполнять AI-обработку самостоятельно.

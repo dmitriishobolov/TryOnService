@@ -185,11 +185,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         }
 
         if (
-          !hasClientAccess(
-            request.headers["x-client-key"],
-            body.sourceClientId,
-            config,
-          )
+          !hasClientKey(request.headers["x-client-key"], config)
         ) {
           recordSecurityEvent(audit, {
             eventType: "client_job_unauthorized",
@@ -426,11 +422,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
 
         if (
           (body.requesterType === "client" &&
-            !hasClientAccess(
-              request.headers["x-client-key"],
-              body.requesterId,
-              config,
-            )) ||
+            !hasClientKey(request.headers["x-client-key"], config)) ||
           (body.requesterType === "worker" &&
             !hasWorkerServiceKey(request.headers["x-worker-service-key"], config))
         ) {
@@ -646,9 +638,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        if (
-          !hasClientAccess(request.headers["x-client-key"], body.clientId, config)
-        ) {
+        if (!hasClientKey(request.headers["x-client-key"], config)) {
           const attempt = clientRegistrationGuard.registerFailure(ipAddress);
 
           if (attempt.banned) {
@@ -798,11 +788,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         }
 
         if (
-          !hasClientAccess(
-            request.headers["x-client-key"],
-            clientHeartbeatMatch[1],
-            config,
-          )
+          !hasClientKey(request.headers["x-client-key"], config)
         ) {
           writeError(response, 401, "unauthorized_client", "Invalid client key");
           return;
@@ -1119,21 +1105,11 @@ function hasStorageServiceKey(
   return value === config.storageServiceKey;
 }
 
-function hasClientAccess(
+function hasClientKey(
   headerValue: string | string[] | undefined,
-  clientId: string,
   config: CoordinatorConfig,
 ): boolean {
   const value = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-  const clientKey = config.clientKeys[clientId];
-
-  if (clientKey) {
-    return value === clientKey;
-  }
-
-  if (config.requireClientInstanceKeys) {
-    return false;
-  }
 
   return value === config.clientRegistrationKey;
 }

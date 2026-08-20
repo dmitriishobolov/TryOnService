@@ -45,8 +45,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - Telegram client не вызывает AI API напрямую.
 - Долгие операции должны выполняться worker'ом, а не процессом бота.
 - Токен Telegram-бота хранится только в окружении.
-- `TELEGRAM_CLIENT_KEY` должен совпадать с `CLIENT_KEYS[TELEGRAM_CLIENT_ID]` на coordinator, если включен `REQUIRE_CLIENT_INSTANCE_KEYS=true`.
-- `CLIENT_REGISTRATION_KEY` используется только как dev fallback для регистрации клиента и создания assignment в coordinator.
+- `CLIENT_REGISTRATION_KEY` используется для регистрации клиента, heartbeat и создания assignment в coordinator.
 - `CLIENT_CALLBACK_SIGNING_KEY` должен совпадать с coordinator, иначе callback от worker будет отклонен.
 - `CLIENT_CALLBACK_SIGNING_KEY_VERSION` должен совпадать с coordinator при текущей версии ключа.
 - Все payload'ы к coordinator должны соответствовать контрактам из `apps/shared`.

@@ -72,8 +72,6 @@ Dispatch token подписан `WORKER_DISPATCH_SIGNING_KEY`, но сам се�
 
 `POST /clients/register` также считает неверные `x-client-key` по direct remote IP. После `CLIENT_REGISTRATION_MAX_INVALID_ATTEMPTS` неверных попыток IP получает `403 client_registration_ip_banned`.
 
-При `REQUIRE_CLIENT_INSTANCE_KEYS=true` `CLIENT_REGISTRATION_KEY` перестает быть fallback, и каждый clientId должен иметь запись в `CLIENT_KEYS`.
-
 При `REQUIRE_HTTPS_ENDPOINTS=true` registration отклоняет public endpoints без `https`. mTLS реализуется на reverse proxy/private network уровне перед Node.js процессами.
 
 Для бана используется socket remote address, а не `x-forwarded-for`. Заголовки `x-forwarded-for` и `x-real-ip` используются отдельно, только когда coordinator собирает публичный endpoint зарегистрированного worker/client.
@@ -82,7 +80,7 @@ Security events пишутся в audit store; в Postgres это `tryon_securit
 
 ## Ключи и лимиты
 
-- `x-client-key` - регистрация/heartbeat service clients и создание jobs; в production должен быть per-client key из `CLIENT_KEYS`.
+- `x-client-key` - регистрация/heartbeat service clients и создание jobs по общему `CLIENT_REGISTRATION_KEY`.
 - `x-worker-registration-key` - registration gate worker'а.
 - `x-worker-service-key` - heartbeat worker'а, prepare assignment, progress/result и cancel после регистрации.
 - `x-storage-registration-key` - registration gate storage-node.

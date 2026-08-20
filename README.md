@@ -14,7 +14,7 @@ TryOnService - сервис примерки на базе AI API. Проект 
 - Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, получает assignment, отправляет job worker'у напрямую и выводит пользователю ответ worker'а;
 - coordinator защищает регистрацию worker'ов, service clients и storage-node от перебора ключа: после достижения лимита неверных попыток IP блокируется; при `COORDINATOR_PERSISTENCE=postgres` ban сохраняется в БД и переживает restart;
 - registration, service-to-service, dispatch token, client callback, storage access и admin/debug доступ используют разные ключи;
-- для клиентов можно включить per-client identity через `CLIENT_KEYS` и `REQUIRE_CLIENT_INSTANCE_KEYS`; worker/storage регистрируются по общим registration keys для быстрого горизонтального масштабирования;
+- clients, worker и storage-node регистрируются по общим registration keys для быстрого горизонтального масштабирования;
 - signed tokens содержат `tokenId` и `keyVersion`: worker dispatch и client callback защищены от replay, а storage-access ограничивается TTL, storageId, scope и ownership prefix;
 - coordinator пишет security audit events в memory/Postgres backend;
 - HTTP API имеют лимиты размера JSON body, базовый rate limit и timeout/retry для исходящих service calls;
@@ -178,8 +178,7 @@ npm run dev:telegram
 - `WORKER_SERVICE_KEY` - общий service key для heartbeat, prepare, progress, result и cancel после регистрации; передается как `x-worker-service-key`.
 - `WORKER_DISPATCH_SIGNING_KEY` - подпись dispatch token, который coordinator выдает клиенту для прямого `POST /jobs` на worker.
 - `WORKER_DISPATCH_SIGNING_KEY_VERSION` - версия ключа подписи dispatch token; worker принимает только токены текущей версии.
-- `CLIENT_REGISTRATION_KEY` - dev fallback для регистрации и heartbeat service clients, а также создания jobs в coordinator; передается как `x-client-key`.
-- `CLIENT_KEYS` - production карта `clientId=secret`, которая задает per-client API key. При `REQUIRE_CLIENT_INSTANCE_KEYS=true` общий `CLIENT_REGISTRATION_KEY` перестает давать доступ клиентам без записи в карте.
+- `CLIENT_REGISTRATION_KEY` - общий ключ для регистрации и heartbeat service clients, а также создания jobs в coordinator; передается как `x-client-key`.
 - `CLIENT_CALLBACK_SIGNING_KEY` - подпись callback token, по которому Telegram client проверяет ответ worker'а.
 - `CLIENT_CALLBACK_SIGNING_KEY_VERSION` - версия callback signing key; Telegram client отклоняет токены другой версии.
 - `ADMIN_API_KEY` - доступ к debug/admin endpoints coordinator: `GET /health`, `GET /jobs`, `GET /jobs/:id`; передается как `x-admin-key`.
@@ -292,10 +291,7 @@ npm run build:dist
 - `WORKER_SERVICE_KEY` - общий ключ служебного общения coordinator <-> worker.
 - `WORKER_DISPATCH_SIGNING_KEY`, `WORKER_DISPATCH_SIGNING_KEY_VERSION` - секрет и версия подписи dispatch token для прямого client -> worker запроса.
 - `CLIENT_CALLBACK_SIGNING_KEY`, `CLIENT_CALLBACK_SIGNING_KEY_VERSION` - секрет и версия подписи callback token для worker -> client результата.
-- `CLIENT_REGISTRATION_KEY` - dev fallback ключ регистрации service clients в coordinator и создания jobs.
-- `CLIENT_KEYS` - per-client ключи в формате `clientId=secret,client2=secret2`.
-- `TELEGRAM_CLIENT_KEY` - конкретный ключ Telegram client; должен совпадать с записью `CLIENT_KEYS` для `TELEGRAM_CLIENT_ID`, если включен `REQUIRE_CLIENT_INSTANCE_KEYS=true`.
-- `REQUIRE_CLIENT_INSTANCE_KEYS` - запрет fallback на общий client key.
+- `CLIENT_REGISTRATION_KEY` - общий ключ регистрации service clients в coordinator и создания jobs.
 - `REQUIRE_HTTPS_ENDPOINTS` - запрет регистрации non-HTTPS public endpoints.
 - `CLIENT_REGISTRATION_MAX_INVALID_ATTEMPTS` - сколько неверных client registration-ключей с одного IP допускается до бана; по умолчанию `5`.
 - `ADMIN_API_KEY` - ключ доступа к debug/admin endpoints coordinator.

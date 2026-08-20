@@ -64,7 +64,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - Регистрация worker'ов должна быть защищена отдельным общим registration key.
 - Служебное общение worker/coordinator должно быть защищено общим `WORKER_SERVICE_KEY`.
 - Регистрация storage-node должна быть защищена отдельным общим registration key, а служебное общение storage/coordinator - общим `STORAGE_SERVICE_KEY`.
-- Регистрация service clients и создание jobs должны быть защищены per-client key; общий `CLIENT_REGISTRATION_KEY` допустим только как dev fallback.
+- Регистрация service clients и создание jobs должны быть защищены общим `CLIENT_REGISTRATION_KEY`.
 - Неверные попытки регистрации worker'а, service client и storage-node считаются по IP и после лимита переводят IP в ban; в Postgres режиме ban переживает restart coordinator.
 - Недоступный worker должен автоматически выпадать из активного пула после пропущенных heartbeat.
 - Активные jobs упавшего worker'а или service client должны переводиться в `failed`, а pending assignment на worker-е должен отменяться, когда это возможно.

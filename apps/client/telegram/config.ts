@@ -78,11 +78,8 @@ export function loadTelegramClientConfig(): TelegramClientConfig {
     publicUrl: readOptionalString("TELEGRAM_CLIENT_PUBLIC_URL"),
     coordinatorUrl: readString("COORDINATOR_URL", "http://localhost:3000"),
     registrationKey: readString(
-      "TELEGRAM_CLIENT_KEY",
-      readString(
-        "CLIENT_REGISTRATION_KEY",
-        "dev-client-registration-key",
-      ),
+      "CLIENT_REGISTRATION_KEY",
+      "dev-client-registration-key",
     ),
     callbackSigningKey: readString(
       "CLIENT_CALLBACK_SIGNING_KEY",

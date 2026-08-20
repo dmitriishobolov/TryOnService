@@ -27,8 +27,6 @@ export interface CoordinatorConfig {
   storageRegistrationMaxInvalidAttempts: number;
   clientRegistrationMaxInvalidAttempts: number;
   clientRegistrationKey: string;
-  clientKeys: Record<string, string>;
-  requireClientInstanceKeys: boolean;
   requireHttpsEndpoints: boolean;
   workerHeartbeatIntervalMs: number;
   workerHeartbeatTimeoutMs: number;
@@ -104,35 +102,6 @@ function readPersistenceDriver(): CoordinatorPersistenceDriver {
   return value;
 }
 
-function readKeyMap(name: string): Record<string, string> {
-  const raw = process.env[name]?.trim();
-
-  if (!raw) {
-    return {};
-  }
-
-  const result: Record<string, string> = {};
-
-  for (const entry of raw.split(",")) {
-    const separatorIndex = entry.indexOf("=");
-
-    if (separatorIndex <= 0) {
-      throw new Error(`${name} entries must use id=secret format`);
-    }
-
-    const id = entry.slice(0, separatorIndex).trim();
-    const secret = entry.slice(separatorIndex + 1).trim();
-
-    if (!id || !secret) {
-      throw new Error(`${name} entries must include non-empty id and secret`);
-    }
-
-    result[id] = secret;
-  }
-
-  return result;
-}
-
 export function loadCoordinatorConfig(): CoordinatorConfig {
   const port = readNumber("COORDINATOR_PORT", 3000);
 
@@ -189,11 +158,6 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
     clientRegistrationKey: readString(
       "CLIENT_REGISTRATION_KEY",
       "dev-client-registration-key",
-    ),
-    clientKeys: readKeyMap("CLIENT_KEYS"),
-    requireClientInstanceKeys: readBoolean(
-      "REQUIRE_CLIENT_INSTANCE_KEYS",
-      false,
     ),
     requireHttpsEndpoints: readBoolean("REQUIRE_HTTPS_ENDPOINTS", false),
     workerHeartbeatIntervalMs: readNumber(

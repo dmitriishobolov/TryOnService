@@ -23,6 +23,9 @@ tmp/
 temp/
 .cache/
 
+# Local demo assets
+DemoPhotos/
+
 # OS/editor files
 .DS_Store
 Thumbs.db

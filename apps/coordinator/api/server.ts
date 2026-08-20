@@ -60,6 +60,7 @@ interface CoordinatorServerDeps {
   storageNodes: StorageRegistryStore;
   workerRegistrationGuard: IpBanGuard;
   storageRegistrationGuard: IpBanGuard;
+  clientRegistrationGuard: IpBanGuard;
   scheduler: Scheduler;
 }
 
@@ -72,6 +73,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
     storageNodes,
     workerRegistrationGuard,
     storageRegistrationGuard,
+    clientRegistrationGuard,
     scheduler,
   } = deps;
   const rateLimiter = new FixedWindowRateLimiter(
@@ -468,10 +470,42 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
       }
 
       if (request.method === "POST" && url.pathname === "/clients/register") {
+        const ipAddress = resolveDirectRequestAddress(request);
+
+        if (clientRegistrationGuard.isBanned(ipAddress)) {
+          writeError(
+            response,
+            403,
+            "client_registration_ip_banned",
+            "Client registration source IP is banned until coordinator restart",
+          );
+          return;
+        }
+
         if (!hasClientKey(request.headers["x-client-key"], config)) {
+          const attempt = clientRegistrationGuard.registerFailure(ipAddress);
+
+          if (attempt.banned) {
+            console.warn(
+              `[coordinator] Client registration IP ${ipAddress} banned after ${attempt.failedAttempts} invalid key attempts`,
+            );
+            writeError(
+              response,
+              403,
+              "client_registration_ip_banned",
+              "Client registration source IP is banned until coordinator restart",
+            );
+            return;
+          }
+
+          console.warn(
+            `[coordinator] Invalid client registration key from ${ipAddress}; attempt ${attempt.failedAttempts}/${config.clientRegistrationMaxInvalidAttempts}`,
+          );
           writeError(response, 401, "unauthorized_client", "Invalid client key");
           return;
         }
+
+        clientRegistrationGuard.clear(ipAddress);
 
         const body = await readJsonBody(request, {
           maxBytes: config.maxJsonBodyBytes,

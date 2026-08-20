@@ -17,6 +17,7 @@
 - `STORAGE_ACCESS_SIGNING_KEY` - секрет подписи storage-access token для прямой связи client/worker -> storage-node.
 - `STORAGE_REGISTRATION_MAX_INVALID_ATTEMPTS` - лимит неверных storage registration ключей с одного IP до бана.
 - `CLIENT_REGISTRATION_KEY` - ключ, по которому service client регистрируется в coordinator.
+- `CLIENT_REGISTRATION_MAX_INVALID_ATTEMPTS` - лимит неверных client registration ключей с одного IP до бана.
 - `WORKER_HEARTBEAT_INTERVAL_MS` - интервал heartbeat worker'ов.
 - `WORKER_HEARTBEAT_TIMEOUT_MS` - время, после которого worker считается недоступным.
 - `CLIENT_HEARTBEAT_INTERVAL_MS` - интервал heartbeat service clients.

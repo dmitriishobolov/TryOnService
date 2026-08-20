@@ -18,6 +18,9 @@ const workerRegistrationGuard = new IpBanGuard(
 const storageRegistrationGuard = new IpBanGuard(
   config.storageRegistrationMaxInvalidAttempts,
 );
+const clientRegistrationGuard = new IpBanGuard(
+  config.clientRegistrationMaxInvalidAttempts,
+);
 const scheduler = new Scheduler(config, jobs, workers, cancelWorkerJobById);
 const server = createCoordinatorServer({
   config,
@@ -27,6 +30,7 @@ const server = createCoordinatorServer({
   storageNodes,
   workerRegistrationGuard,
   storageRegistrationGuard,
+  clientRegistrationGuard,
   scheduler,
 });
 

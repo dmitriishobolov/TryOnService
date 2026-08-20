@@ -19,7 +19,7 @@ export class IpBanGuard {
     const previous = this.records.get(ipAddress);
     const now = new Date().toISOString();
     const failedAttempts = (previous?.failedAttempts ?? 0) + 1;
-    const banned = previous?.banned || failedAttempts > this.maxInvalidAttempts;
+    const banned = previous?.banned || failedAttempts >= this.maxInvalidAttempts;
     const record: IpBanRecord = {
       ipAddress,
       failedAttempts,

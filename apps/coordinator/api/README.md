@@ -68,6 +68,8 @@ Dispatch token подписан `WORKER_DISPATCH_SIGNING_KEY`, но сам се�
 
 `POST /storage/register` использует такую же схему с `x-storage-registration-key` и лимитом `STORAGE_REGISTRATION_MAX_INVALID_ATTEMPTS`. Заблокированный IP получает `403 storage_registration_ip_banned` до перезапуска coordinator.
 
+`POST /clients/register` также считает неверные `x-client-key` по direct remote IP. После `CLIENT_REGISTRATION_MAX_INVALID_ATTEMPTS` неверных попыток IP получает `403 client_registration_ip_banned` до перезапуска coordinator.
+
 Для бана используется socket remote address, а не `x-forwarded-for`. Заголовки `x-forwarded-for` и `x-real-ip` используются отдельно, только когда coordinator собирает публичный endpoint зарегистрированного worker/client.
 
 ## Ключи и лимиты

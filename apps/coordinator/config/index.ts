@@ -22,6 +22,7 @@ export interface CoordinatorConfig {
   adminApiKey: string;
   workerRegistrationMaxInvalidAttempts: number;
   storageRegistrationMaxInvalidAttempts: number;
+  clientRegistrationMaxInvalidAttempts: number;
   clientRegistrationKey: string;
   workerHeartbeatIntervalMs: number;
   workerHeartbeatTimeoutMs: number;
@@ -132,6 +133,10 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
     ),
     storageRegistrationMaxInvalidAttempts: readNumber(
       "STORAGE_REGISTRATION_MAX_INVALID_ATTEMPTS",
+      5,
+    ),
+    clientRegistrationMaxInvalidAttempts: readNumber(
+      "CLIENT_REGISTRATION_MAX_INVALID_ATTEMPTS",
       5,
     ),
     clientRegistrationKey: readString(

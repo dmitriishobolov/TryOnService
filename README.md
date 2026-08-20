@@ -12,7 +12,7 @@ TryOnService - сервис примерки на базе AI API. Проект 
 - object storage node регистрируется в coordinator по отдельному ключу, отправляет heartbeat и принимает прямой upload/download от клиентов и worker'ов по короткоживущему signed storage token;
 - worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat с учетом running jobs и pending assignments, принимает jobs напрямую от клиентов только после prepare от coordinator;
 - Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, получает assignment, отправляет job worker'у напрямую и выводит пользователю ответ worker'а;
-- coordinator защищает регистрацию worker'ов и storage-node от перебора ключа: после превышения лимита неверных попыток IP блокируется до перезапуска coordinator;
+- coordinator защищает регистрацию worker'ов, service clients и storage-node от перебора ключа: после достижения лимита неверных попыток IP блокируется до перезапуска coordinator;
 - registration, service-to-service, dispatch token, client callback и admin/debug доступ используют разные ключи;
 - HTTP API имеют лимиты размера JSON body, базовый rate limit и timeout/retry для исходящих service calls;
 - coordinator умеет работать с `memory` или `postgres` persistence backend;
@@ -92,6 +92,7 @@ Coordinator:
 - чистит просроченные assignments и освобождает capacity worker'а;
 - пытается отменять pending assignment на worker-е, если assignment истек или service client пропал;
 - блокирует IP, которые пытаются подобрать `WORKER_REGISTRATION_KEY` через регистрацию worker'а;
+- блокирует IP, которые пытаются подобрать `CLIENT_REGISTRATION_KEY` через регистрацию service client;
 - блокирует IP, которые пытаются подобрать `STORAGE_REGISTRATION_KEY` через регистрацию storage-node.
 
 Object storage node:
@@ -182,7 +183,7 @@ npm run dev:telegram
 
 Клиент не может подставить произвольный `callbackUrl` при создании job. Coordinator всегда берет callback URL из registry по `sourceClientId`, поэтому `POST /jobs` требует зарегистрированный и ready service client.
 
-Для worker и storage registration есть in-memory защита от перебора: если один direct remote IP отправит больше лимита неверных ключей в `POST /workers/register` или `POST /storage/register`, coordinator вернет `403 ..._ip_banned` и будет держать этот IP в бане до перезапуска процесса.
+Для worker, client и storage registration есть in-memory защита от перебора: если один direct remote IP достигнет лимита неверных ключей в `POST /workers/register`, `POST /clients/register` или `POST /storage/register`, coordinator вернет `403 ..._ip_banned` и будет держать этот IP в бане до перезапуска процесса.
 
 Адрес для бана берется из прямого socket remote address, а не из `x-forwarded-for`, чтобы атакующий не мог легко менять IP заголовком. `x-forwarded-for` и `x-real-ip` используются только для автоопределения публичного endpoint storage-node/worker/client при регистрации.
 
@@ -281,6 +282,7 @@ npm run build:dist
 - `WORKER_DISPATCH_SIGNING_KEY` - секрет подписи dispatch token для прямого client -> worker запроса.
 - `CLIENT_CALLBACK_SIGNING_KEY` - секрет подписи callback token для worker -> client результата.
 - `CLIENT_REGISTRATION_KEY` - ключ регистрации service clients в coordinator и создания jobs.
+- `CLIENT_REGISTRATION_MAX_INVALID_ATTEMPTS` - сколько неверных client registration-ключей с одного IP допускается до бана; по умолчанию `5`.
 - `ADMIN_API_KEY` - ключ доступа к debug/admin endpoints coordinator.
 - `WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS` - сколько неверных registration-ключей с одного IP допускается до бана; по умолчанию `5`.
 - `STORAGE_REGISTRATION_KEY` - ключ регистрации storage-node в coordinator.

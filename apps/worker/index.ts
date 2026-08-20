@@ -1,3 +1,5 @@
+import "dotenv/config";
+
 import { CoordinatorClient } from "./api/coordinatorClient.js";
 import { createWorkerServer } from "./api/server.js";
 import { loadWorkerConfig } from "./config/index.js";

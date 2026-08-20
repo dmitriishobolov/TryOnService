@@ -1,3 +1,5 @@
+import "dotenv/config";
+
 import { createCoordinatorServer } from "./api/server.js";
 import { loadCoordinatorConfig } from "./config/index.js";
 import { InMemoryJobStore } from "./jobs/store.js";

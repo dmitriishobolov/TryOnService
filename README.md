@@ -73,6 +73,12 @@ Shared:
 npm install
 ```
 
+Создайте локальный `.env` из примера и заполните токен Telegram-бота:
+
+```powershell
+Copy-Item .env.example .env
+```
+
 Запустите coordinator:
 
 ```bash
@@ -87,8 +93,7 @@ npm run dev:worker
 
 В отдельном терминале запустите Telegram client:
 
-```powershell
-$env:TELEGRAM_BOT_TOKEN="your-telegram-bot-token"
+```bash
 npm run dev:telegram
 ```
 

@@ -1,3 +1,5 @@
+import "dotenv/config";
+
 import { TelegramBot } from "./bot.js";
 import { createTelegramCallbackServer } from "./callbackServer.js";
 import { loadTelegramClientConfig } from "./config.js";

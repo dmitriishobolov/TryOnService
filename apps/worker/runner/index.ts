@@ -6,7 +6,8 @@ import type {
 import { postJson } from "../../shared/http.js";
 import type { CoordinatorClient } from "../api/coordinatorClient.js";
 import type { WorkerConfig } from "../config/index.js";
-import { runMockTryOnModel } from "../models/mockTryOnModel.js";
+import { runSelectedTryOnModel } from "../models/index.js";
+import { TryOnModelError } from "../models/providerUtils.js";
 
 export async function runWorkerJob(
   job: WorkerJobRequest,
@@ -22,7 +23,12 @@ export async function runWorkerJob(
   });
 
   try {
-    const result = await runMockTryOnModel(config.mockProcessingDelayMs, signal);
+    const result = await runSelectedTryOnModel({
+      job,
+      config,
+      coordinator,
+      signal,
+    });
     let deliveryError: unknown;
 
     if (job.callbackUrl) {
@@ -72,13 +78,17 @@ export async function runWorkerJob(
     const wasCancelled =
       error instanceof Error &&
       (error.name === "AbortError" || signal?.aborted === true);
+    const modelError = error instanceof TryOnModelError ? error : undefined;
     const update: JobResultUpdateRequest = {
       jobId: job.jobId,
       status: wasCancelled ? "cancelled" : "failed",
       error: {
-        code: wasCancelled ? "worker_job_cancelled" : "worker_processing_failed",
+        code:
+          wasCancelled
+            ? "worker_job_cancelled"
+            : modelError?.code ?? "worker_processing_failed",
         message: error instanceof Error ? error.message : "Worker processing failed",
-        retryable: !wasCancelled,
+        retryable: wasCancelled ? false : modelError?.retryable ?? true,
       },
     };
 

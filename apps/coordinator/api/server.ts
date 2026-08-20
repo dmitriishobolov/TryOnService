@@ -1460,7 +1460,7 @@ function cancelWorkerAssignment(
 
 function resolveRequiredCapabilities(request: CreateTryOnJobRequest): string[] {
   if (request.payload.command === "request") {
-    return ["try-on.mock"];
+    return ["try-on"];
   }
 
   return [];

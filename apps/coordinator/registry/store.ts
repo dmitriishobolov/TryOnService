@@ -114,6 +114,10 @@ export class WorkerRegistry {
     return [...this.workers.values()];
   }
 
+  get(workerId: string): RegisteredWorker | undefined {
+    return this.workers.get(workerId);
+  }
+
   findAvailable(
     heartbeatTimeoutMs: number,
     requiredCapabilities: string[] = [],

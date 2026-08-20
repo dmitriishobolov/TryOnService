@@ -9,11 +9,13 @@ import {
 } from "../../shared/contracts/index.js";
 import { verifyDispatchToken } from "../../shared/dispatchToken.js";
 import {
+  writeCaughtError,
   readJsonBody,
   requestUrl,
   writeError,
   writeJson,
 } from "../../shared/http.js";
+import { FixedWindowRateLimiter } from "../../shared/rateLimit.js";
 import type { WorkerConfig } from "../config/index.js";
 import { runWorkerJob } from "../runner/index.js";
 import type { WorkerAssignmentStore } from "./assignmentStore.js";
@@ -39,12 +41,30 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
     incrementRunningJobs,
     decrementRunningJobs,
   } = deps;
+  const rateLimiter = new FixedWindowRateLimiter(
+    config.apiRateLimitMaxRequests,
+    config.apiRateLimitWindowMs,
+  );
+  setInterval(() => {
+    rateLimiter.cleanup();
+  }, config.apiRateLimitWindowMs).unref();
 
   return createServer(async (request, response) => {
     const url = requestUrl(request);
+    const rateLimit = rateLimiter.consume(resolveDirectRequestAddress(request));
 
     try {
+      if (!rateLimit.allowed) {
+        writeError(response, 429, "rate_limited", "Too many requests");
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/health") {
+        if (!hasWorkerServiceKey(request.headers["x-worker-service-key"], config)) {
+          writeError(response, 401, "unauthorized_worker", "Invalid worker key");
+          return;
+        }
+
         writeJson(response, 200, {
           status: "ok",
           workerId: config.workerId,
@@ -56,14 +76,16 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
       }
 
       if (request.method === "POST" && url.pathname === "/assignments") {
-        if (!hasWorkerKey(request.headers["x-worker-key"], config)) {
+        if (!hasWorkerServiceKey(request.headers["x-worker-service-key"], config)) {
           writeError(response, 401, "unauthorized_worker", "Invalid worker key");
           return;
         }
 
         assignments.cleanupExpired();
 
-        const body = await readJsonBody(request);
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
 
         if (!isWorkerAssignmentPrepareRequest(body)) {
           writeError(
@@ -111,10 +133,31 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
         return;
       }
 
+      const cancelMatch = /^\/jobs\/([^/]+)\/cancel$/.exec(url.pathname);
+
+      if (request.method === "POST" && cancelMatch) {
+        if (!hasWorkerServiceKey(request.headers["x-worker-service-key"], config)) {
+          writeError(response, 401, "unauthorized_worker", "Invalid worker key");
+          return;
+        }
+
+        const cancelled = assignments.cancel(cancelMatch[1]);
+
+        writeJson(response, 200, {
+          ok: true,
+          jobId: cancelMatch[1],
+          cancelledPending: Boolean(cancelled),
+          runningCancellationSupported: false,
+        });
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/jobs") {
         assignments.cleanupExpired();
 
-        const body = await readJsonBody(request);
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
 
         if (!isWorkerJobRequest(body)) {
           writeError(response, 400, "invalid_worker_job", "Invalid worker job payload");
@@ -167,7 +210,7 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
         assignments.consume(body.jobId);
         incrementRunningJobs();
 
-        void runWorkerJob(body, config, coordinator)
+        void runWorkerJob(body, config, coordinator, assignment.callbackToken)
           .catch((error) => {
             console.error(`[worker] Job ${body.jobId} failed`, error);
           })
@@ -190,18 +233,18 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
       writeError(response, 404, "not_found", "Route not found");
     } catch (error) {
       console.error("[worker] Unhandled request error", error);
-      writeError(response, 500, "internal_error", "Internal server error");
+      writeCaughtError(response, error);
     }
   });
 }
 
-function hasWorkerKey(
+function hasWorkerServiceKey(
   headerValue: string | string[] | undefined,
   config: WorkerConfig,
 ): boolean {
   const value = Array.isArray(headerValue) ? headerValue[0] : headerValue;
 
-  return value === config.registrationKey;
+  return value === config.serviceKey;
 }
 
 function hasWorkerJobAccess(
@@ -209,15 +252,12 @@ function hasWorkerJobAccess(
   jobId: string,
   config: WorkerConfig,
 ): boolean {
-  if (hasWorkerKey(headers["x-worker-key"], config)) {
-    return true;
-  }
-
   const token = firstHeaderValue(headers["x-job-dispatch-token"]);
-  const verification = verifyDispatchToken(token, config.registrationKey);
+  const verification = verifyDispatchToken(token, config.dispatchSigningKey);
 
   return (
     verification.valid &&
+    verification.payload?.purpose === "worker-dispatch" &&
     verification.payload?.jobId === jobId &&
     verification.payload.workerId === config.workerId
   );
@@ -225,6 +265,12 @@ function hasWorkerJobAccess(
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function resolveDirectRequestAddress(request: {
+  socket: { remoteAddress?: string };
+}): string {
+  return request.socket.remoteAddress ?? "unknown";
 }
 
 function hasRequiredCapabilities(

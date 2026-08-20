@@ -9,6 +9,10 @@ export interface CoordinatorConfig {
   port: number;
   publicUrl: string;
   workerRegistrationKey: string;
+  workerServiceKey: string;
+  workerDispatchSigningKey: string;
+  clientCallbackSigningKey: string;
+  adminApiKey: string;
   workerRegistrationMaxInvalidAttempts: number;
   clientRegistrationKey: string;
   workerHeartbeatIntervalMs: number;
@@ -17,7 +21,13 @@ export interface CoordinatorConfig {
   clientHeartbeatTimeoutMs: number;
   schedulerIntervalMs: number;
   workerDispatchTokenTtlMs: number;
+  clientCallbackTokenTtlMs: number;
   jobAssignmentTimeoutMs: number;
+  apiRateLimitWindowMs: number;
+  apiRateLimitMaxRequests: number;
+  httpClientTimeoutMs: number;
+  httpClientRetries: number;
+  maxJsonBodyBytes: number;
 }
 
 function readNumber(name: string, fallback: number): number {
@@ -50,6 +60,16 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
       "WORKER_REGISTRATION_KEY",
       "dev-worker-registration-key",
     ),
+    workerServiceKey: readString("WORKER_SERVICE_KEY", "dev-worker-service-key"),
+    workerDispatchSigningKey: readString(
+      "WORKER_DISPATCH_SIGNING_KEY",
+      "dev-worker-dispatch-signing-key",
+    ),
+    clientCallbackSigningKey: readString(
+      "CLIENT_CALLBACK_SIGNING_KEY",
+      "dev-client-callback-signing-key",
+    ),
+    adminApiKey: readString("ADMIN_API_KEY", "dev-admin-key"),
     workerRegistrationMaxInvalidAttempts: readNumber(
       "WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS",
       5,
@@ -76,6 +96,12 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
     ),
     schedulerIntervalMs: readNumber("SCHEDULER_INTERVAL_MS", 1_000),
     workerDispatchTokenTtlMs: readNumber("WORKER_DISPATCH_TOKEN_TTL_MS", 30_000),
+    clientCallbackTokenTtlMs: readNumber("CLIENT_CALLBACK_TOKEN_TTL_MS", 900_000),
     jobAssignmentTimeoutMs: readNumber("JOB_ASSIGNMENT_TIMEOUT_MS", 30_000),
+    apiRateLimitWindowMs: readNumber("API_RATE_LIMIT_WINDOW_MS", 60_000),
+    apiRateLimitMaxRequests: readNumber("API_RATE_LIMIT_MAX_REQUESTS", 120),
+    httpClientTimeoutMs: readNumber("HTTP_CLIENT_TIMEOUT_MS", 5_000),
+    httpClientRetries: readNumber("HTTP_CLIENT_RETRIES", 1),
+    maxJsonBodyBytes: readNumber("MAX_JSON_BODY_BYTES", 1_048_576),
   };
 }

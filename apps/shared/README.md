@@ -9,9 +9,10 @@
 ## Файлы верхнего уровня
 
 - `env.ts` - простой загрузчик `.env` без внешней runtime-зависимости.
-- `http.ts` - JSON helpers, единый формат API errors и `postJson`.
+- `http.ts` - JSON helpers, единый формат API errors, лимит чтения body и `postJson` с timeout/retry.
 - `net.ts` - подбор ближайшего свободного порта для сервисов, которые слушают HTTP callback/API.
-- `dispatchToken.ts` - создание и проверка signed token для прямой отправки job от client к worker.
+- `dispatchToken.ts` - создание и проверка signed token для dispatch и callback flows.
+- `rateLimit.ts` - простой in-memory fixed-window rate limiter для HTTP endpoints.
 
 ## Что хранить в shared
 
@@ -20,7 +21,7 @@
 - DTO для API coordinator и worker;
 - схемы runtime-валидации;
 - общие ошибки и коды ошибок;
-- небольшие общие helpers, если они действительно нужны нескольким приложениям, например port discovery.
+- небольшие общие helpers, если они действительно нужны нескольким приложениям, например port discovery, HTTP helpers или token signing.
 
 ## Правила
 

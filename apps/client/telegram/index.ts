@@ -21,9 +21,9 @@ if (selectedPort !== config.port) {
 }
 
 const coordinator = new TelegramCoordinatorClient(config);
-const worker = new TelegramWorkerClient();
+const worker = new TelegramWorkerClient(config);
 const bot = new TelegramBot(config, coordinator, worker);
-const callbackServer = createTelegramCallbackServer(bot);
+const callbackServer = createTelegramCallbackServer(bot, config);
 let isRegistered = false;
 
 await listen(callbackServer, config.port);

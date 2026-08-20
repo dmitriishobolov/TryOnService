@@ -12,6 +12,7 @@ export async function runWorkerJob(
   job: WorkerJobRequest,
   config: WorkerConfig,
   coordinator: CoordinatorClient,
+  callbackToken?: string,
 ): Promise<void> {
   await coordinator.reportProgress({
     jobId: job.jobId,
@@ -29,7 +30,15 @@ export async function runWorkerJob(
         result,
       };
 
-      await postJson(job.callbackUrl, callback);
+      await postJson(
+        job.callbackUrl,
+        callback,
+        callbackToken ? { "x-client-callback-token": callbackToken } : {},
+        {
+          retries: config.httpClientRetries,
+          timeoutMs: config.httpClientTimeoutMs,
+        },
+      );
     }
 
     const update: JobResultUpdateRequest = {

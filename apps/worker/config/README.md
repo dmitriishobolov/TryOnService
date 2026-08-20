@@ -12,8 +12,15 @@
 - `WORKER_CAPABILITIES` - список поддерживаемых моделей или пайплайнов.
 - `COORDINATOR_URL` - адрес coordinator API.
 - `WORKER_REGISTRATION_KEY` - ключ для регистрации в coordinator.
+- `WORKER_SERVICE_KEY` - ключ для heartbeat, progress/result и приема prepare/cancel от coordinator.
+- `WORKER_DISPATCH_SIGNING_KEY` - секрет проверки dispatch token, который coordinator выдал клиенту.
 - `WORKER_HEARTBEAT_INTERVAL_MS` - интервал heartbeat worker'а.
 - `MOCK_PROCESSING_DELAY_MS` - задержка mock AI model для локальной проверки.
+- `API_RATE_LIMIT_WINDOW_MS` - окно входящего rate limit.
+- `API_RATE_LIMIT_MAX_REQUESTS` - максимум входящих запросов с одного IP за окно.
+- `HTTP_CLIENT_TIMEOUT_MS` - timeout исходящих HTTP-вызовов worker.
+- `HTTP_CLIENT_RETRIES` - количество повторов исходящих HTTP-вызовов worker.
+- `MAX_JSON_BODY_BYTES` - максимальный размер JSON body входящего запроса.
 
 AI provider keys и директории временных файлов появятся здесь, когда runner начнет работать с реальными изображениями и внешними AI API.
 

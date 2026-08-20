@@ -25,7 +25,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 4. Coordinator находит callback URL Telegram client, выбирает worker и отправляет worker-у prepare по этой job.
 5. Coordinator возвращает signed dispatch token только после подтверждения worker prepare.
 6. Telegram client отправляет `workerRequest` напрямую выбранному worker'у.
-7. Worker обрабатывает job и отправляет callback в `POST /callbacks/jobs`.
+7. Worker обрабатывает job и отправляет callback в `POST /callbacks/jobs` с `x-client-callback-token`.
 8. Telegram client отправляет пользователю сообщение `Ответ от сервера.`.
 
 ## Реализовано сейчас
@@ -34,11 +34,13 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - `/request` или кнопка `Request` создают assignment в coordinator и отправляют job worker'у напрямую.
 - client registration и heartbeat в coordinator.
 - автоматический выбор ближайшего свободного callback-порта.
-- `POST /callbacks/jobs` принимает ответ worker'а и отправляет пользователю текст результата.
+- `POST /callbacks/jobs` проверяет signed callback token по `CLIENT_CALLBACK_SIGNING_KEY`, принимает ответ worker'а и отправляет пользователю текст результата.
 
 ## Правила
 
 - Telegram client не вызывает AI API напрямую.
 - Долгие операции должны выполняться worker'ом, а не процессом бота.
 - Токен Telegram-бота хранится только в окружении.
+- `CLIENT_REGISTRATION_KEY` защищает регистрацию клиента и создание assignment в coordinator.
+- `CLIENT_CALLBACK_SIGNING_KEY` должен совпадать с coordinator, иначе callback от worker будет отклонен.
 - Все payload'ы к coordinator должны соответствовать контрактам из `apps/shared`.

@@ -29,31 +29,33 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 2. Request валидируется через контракты из `apps/shared`.
 3. Coordinator находит callback URL зарегистрированного service client, если запрос пришел с `sourceClientId`.
 4. Coordinator выбирает доступный worker из `registry`, резервирует его capacity и создает job со статусом `assigned`.
-5. Coordinator вызывает `POST /assignments` выбранного worker'а, чтобы подготовить будущий client dispatch.
-6. API возвращает клиенту `job`, `worker` и готовый `workerRequest` с signed dispatch token.
+5. Coordinator вызывает `POST /assignments` выбранного worker'а по `WORKER_SERVICE_KEY`, чтобы подготовить будущий client dispatch и передать worker-у signed callback token.
+6. API возвращает клиенту `job`, `worker` и готовый `workerRequest` с signed dispatch token. Callback token клиенту не возвращается.
 7. Client отправляет `workerRequest` напрямую worker'у, worker затем сообщает progress/result status обратно в coordinator.
 
 ## Реализованные endpoints
 
-- `GET /health` - статус coordinator, worker'ы, service clients и количество queued jobs.
-- `GET /jobs` - список jobs в in-memory storage.
-- `GET /jobs/:id` - состояние конкретной job.
-- `POST /jobs` - создание job assignment клиентом; возвращает выбранный worker endpoint, `workerRequest` и dispatch token.
-- `POST /clients/register` - регистрация service client.
-- `POST /clients/:clientId/heartbeat` - heartbeat service client.
-- `POST /workers/register` - регистрация worker'а.
-- `POST /workers/:workerId/heartbeat` - heartbeat worker'а.
-- `POST /jobs/:jobId/progress` - обновление прогресса от worker'а.
-- `POST /jobs/:jobId/result` - финальный status от worker'а; клиентский результат не обязан попадать в coordinator.
+- `GET /health` - статус coordinator, worker'ы, service clients и количество queued jobs; требует `x-admin-key`.
+- `GET /jobs` - список jobs в in-memory storage; требует `x-admin-key`.
+- `GET /jobs/:id` - состояние конкретной job; требует `x-admin-key`.
+- `POST /jobs` - создание job assignment зарегистрированным клиентом; требует `x-client-key`, валидный `sourceClientId`, возвращает выбранный worker endpoint, `workerRequest` и dispatch token.
+- `POST /clients/register` - регистрация service client; требует `x-client-key`.
+- `POST /clients/:clientId/heartbeat` - heartbeat service client; требует `x-client-key`.
+- `POST /workers/register` - регистрация worker'а; требует `x-worker-registration-key`.
+- `POST /workers/:workerId/heartbeat` - heartbeat worker'а; требует `x-worker-service-key`.
+- `POST /jobs/:jobId/progress` - обновление прогресса от worker'а; требует `x-worker-service-key`.
+- `POST /jobs/:jobId/result` - финальный status от worker'а; требует `x-worker-service-key`; клиентский результат не обязан попадать в coordinator.
 
 ## Что важно сохранить
 
 - Coordinator является источником правды по состоянию jobs.
 - Coordinator не должен быть data-plane для клиентских результатов: результат идет worker -> client callback.
 - Перед выдачей worker клиенту coordinator должен подготовить pending assignment на worker-е.
-- Регистрация worker'ов должна быть защищена ключом.
+- `callbackUrl` при создании job не должен доверяться клиентскому payload: coordinator берет его только из registry зарегистрированного service client.
+- Регистрация worker'ов должна быть защищена отдельным registration key.
+- Служебное общение worker/coordinator должно быть защищено отдельным service key.
 - Неверные попытки регистрации worker'а считаются по IP и после лимита переводят IP в ban до перезапуска coordinator.
 - Регистрация service clients должна быть защищена отдельным ключом.
 - Недоступный worker должен автоматически выпадать из активного пула после пропущенных heartbeat.
-- Активные jobs упавшего worker'а или service client должны переводиться в `failed`, чтобы capacity сети не зависала.
+- Активные jobs упавшего worker'а или service client должны переводиться в `failed`, а pending assignment на worker-е должен отменяться, когда это возможно.
 - Повторные запросы worker'а на обновление статуса должны обрабатываться идемпотентно.

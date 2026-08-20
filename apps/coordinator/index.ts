@@ -1,4 +1,6 @@
 import { loadEnvFile } from "../shared/env.js";
+import { postJson } from "../shared/http.js";
+import type { RegisteredWorker } from "../shared/contracts/index.js";
 import { createCoordinatorServer } from "./api/server.js";
 import { loadCoordinatorConfig } from "./config/index.js";
 import { InMemoryJobStore } from "./jobs/store.js";
@@ -16,7 +18,7 @@ const clients = new ClientRegistry();
 const workerRegistrationGuard = new IpBanGuard(
   config.workerRegistrationMaxInvalidAttempts,
 );
-const scheduler = new Scheduler(config, jobs, workers);
+const scheduler = new Scheduler(config, jobs, workers, cancelWorkerJobById);
 const server = createCoordinatorServer({
   config,
   jobs,
@@ -65,6 +67,17 @@ setInterval(() => {
 
     for (const job of jobs.findActiveBySourceClient(client.clientId)) {
       if (job.assignedWorkerId) {
+        const worker = workers.get(job.assignedWorkerId);
+
+        if (worker) {
+          void cancelWorkerJob(worker, job.id).catch((error) => {
+            console.error(
+              `[coordinator] Failed to cancel job ${job.id} on worker ${worker.workerId} after client offline`,
+              error,
+            );
+          });
+        }
+
         workers.release(job.assignedWorkerId);
       }
 
@@ -83,3 +96,30 @@ setInterval(() => {
 setInterval(() => {
   void scheduler.schedule();
 }, config.schedulerIntervalMs);
+
+async function cancelWorkerJobById(
+  workerId: string,
+  jobId: string,
+): Promise<void> {
+  const worker = workers.get(workerId);
+
+  if (!worker) {
+    return;
+  }
+
+  await cancelWorkerJob(worker, jobId);
+}
+
+function cancelWorkerJob(worker: RegisteredWorker, jobId: string): Promise<unknown> {
+  return postJson(
+    `${worker.baseUrl}/jobs/${jobId}/cancel`,
+    {},
+    {
+      "x-worker-service-key": config.workerServiceKey,
+    },
+    {
+      retries: config.httpClientRetries,
+      timeoutMs: config.httpClientTimeoutMs,
+    },
+  );
+}

@@ -1,8 +1,12 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+export type SignedTokenPurpose = "worker-dispatch" | "client-callback";
+
 export interface DispatchTokenPayload {
+  purpose: SignedTokenPurpose;
   jobId: string;
-  workerId: string;
+  workerId?: string;
+  clientId?: string;
   expiresAt: string;
 }
 
@@ -81,8 +85,11 @@ function decodePayload(value: string): DispatchTokenPayload | undefined {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
 
     if (
+      (parsed?.purpose !== "worker-dispatch" &&
+        parsed?.purpose !== "client-callback") ||
       typeof parsed?.jobId !== "string" ||
-      typeof parsed.workerId !== "string" ||
+      (parsed.workerId !== undefined && typeof parsed.workerId !== "string") ||
+      (parsed.clientId !== undefined && typeof parsed.clientId !== "string") ||
       typeof parsed.expiresAt !== "string"
     ) {
       return undefined;

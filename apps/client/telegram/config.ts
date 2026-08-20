@@ -11,9 +11,15 @@ export interface TelegramClientConfig {
   publicUrl?: string;
   coordinatorUrl: string;
   registrationKey: string;
+  callbackSigningKey: string;
   botToken: string;
   heartbeatIntervalMs: number;
   pollingTimeoutSeconds: number;
+  httpClientTimeoutMs: number;
+  httpClientRetries: number;
+  apiRateLimitWindowMs: number;
+  apiRateLimitMaxRequests: number;
+  maxJsonBodyBytes: number;
 }
 
 function readNumber(name: string, fallback: number): number {
@@ -74,11 +80,20 @@ export function loadTelegramClientConfig(): TelegramClientConfig {
       "CLIENT_REGISTRATION_KEY",
       "dev-client-registration-key",
     ),
+    callbackSigningKey: readString(
+      "CLIENT_CALLBACK_SIGNING_KEY",
+      "dev-client-callback-signing-key",
+    ),
     botToken: readRequiredString("TELEGRAM_BOT_TOKEN"),
     heartbeatIntervalMs: readNumber(
       "CLIENT_HEARTBEAT_INTERVAL_MS",
       CLIENT_HEARTBEAT_INTERVAL_MS,
     ),
     pollingTimeoutSeconds: readNumber("TELEGRAM_POLLING_TIMEOUT_SECONDS", 25),
+    httpClientTimeoutMs: readNumber("HTTP_CLIENT_TIMEOUT_MS", 5_000),
+    httpClientRetries: readNumber("HTTP_CLIENT_RETRIES", 1),
+    apiRateLimitWindowMs: readNumber("API_RATE_LIMIT_WINDOW_MS", 60_000),
+    apiRateLimitMaxRequests: readNumber("API_RATE_LIMIT_MAX_REQUESTS", 120),
+    maxJsonBodyBytes: readNumber("MAX_JSON_BODY_BYTES", 1_048_576),
   };
 }

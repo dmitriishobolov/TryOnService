@@ -24,7 +24,8 @@ export class CoordinatorClient {
     return postJson<WorkerRegistrationResponse>(
       `${this.config.coordinatorUrl}/workers/register`,
       payload,
-      this.headers(),
+      this.registrationHeaders(),
+      this.postOptions(),
     );
   }
 
@@ -39,7 +40,8 @@ export class CoordinatorClient {
     return postJson(
       `${this.config.coordinatorUrl}/workers/${this.config.workerId}/heartbeat`,
       payload,
-      this.headers(),
+      this.serviceHeaders(),
+      this.postOptions(),
     );
   }
 
@@ -47,17 +49,36 @@ export class CoordinatorClient {
     return postJson(
       updateUrl(update.jobId, "progress", this.config),
       update,
-      this.headers(),
+      this.serviceHeaders(),
+      this.postOptions(),
     );
   }
 
   reportResult(update: JobResultUpdateRequest): Promise<unknown> {
-    return postJson(updateUrl(update.jobId, "result", this.config), update, this.headers());
+    return postJson(
+      updateUrl(update.jobId, "result", this.config),
+      update,
+      this.serviceHeaders(),
+      this.postOptions(),
+    );
   }
 
-  headers(): Record<string, string> {
+  registrationHeaders(): Record<string, string> {
     return {
-      "x-worker-key": this.config.registrationKey,
+      "x-worker-registration-key": this.config.registrationKey,
+    };
+  }
+
+  serviceHeaders(): Record<string, string> {
+    return {
+      "x-worker-service-key": this.config.serviceKey,
+    };
+  }
+
+  postOptions(): { retries: number; timeoutMs: number } {
+    return {
+      retries: this.config.httpClientRetries,
+      timeoutMs: this.config.httpClientTimeoutMs,
     };
   }
 }

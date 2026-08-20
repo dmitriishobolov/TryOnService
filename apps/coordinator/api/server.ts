@@ -22,12 +22,14 @@ import {
 } from "../../shared/contracts/index.js";
 import { createDispatchToken } from "../../shared/dispatchToken.js";
 import {
+  writeCaughtError,
   readJsonBody,
   postJson,
   requestUrl,
   writeError,
   writeJson,
 } from "../../shared/http.js";
+import { FixedWindowRateLimiter } from "../../shared/rateLimit.js";
 import type { CoordinatorConfig } from "../config/index.js";
 import type { InMemoryJobStore } from "../jobs/store.js";
 import type { ClientRegistry } from "../registry/clientStore.js";
@@ -51,12 +53,31 @@ interface CoordinatorServerDeps {
 export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
   const { config, jobs, workers, clients, workerRegistrationGuard, scheduler } =
     deps;
+  const rateLimiter = new FixedWindowRateLimiter(
+    config.apiRateLimitMaxRequests,
+    config.apiRateLimitWindowMs,
+  );
+  setInterval(() => {
+    rateLimiter.cleanup();
+  }, config.apiRateLimitWindowMs).unref();
 
   return createServer(async (request, response) => {
     const url = requestUrl(request);
+    const requesterIp = resolveDirectRequestAddress(request);
+    const rateLimit = rateLimiter.consume(requesterIp);
 
     try {
+      if (!rateLimit.allowed) {
+        writeError(response, 429, "rate_limited", "Too many requests");
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/health") {
+        if (!hasAdminKey(request.headers["x-admin-key"], config)) {
+          writeError(response, 401, "unauthorized_admin", "Invalid admin key");
+          return;
+        }
+
         writeJson(response, 200, {
           status: "ok",
           workers: workers.list(),
@@ -67,6 +88,11 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
       }
 
       if (request.method === "GET" && url.pathname === "/jobs") {
+        if (!hasAdminKey(request.headers["x-admin-key"], config)) {
+          writeError(response, 401, "unauthorized_admin", "Invalid admin key");
+          return;
+        }
+
         writeJson(response, 200, {
           jobs: jobs.list(),
         });
@@ -76,6 +102,11 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
       const getJobMatch = /^\/jobs\/([^/]+)$/.exec(url.pathname);
 
       if (request.method === "GET" && getJobMatch) {
+        if (!hasAdminKey(request.headers["x-admin-key"], config)) {
+          writeError(response, 401, "unauthorized_admin", "Invalid admin key");
+          return;
+        }
+
         const job = jobs.get(getJobMatch[1]);
 
         if (!job) {
@@ -88,18 +119,17 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
       }
 
       if (request.method === "POST" && url.pathname === "/jobs") {
-        const body = await readJsonBody(request);
-
-        if (!isCreateTryOnJobRequest(body)) {
-          writeError(response, 400, "invalid_job_request", "Invalid job payload");
+        if (!hasClientKey(request.headers["x-client-key"], config)) {
+          writeError(response, 401, "unauthorized_client", "Invalid client key");
           return;
         }
 
-        if (
-          body.sourceClientId &&
-          !hasClientKey(request.headers["x-client-key"], config)
-        ) {
-          writeError(response, 401, "unauthorized_client", "Invalid client key");
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
+
+        if (!isCreateTryOnJobRequest(body)) {
+          writeError(response, 400, "invalid_job_request", "Invalid job payload");
           return;
         }
 
@@ -146,6 +176,9 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         const dispatchTokenExpiresAt = new Date(
           Date.now() + config.workerDispatchTokenTtlMs,
         ).toISOString();
+        const callbackTokenExpiresAt = new Date(
+          Date.now() + config.clientCallbackTokenTtlMs,
+        ).toISOString();
         const job = jobs.createAssigned(
           requestWithCallback,
           reservedWorker.workerId,
@@ -158,11 +191,21 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         );
         const dispatchToken = createDispatchToken(
           {
+            purpose: "worker-dispatch",
             jobId: job.id,
             workerId: reservedWorker.workerId,
             expiresAt: dispatchTokenExpiresAt,
           },
-          config.workerRegistrationKey,
+          config.workerDispatchSigningKey,
+        );
+        const callbackToken = createDispatchToken(
+          {
+            purpose: "client-callback",
+            jobId: job.id,
+            clientId: requestWithCallback.sourceClientId,
+            expiresAt: callbackTokenExpiresAt,
+          },
+          config.clientCallbackSigningKey,
         );
 
         try {
@@ -172,6 +215,8 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
             requestWithCallback,
             requiredCapabilities,
             dispatchTokenExpiresAt,
+            callbackToken,
+            callbackTokenExpiresAt,
             config,
           );
 
@@ -180,6 +225,14 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           }
         } catch (error) {
           workers.release(reservedWorker.workerId);
+          void cancelWorkerAssignment(reservedWorker, job.id, config).catch(
+            (cancelError) => {
+              console.error(
+                `[coordinator] Failed to cancel prepared job ${job.id} on worker ${reservedWorker.workerId}`,
+                cancelError,
+              );
+            },
+          );
           jobs.markFailed(job.id, {
             code: "worker_prepare_failed",
             message:
@@ -223,7 +276,9 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        const body = await readJsonBody(request);
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
 
         if (!isClientRegistrationRequest(body)) {
           writeError(
@@ -257,7 +312,9 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        const body = await readJsonBody(request);
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
 
         if (
           !isClientHeartbeatRequest(body) ||
@@ -299,7 +356,12 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        if (!hasWorkerKey(request.headers["x-worker-key"], config)) {
+        if (
+          !hasWorkerRegistrationKey(
+            request.headers["x-worker-registration-key"],
+            config,
+          )
+        ) {
           const attempt = workerRegistrationGuard.registerFailure(ipAddress);
 
           if (attempt.banned) {
@@ -324,7 +386,9 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
 
         workerRegistrationGuard.clear(ipAddress);
 
-        const body = await readJsonBody(request);
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
 
         if (!isWorkerRegistrationRequest(body)) {
           writeError(
@@ -354,12 +418,14 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
       );
 
       if (request.method === "POST" && heartbeatMatch) {
-        if (!hasWorkerKey(request.headers["x-worker-key"], config)) {
+        if (!hasWorkerServiceKey(request.headers["x-worker-service-key"], config)) {
           writeError(response, 401, "unauthorized_worker", "Invalid worker key");
           return;
         }
 
-        const body = await readJsonBody(request);
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
 
         if (!isWorkerHeartbeatRequest(body) || body.workerId !== heartbeatMatch[1]) {
           writeError(
@@ -395,12 +461,14 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
       const progressMatch = /^\/jobs\/([^/]+)\/progress$/.exec(url.pathname);
 
       if (request.method === "POST" && progressMatch) {
-        if (!hasWorkerKey(request.headers["x-worker-key"], config)) {
+        if (!hasWorkerServiceKey(request.headers["x-worker-service-key"], config)) {
           writeError(response, 401, "unauthorized_worker", "Invalid worker key");
           return;
         }
 
-        const body = await readJsonBody(request);
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
 
         if (!isJobProgressUpdateRequest(body) || body.jobId !== progressMatch[1]) {
           writeError(
@@ -426,12 +494,14 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
       const resultMatch = /^\/jobs\/([^/]+)\/result$/.exec(url.pathname);
 
       if (request.method === "POST" && resultMatch) {
-        if (!hasWorkerKey(request.headers["x-worker-key"], config)) {
+        if (!hasWorkerServiceKey(request.headers["x-worker-service-key"], config)) {
           writeError(response, 401, "unauthorized_worker", "Invalid worker key");
           return;
         }
 
-        const body = await readJsonBody(request);
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
 
         if (!isJobResultUpdateRequest(body) || body.jobId !== resultMatch[1]) {
           writeError(
@@ -468,18 +538,27 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
       writeError(response, 404, "not_found", "Route not found");
     } catch (error) {
       console.error("[coordinator] Unhandled request error", error);
-      writeError(response, 500, "internal_error", "Internal server error");
+      writeCaughtError(response, error);
     }
   });
 }
 
-function hasWorkerKey(
+function hasWorkerRegistrationKey(
   headerValue: string | string[] | undefined,
   config: CoordinatorConfig,
 ): boolean {
   const value = Array.isArray(headerValue) ? headerValue[0] : headerValue;
 
   return value === config.workerRegistrationKey;
+}
+
+function hasWorkerServiceKey(
+  headerValue: string | string[] | undefined,
+  config: CoordinatorConfig,
+): boolean {
+  const value = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+
+  return value === config.workerServiceKey;
 }
 
 function hasClientKey(
@@ -491,14 +570,19 @@ function hasClientKey(
   return value === config.clientRegistrationKey;
 }
 
+function hasAdminKey(
+  headerValue: string | string[] | undefined,
+  config: CoordinatorConfig,
+): boolean {
+  const value = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+
+  return value === config.adminApiKey;
+}
+
 function resolveJobCallback(
   request: CreateTryOnJobRequest,
   clients: ClientRegistry,
 ): CreateTryOnJobRequest | undefined {
-  if (request.callbackUrl || !request.sourceClientId) {
-    return request;
-  }
-
   const client = clients.get(request.sourceClientId);
 
   if (!client || client.status === "offline") {
@@ -534,6 +618,8 @@ function prepareWorkerAssignment(
   request: CreateTryOnJobRequest,
   requiredCapabilities: string[],
   dispatchTokenExpiresAt: string,
+  callbackToken: string,
+  callbackTokenExpiresAt: string,
   config: CoordinatorConfig,
 ): Promise<WorkerAssignmentPrepareResponse> {
   const payload: WorkerAssignmentPrepareRequest = {
@@ -544,13 +630,37 @@ function prepareWorkerAssignment(
     callbackUrl: request.callbackUrl,
     requiredCapabilities,
     dispatchTokenExpiresAt,
+    callbackToken,
+    callbackTokenExpiresAt,
   };
 
   return postJson<WorkerAssignmentPrepareResponse>(
     `${worker.baseUrl}/assignments`,
     payload,
     {
-      "x-worker-key": config.workerRegistrationKey,
+      "x-worker-service-key": config.workerServiceKey,
+    },
+    {
+      retries: config.httpClientRetries,
+      timeoutMs: config.httpClientTimeoutMs,
+    },
+  );
+}
+
+function cancelWorkerAssignment(
+  worker: RegisteredWorker,
+  jobId: string,
+  config: CoordinatorConfig,
+): Promise<unknown> {
+  return postJson(
+    `${worker.baseUrl}/jobs/${jobId}/cancel`,
+    {},
+    {
+      "x-worker-service-key": config.workerServiceKey,
+    },
+    {
+      retries: config.httpClientRetries,
+      timeoutMs: config.httpClientTimeoutMs,
     },
   );
 }

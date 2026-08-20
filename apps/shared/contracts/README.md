@@ -15,6 +15,7 @@
 - назначение job;
 - assignment response для прямой связи client -> worker;
 - worker assignment prepare для security handshake coordinator -> worker;
+- callback token metadata для прямого ответа worker -> client;
 - обновление прогресса;
 - capabilities worker'а.
 
@@ -33,5 +34,6 @@
 - Сначала меняется contract, затем coordinator/worker/client.
 - Удаление поля считается breaking change.
 - Новые обязательные поля требуют миграционного плана.
+- `CreateTryOnJobRequest.sourceClientId` обязателен: jobs создаются только от зарегистрированного service client.
 - Статусы jobs и worker'ов должны быть перечислены явно, без неявных строковых литералов в коде приложений.
 - Ошибки API возвращаются в формате `ApiErrorResponse`.

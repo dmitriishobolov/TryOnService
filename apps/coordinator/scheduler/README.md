@@ -6,6 +6,7 @@ Scheduler в текущей архитектуре отвечает не за о
 
 - находить jobs в статусе `assigned`, которые не перешли в `running` до `JOB_ASSIGNMENT_TIMEOUT_MS`;
 - переводить просроченный assignment в `failed`;
+- отправлять worker-у best-effort cancel для pending assignment;
 - освобождать зарезервированную capacity worker'а;
 - логировать просрочки assignment.
 

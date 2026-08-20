@@ -14,10 +14,17 @@ export interface WorkerConfig {
   publicUrl?: string;
   coordinatorUrl: string;
   registrationKey: string;
+  serviceKey: string;
+  dispatchSigningKey: string;
   capacity: number;
   capabilities: WorkerCapability[];
   heartbeatIntervalMs: number;
   mockProcessingDelayMs: number;
+  apiRateLimitWindowMs: number;
+  apiRateLimitMaxRequests: number;
+  httpClientTimeoutMs: number;
+  httpClientRetries: number;
+  maxJsonBodyBytes: number;
 }
 
 function readNumber(name: string, fallback: number): number {
@@ -79,6 +86,11 @@ export function loadWorkerConfig(): WorkerConfig {
       "WORKER_REGISTRATION_KEY",
       "dev-worker-registration-key",
     ),
+    serviceKey: readString("WORKER_SERVICE_KEY", "dev-worker-service-key"),
+    dispatchSigningKey: readString(
+      "WORKER_DISPATCH_SIGNING_KEY",
+      "dev-worker-dispatch-signing-key",
+    ),
     capacity: readNumber("WORKER_CAPACITY", 1),
     capabilities: readCapabilities(),
     heartbeatIntervalMs: readNumber(
@@ -86,5 +98,10 @@ export function loadWorkerConfig(): WorkerConfig {
       WORKER_HEARTBEAT_INTERVAL_MS,
     ),
     mockProcessingDelayMs: readNumber("MOCK_PROCESSING_DELAY_MS", 700),
+    apiRateLimitWindowMs: readNumber("API_RATE_LIMIT_WINDOW_MS", 60_000),
+    apiRateLimitMaxRequests: readNumber("API_RATE_LIMIT_MAX_REQUESTS", 120),
+    httpClientTimeoutMs: readNumber("HTTP_CLIENT_TIMEOUT_MS", 5_000),
+    httpClientRetries: readNumber("HTTP_CLIENT_RETRIES", 1),
+    maxJsonBodyBytes: readNumber("MAX_JSON_BODY_BYTES", 1_048_576),
   };
 }

@@ -13,6 +13,8 @@ API для клиентов и интеграций должен отвечат�
 - получение состояния обработки без обязательного хранения клиентского результата;
 - отмену job, если сценарий это поддерживает.
 
+`POST /jobs` принимает запросы только от зарегистрированных service clients: нужен `x-client-key`, обязательный `sourceClientId`, а callback URL берется из client registry. Клиентский `callbackUrl` из payload не используется как источник доверия.
+
 ## Worker endpoints
 
 API для worker'ов должен отвечать за:
@@ -21,7 +23,8 @@ API для worker'ов должен отвечать за:
 - прием heartbeat;
 - прием progress/result status по job, которую client отправил worker'у напрямую;
 - обновление прогресса и финального статуса;
-- сообщение об ошибках выполнения.
+- сообщение об ошибках выполнения;
+- отмену pending assignment через worker `POST /jobs/:jobId/cancel`, когда клиент пропал или assignment истек.
 
 ## Assignment flow
 
@@ -31,7 +34,9 @@ API для worker'ов должен отвечать за:
 - `worker` - endpoint выбранного worker'а и signed dispatch token.
 - `workerRequest` - payload, который client отправляет в `POST /jobs` выбранного worker'а.
 
-Dispatch token подписан `WORKER_REGISTRATION_KEY`, но сам ключ клиенту не передается. Worker проверяет token локально и принимает только job, где token привязан к его `workerId` и `jobId`.
+Dispatch token подписан `WORKER_DISPATCH_SIGNING_KEY`, но сам секрет клиенту не передается. Worker проверяет token локально и принимает только job, где token имеет purpose `worker-dispatch` и привязан к его `workerId` и `jobId`.
+
+Для результата worker -> client coordinator создает отдельный callback token с purpose `client-callback`, подписанный `CLIENT_CALLBACK_SIGNING_KEY`. Token передается worker-у только в prepare-запросе и затем идет в `x-client-callback-token` на callback endpoint клиента.
 
 Если prepare на worker-е не прошел, coordinator освобождает worker slot, помечает job как `failed` с `worker_prepare_failed` и не отдает этот worker клиенту.
 
@@ -43,9 +48,18 @@ Dispatch token подписан `WORKER_REGISTRATION_KEY`, но сам ключ 
 
 ## Защита worker registration
 
-`POST /workers/register` проверяет `x-worker-key`. Если ключ неверный, coordinator считает ошибку по прямому remote IP. После превышения `WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS` IP получает `403 worker_registration_ip_banned` и остается заблокированным до перезапуска coordinator.
+`POST /workers/register` проверяет `x-worker-registration-key`. Если ключ неверный, coordinator считает ошибку по прямому remote IP. После превышения `WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS` IP получает `403 worker_registration_ip_banned` и остается заблокированным до перезапуска coordinator.
 
 Для бана используется socket remote address, а не `x-forwarded-for`. Заголовки `x-forwarded-for` и `x-real-ip` используются отдельно, только когда coordinator собирает публичный endpoint зарегистрированного worker/client.
+
+## Ключи и лимиты
+
+- `x-client-key` - регистрация/heartbeat service clients и создание jobs.
+- `x-worker-registration-key` - только регистрация worker'а.
+- `x-worker-service-key` - heartbeat worker'а, prepare assignment, progress/result и cancel.
+- `x-admin-key` - debug/admin ручки `GET /health`, `GET /jobs`, `GET /jobs/:id`.
+- `API_RATE_LIMIT_WINDOW_MS` и `API_RATE_LIMIT_MAX_REQUESTS` задают простой fixed-window rate limit по direct remote IP.
+- `MAX_JSON_BODY_BYTES` ограничивает размер входящих JSON body.
 
 ## Правила
 
@@ -53,4 +67,4 @@ Dispatch token подписан `WORKER_REGISTRATION_KEY`, но сам ключ 
 - API coordinator не должен проксировать клиентский результат.
 - Все входящие payloads валидируются через контракты из `apps/shared/contracts`.
 - Ошибки должны возвращаться в едином формате, чтобы client и worker могли одинаково их обрабатывать.
-- API key для worker registration и service-to-service операций не должен логироваться.
+- API keys и signing secrets не должны логироваться.

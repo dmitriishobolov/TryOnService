@@ -25,6 +25,7 @@ export class TelegramCoordinatorClient {
       `${this.config.coordinatorUrl}/clients/register`,
       payload,
       this.headers(),
+      this.postOptions(),
     );
   }
 
@@ -38,6 +39,7 @@ export class TelegramCoordinatorClient {
       `${this.config.coordinatorUrl}/clients/${this.config.clientId}/heartbeat`,
       payload,
       this.headers(),
+      this.postOptions(),
     );
   }
 
@@ -63,12 +65,20 @@ export class TelegramCoordinatorClient {
       `${this.config.coordinatorUrl}/jobs`,
       payload,
       this.headers(),
+      this.postOptions(),
     );
   }
 
   private headers(): Record<string, string> {
     return {
       "x-client-key": this.config.registrationKey,
+    };
+  }
+
+  private postOptions(): { retries: number; timeoutMs: number } {
+    return {
+      retries: this.config.httpClientRetries,
+      timeoutMs: this.config.httpClientTimeoutMs,
     };
   }
 }

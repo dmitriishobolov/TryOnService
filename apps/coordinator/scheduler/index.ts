@@ -9,6 +9,10 @@ export class Scheduler {
     private readonly config: CoordinatorConfig,
     private readonly jobs: InMemoryJobStore,
     private readonly workers: WorkerRegistry,
+    private readonly cancelWorkerJob?: (
+      workerId: string,
+      jobId: string,
+    ) => Promise<void>,
   ) {}
 
   async schedule(): Promise<void> {
@@ -23,6 +27,14 @@ export class Scheduler {
         this.config.jobAssignmentTimeoutMs,
       )) {
         if (job.assignedWorkerId) {
+          void this.cancelWorkerJob?.(job.assignedWorkerId, job.id).catch(
+            (error) => {
+              console.error(
+                `[coordinator] Failed to cancel expired assignment ${job.id} on worker ${job.assignedWorkerId}`,
+                error,
+              );
+            },
+          );
           this.workers.release(job.assignedWorkerId);
         }
 

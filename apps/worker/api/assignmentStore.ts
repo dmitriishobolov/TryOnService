@@ -5,11 +5,13 @@ import type {
 export interface PreparedAssignment {
   jobId: string;
   workerId: string;
-  sourceClientId?: string;
+  sourceClientId: string;
   clientChatId: string;
   callbackUrl?: string;
   requiredCapabilities: string[];
   dispatchTokenExpiresAt: string;
+  callbackToken?: string;
+  callbackTokenExpiresAt?: string;
   preparedAt: string;
 }
 
@@ -25,6 +27,8 @@ export class WorkerAssignmentStore {
       callbackUrl: request.callbackUrl,
       requiredCapabilities: request.requiredCapabilities,
       dispatchTokenExpiresAt: request.dispatchTokenExpiresAt,
+      callbackToken: request.callbackToken,
+      callbackTokenExpiresAt: request.callbackTokenExpiresAt,
       preparedAt: new Date().toISOString(),
     };
 

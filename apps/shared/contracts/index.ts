@@ -25,7 +25,7 @@ export interface TelegramClientRef {
 export type ClientRef = TelegramClientRef;
 
 export interface CreateTryOnJobRequest {
-  sourceClientId?: string;
+  sourceClientId: string;
   client: ClientRef;
   payload: {
     command: "request";
@@ -47,7 +47,7 @@ export interface TryOnJobError {
 export interface TryOnJob {
   id: string;
   status: JobStatus;
-  sourceClientId?: string;
+  sourceClientId: string;
   client: ClientRef;
   payload: CreateTryOnJobRequest["payload"];
   callbackUrl?: string;
@@ -142,11 +142,13 @@ export interface WorkerJobRequest {
 export interface WorkerAssignmentPrepareRequest {
   jobId: string;
   workerId: string;
-  sourceClientId?: string;
+  sourceClientId: string;
   client: ClientRef;
   callbackUrl?: string;
   requiredCapabilities: string[];
   dispatchTokenExpiresAt: string;
+  callbackToken?: string;
+  callbackTokenExpiresAt?: string;
 }
 
 export interface WorkerAssignmentPrepareResponse {
@@ -215,11 +217,11 @@ export function isCreateTryOnJobRequest(
 
   return (
     client.type === "telegram" &&
+    typeof value.sourceClientId === "string" &&
+    value.sourceClientId.length > 0 &&
     typeof client.chatId === "string" &&
     client.chatId.length > 0 &&
     payload.command === "request" &&
-    (value.sourceClientId === undefined ||
-      typeof value.sourceClientId === "string") &&
     (value.callbackUrl === undefined || typeof value.callbackUrl === "string")
   );
 }
@@ -324,14 +326,17 @@ export function isWorkerAssignmentPrepareRequest(
   return (
     typeof value.jobId === "string" &&
     typeof value.workerId === "string" &&
-    (value.sourceClientId === undefined ||
-      typeof value.sourceClientId === "string") &&
+    typeof value.sourceClientId === "string" &&
+    value.sourceClientId.length > 0 &&
     value.client.type === "telegram" &&
     typeof value.client.chatId === "string" &&
     (value.callbackUrl === undefined || typeof value.callbackUrl === "string") &&
     Array.isArray(value.requiredCapabilities) &&
     value.requiredCapabilities.every((capability) => typeof capability === "string") &&
-    typeof value.dispatchTokenExpiresAt === "string"
+    typeof value.dispatchTokenExpiresAt === "string" &&
+    (value.callbackToken === undefined || typeof value.callbackToken === "string") &&
+    (value.callbackTokenExpiresAt === undefined ||
+      typeof value.callbackTokenExpiresAt === "string")
   );
 }
 

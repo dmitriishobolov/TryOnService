@@ -12,6 +12,8 @@ npm run dev:coordinator
 
 По умолчанию сервис слушает `http://localhost:3000`.
 
+Deploy-пакет собирается командой `npm run build:dist` в `dist/packages/coordinator`.
+
 ## Подпапки
 
 - [api](api/README.md) - HTTP/API слой для клиентов, worker'ов и внутренних операций.

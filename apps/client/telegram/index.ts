@@ -1,9 +1,10 @@
-import "dotenv/config";
-
+import { loadEnvFile } from "../../shared/env.js";
 import { TelegramBot } from "./bot.js";
 import { createTelegramCallbackServer } from "./callbackServer.js";
 import { loadTelegramClientConfig } from "./config.js";
 import { TelegramCoordinatorClient } from "./coordinatorClient.js";
+
+loadEnvFile();
 
 const config = loadTelegramClientConfig();
 const coordinator = new TelegramCoordinatorClient(config);

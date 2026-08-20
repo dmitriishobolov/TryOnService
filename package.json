@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:dist": "npm run build && node scripts/build-dist.mjs",
     "dev:coordinator": "tsx apps/coordinator/index.ts",
     "dev:worker": "tsx apps/worker/index.ts",
     "dev:telegram": "tsx apps/client/telegram/index.ts",
@@ -17,8 +18,5 @@
     "@types/node": "^22.13.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
-  },
-  "dependencies": {
-    "dotenv": "^17.4.2"
   }
 }

@@ -117,6 +117,47 @@ curl -X POST http://localhost:3000/jobs \
 
 После обработки job в `GET http://localhost:3000/jobs` появится результат `Ответ от сервера.`.
 
+## Сборка deploy-пакетов
+
+Чтобы получить готовые папки для переноса на серверы, заполните локальный `.env` нужными адресами и выполните:
+
+```bash
+npm run build:dist
+```
+
+Результат появится в `dist/packages`:
+
+- `dist/packages/coordinator` - готовый coordinator.
+- `dist/packages/worker` - готовый worker.
+- `dist/packages/telegram-client` - готовый Telegram client.
+
+Каждый пакет содержит:
+
+- `app/` - скомпилированный JavaScript;
+- `.env` - настройки, сгенерированные из локального `.env`;
+- `start.cmd` - запуск на Windows;
+- `start.sh` - запуск на Linux/macOS;
+- `package.json` - минимальный package-файл с `npm start`;
+- `BUILD_INFO.txt` - commit и время сборки.
+
+Для запуска deploy-пакета на сервере нужен Node.js `>=18`; выполнять `npm install` внутри пакета не нужно, потому что runtime-зависимости сейчас не используются.
+
+`dist/packages/*/.env` содержит значения из локального `.env`, включая токены, поэтому `dist/` не хранится в git и должен передаваться только в нужное окружение.
+
+Для production-сборки с отдельным набором адресов можно использовать другой env-файл:
+
+```powershell
+$env:BUILD_ENV_FILE=".env.production"
+npm run build:dist
+```
+
+Минимально важные адреса:
+
+- `COORDINATOR_PUBLIC_URL` - публичный URL coordinator, который он передает worker'ам для callbacks.
+- `COORDINATOR_URL` - адрес coordinator для worker и Telegram client.
+- `WORKER_BASE_URL` - адрес worker, по которому coordinator отправляет jobs.
+- `TELEGRAM_CLIENT_PUBLIC_URL` - адрес Telegram client callback server, по которому worker вернет ответ для пользователя.
+
 ## Расширение системы
 
 - Новый AI provider добавляйте в [apps/worker/models](apps/worker/models/README.md).

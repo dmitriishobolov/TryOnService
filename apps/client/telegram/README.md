@@ -11,6 +11,8 @@ npm run dev:telegram
 
 По умолчанию callback server слушает `http://localhost:4100`.
 
+Deploy-пакет собирается командой `npm run build:dist` в `dist/packages/telegram-client`.
+
 ## Ожидаемый поток
 
 1. Пользователь отправляет фотографии и выбирает сценарий примерки.

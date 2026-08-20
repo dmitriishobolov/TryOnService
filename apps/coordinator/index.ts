@@ -1,10 +1,11 @@
-import "dotenv/config";
-
+import { loadEnvFile } from "../shared/env.js";
 import { createCoordinatorServer } from "./api/server.js";
 import { loadCoordinatorConfig } from "./config/index.js";
 import { InMemoryJobStore } from "./jobs/store.js";
 import { WorkerRegistry } from "./registry/store.js";
 import { Scheduler } from "./scheduler/index.js";
+
+loadEnvFile();
 
 const config = loadCoordinatorConfig();
 const jobs = new InMemoryJobStore();

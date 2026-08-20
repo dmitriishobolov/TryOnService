@@ -12,6 +12,8 @@ npm run dev:worker
 
 По умолчанию worker слушает `http://localhost:4001`, регистрируется в `http://localhost:3000` и отправляет heartbeat каждые 5 секунд.
 
+Deploy-пакет собирается командой `npm run build:dist` в `dist/packages/worker`.
+
 ## Подпапки
 
 - [api](api/README.md) - связь worker'а с coordinator и, при необходимости, локальные service endpoints.

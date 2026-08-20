@@ -1,8 +1,9 @@
-import "dotenv/config";
-
+import { loadEnvFile } from "../shared/env.js";
 import { CoordinatorClient } from "./api/coordinatorClient.js";
 import { createWorkerServer } from "./api/server.js";
 import { loadWorkerConfig } from "./config/index.js";
+
+loadEnvFile();
 
 const config = loadWorkerConfig();
 const coordinator = new CoordinatorClient(config);

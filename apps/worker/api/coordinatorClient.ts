@@ -1,0 +1,65 @@
+import type {
+  JobProgressUpdateRequest,
+  JobResultUpdateRequest,
+  WorkerHeartbeatRequest,
+  WorkerRegistrationRequest,
+  WorkerRegistrationResponse,
+} from "../../shared/contracts/index.js";
+import { postJson } from "../../shared/http.js";
+import type { WorkerConfig } from "../config/index.js";
+
+export class CoordinatorClient {
+  constructor(private readonly config: WorkerConfig) {}
+
+  register(): Promise<WorkerRegistrationResponse> {
+    const payload: WorkerRegistrationRequest = {
+      workerId: this.config.workerId,
+      baseUrl: this.config.baseUrl,
+      capacity: this.config.capacity,
+      capabilities: this.config.capabilities,
+    };
+
+    return postJson<WorkerRegistrationResponse>(
+      `${this.config.coordinatorUrl}/workers/register`,
+      payload,
+      this.headers(),
+    );
+  }
+
+  heartbeat(runningJobs: number): Promise<unknown> {
+    const payload: WorkerHeartbeatRequest = {
+      workerId: this.config.workerId,
+      status: runningJobs >= this.config.capacity ? "busy" : "ready",
+      runningJobs,
+      capacity: this.config.capacity,
+    };
+
+    return postJson(
+      `${this.config.coordinatorUrl}/workers/${this.config.workerId}/heartbeat`,
+      payload,
+      this.headers(),
+    );
+  }
+
+  reportProgress(update: JobProgressUpdateRequest): Promise<unknown> {
+    return postJson(updateUrl(update.jobId, "progress", this.config), update, this.headers());
+  }
+
+  reportResult(update: JobResultUpdateRequest): Promise<unknown> {
+    return postJson(updateUrl(update.jobId, "result", this.config), update, this.headers());
+  }
+
+  headers(): Record<string, string> {
+    return {
+      "x-worker-key": this.config.registrationKey,
+    };
+  }
+}
+
+function updateUrl(
+  jobId: string,
+  kind: "progress" | "result",
+  config: WorkerConfig,
+): string {
+  return `${config.coordinatorUrl}/jobs/${jobId}/${kind}`;
+}

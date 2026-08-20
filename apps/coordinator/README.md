@@ -4,6 +4,14 @@ Coordinator - центральный сервис TryOnService. Он прини�
 
 Coordinator не выполняет AI-обработку сам. Его задача - надежная маршрутизация, учет состояния и управление масштабированием через worker registry и scheduler.
 
+## Запуск
+
+```bash
+npm run dev:coordinator
+```
+
+По умолчанию сервис слушает `http://localhost:3000`.
+
 ## Подпапки
 
 - [api](api/README.md) - HTTP/API слой для клиентов, worker'ов и внутренних операций.
@@ -20,6 +28,17 @@ Coordinator не выполняет AI-обработку сам. Его зад�
 4. `scheduler` выбирает подходящий worker из `registry`.
 5. Coordinator назначает job worker'у и переводит ее в `assigned` или `running`.
 6. Worker сообщает промежуточный и финальный статус обратно в coordinator.
+
+## Реализованные endpoints
+
+- `GET /health` - статус coordinator, worker'ы и количество queued jobs.
+- `GET /jobs` - список jobs в in-memory storage.
+- `GET /jobs/:id` - состояние конкретной job.
+- `POST /jobs` - создание job клиентом.
+- `POST /workers/register` - регистрация worker'а.
+- `POST /workers/:workerId/heartbeat` - heartbeat worker'а.
+- `POST /jobs/:jobId/progress` - обновление прогресса от worker'а.
+- `POST /jobs/:jobId/result` - финальный результат от worker'а.
 
 ## Что важно сохранить
 

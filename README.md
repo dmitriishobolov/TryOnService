@@ -6,7 +6,11 @@ TryOnService - сервис примерки на базе AI API. Проект 
 
 ## Статус проекта
 
-Сейчас в репозитории зафиксирован скелет будущего сервиса и документация по зонам ответственности. Реализация на Node.js/TypeScript будет добавляться поверх этой структуры.
+Сейчас реализован первый вертикальный срез на Node.js/TypeScript:
+
+- coordinator принимает jobs, регистрирует worker'ы, получает heartbeat и назначает queued job доступному worker'у;
+- worker при запуске регистрируется в coordinator, каждые 5 секунд отправляет heartbeat и обрабатывает назначенные jobs через mock AI model;
+- Telegram client показывает команду `/request`, кнопку `Request`, создает job в coordinator и выводит пользователю ответ worker'а.
 
 ## Как устроен сервис
 
@@ -37,7 +41,7 @@ flowchart LR
 - [apps/worker](apps/worker/README.md) - исполняющий сервис: регистрация в coordinator, запуск пайплайнов, вызовы AI API.
 - [apps/shared](apps/shared/README.md) - общие контракты, DTO, типы и схемы валидации.
 - [apps/client](apps/client/README.md) - клиентские интеграции, через которые пользователи создают задачи.
-- [DemoPhotos](DemoPhotos/README.md) - локальные демонстрационные фотографии для ручной проверки сценариев.
+- `DemoPhotos/` - локальная игнорируемая папка для демонстрационных фотографий, не хранится в git.
 
 ## Основные зоны ответственности
 
@@ -61,18 +65,52 @@ Shared:
 - задает единый контракт между coordinator, worker и клиентами;
 - должен изменяться первым, если меняется публичный формат данных.
 
-## Рекомендованный старт разработки
+## Локальный запуск
 
-После добавления `package.json` и TypeScript-конфигурации ожидаемый базовый поток будет таким:
+Установите зависимости:
 
 ```bash
 npm install
-npm run dev:coordinator
-npm run dev:worker
-npm test
 ```
 
-До появления этих команд ориентируйтесь на README внутри модулей и сохраняйте текущие границы ответственности.
+Запустите coordinator:
+
+```bash
+npm run dev:coordinator
+```
+
+В отдельном терминале запустите worker:
+
+```bash
+npm run dev:worker
+```
+
+В отдельном терминале запустите Telegram client:
+
+```powershell
+$env:TELEGRAM_BOT_TOKEN="your-telegram-bot-token"
+npm run dev:telegram
+```
+
+По умолчанию используются адреса:
+
+- coordinator: `http://localhost:3000`
+- worker: `http://localhost:4001`
+- telegram callback server: `http://localhost:4100`
+
+Если worker, coordinator и Telegram client запускаются не на одной машине, задайте публичные URL через `COORDINATOR_PUBLIC_URL`, `WORKER_BASE_URL` и `TELEGRAM_CLIENT_PUBLIC_URL`.
+
+## Проверка без Telegram
+
+Можно проверить цепочку coordinator + worker обычным HTTP-запросом:
+
+```bash
+curl -X POST http://localhost:3000/jobs \
+  -H "Content-Type: application/json" \
+  -d "{\"client\":{\"type\":\"telegram\",\"chatId\":\"local-dev\"},\"payload\":{\"command\":\"request\"}}"
+```
+
+После обработки job в `GET http://localhost:3000/jobs` появится результат `Ответ от сервера.`.
 
 ## Расширение системы
 

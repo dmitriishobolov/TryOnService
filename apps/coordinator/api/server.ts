@@ -7,12 +7,14 @@ import {
   isCreateTryOnJobRequest,
   isJobProgressUpdateRequest,
   isJobResultUpdateRequest,
+  isStorageObjectUploadRequest,
   isWorkerHeartbeatRequest,
   isWorkerRegistrationRequest,
   type ClientRegistrationRequest,
   type ClientRegistrationResponse,
   type CreateTryOnJobRequest,
   type RegisteredWorker,
+  type StorageObjectUploadResponse,
   type WorkerAssignmentPrepareRequest,
   type WorkerAssignmentPrepareResponse,
   type TryOnJobAssignmentResponse,
@@ -31,10 +33,11 @@ import {
 } from "../../shared/http.js";
 import { FixedWindowRateLimiter } from "../../shared/rateLimit.js";
 import type { CoordinatorConfig } from "../config/index.js";
-import type { InMemoryJobStore } from "../jobs/store.js";
-import type { ClientRegistry } from "../registry/clientStore.js";
-import type { WorkerRegistry } from "../registry/store.js";
+import type { JobStore } from "../jobs/store.js";
+import type { ClientRegistryStore } from "../registry/clientStore.js";
+import type { WorkerRegistryStore } from "../registry/store.js";
 import type { Scheduler } from "../scheduler/index.js";
+import type { ObjectStorage } from "../../shared/storage/index.js";
 import type { IpBanGuard } from "../utils/ipBanGuard.js";
 import {
   resolveDirectRequestAddress,
@@ -43,16 +46,24 @@ import {
 
 interface CoordinatorServerDeps {
   config: CoordinatorConfig;
-  jobs: InMemoryJobStore;
-  workers: WorkerRegistry;
-  clients: ClientRegistry;
+  jobs: JobStore;
+  workers: WorkerRegistryStore;
+  clients: ClientRegistryStore;
+  storage: ObjectStorage;
   workerRegistrationGuard: IpBanGuard;
   scheduler: Scheduler;
 }
 
 export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
-  const { config, jobs, workers, clients, workerRegistrationGuard, scheduler } =
-    deps;
+  const {
+    config,
+    jobs,
+    workers,
+    clients,
+    storage,
+    workerRegistrationGuard,
+    scheduler,
+  } = deps;
   const rateLimiter = new FixedWindowRateLimiter(
     config.apiRateLimitMaxRequests,
     config.apiRateLimitWindowMs,
@@ -78,11 +89,17 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
+        const [workerList, clientList, queuedJobs] = await Promise.all([
+          workers.list(),
+          clients.list(),
+          jobs.findQueued(),
+        ]);
+
         writeJson(response, 200, {
           status: "ok",
-          workers: workers.list(),
-          clients: clients.list(),
-          queuedJobs: jobs.findQueued().length,
+          workers: workerList,
+          clients: clientList,
+          queuedJobs: queuedJobs.length,
         });
         return;
       }
@@ -94,7 +111,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         }
 
         writeJson(response, 200, {
-          jobs: jobs.list(),
+          jobs: await jobs.list(),
         });
         return;
       }
@@ -107,7 +124,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        const job = jobs.get(getJobMatch[1]);
+        const job = await jobs.get(getJobMatch[1]);
 
         if (!job) {
           writeError(response, 404, "job_not_found", "Job not found");
@@ -133,7 +150,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        const requestWithCallback = resolveJobCallback(body, clients);
+        const requestWithCallback = await resolveJobCallback(body, clients);
 
         if (!requestWithCallback) {
           writeError(
@@ -146,7 +163,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         }
 
         const requiredCapabilities = resolveRequiredCapabilities(body);
-        const worker = workers.findAvailable(
+        const worker = await workers.findAvailable(
           config.workerHeartbeatTimeoutMs,
           requiredCapabilities,
         );
@@ -161,7 +178,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        const reservedWorker = workers.reserve(worker.workerId);
+        const reservedWorker = await workers.reserve(worker.workerId);
 
         if (!reservedWorker) {
           writeError(
@@ -179,7 +196,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         const callbackTokenExpiresAt = new Date(
           Date.now() + config.clientCallbackTokenTtlMs,
         ).toISOString();
-        const job = jobs.createAssigned(
+        const job = await jobs.createAssigned(
           requestWithCallback,
           reservedWorker.workerId,
           dispatchTokenExpiresAt,
@@ -224,7 +241,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
             throw new Error("Worker rejected assignment preparation");
           }
         } catch (error) {
-          workers.release(reservedWorker.workerId);
+          await workers.release(reservedWorker.workerId);
           void cancelWorkerAssignment(reservedWorker, job.id, config).catch(
             (cancelError) => {
               console.error(
@@ -233,7 +250,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
               );
             },
           );
-          jobs.markFailed(job.id, {
+          await jobs.markFailed(job.id, {
             code: "worker_prepare_failed",
             message:
               error instanceof Error
@@ -270,6 +287,61 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/storage/objects") {
+        if (
+          !hasClientKey(request.headers["x-client-key"], config) &&
+          !hasWorkerServiceKey(request.headers["x-worker-service-key"], config)
+        ) {
+          writeError(response, 401, "unauthorized_storage", "Invalid storage key");
+          return;
+        }
+
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
+
+        if (!isStorageObjectUploadRequest(body)) {
+          writeError(
+            response,
+            400,
+            "invalid_storage_upload",
+            "Invalid storage upload payload",
+          );
+          return;
+        }
+
+        const object = await storage.putObject({
+          key: body.key,
+          contentType: body.contentType,
+          data: Buffer.from(body.dataBase64, "base64"),
+        });
+        const payload: StorageObjectUploadResponse = {
+          object,
+        };
+
+        writeJson(response, 201, payload);
+        return;
+      }
+
+      const storageObjectMatch = /^\/storage\/objects\/(.+)$/.exec(url.pathname);
+
+      if (request.method === "GET" && storageObjectMatch) {
+        if (!hasAdminKey(request.headers["x-admin-key"], config)) {
+          writeError(response, 401, "unauthorized_admin", "Invalid admin key");
+          return;
+        }
+
+        const key = decodeURIComponent(storageObjectMatch[1]);
+        const object = await storage.getObject(key);
+
+        response.writeHead(200, {
+          "Content-Type": object.ref.contentType ?? "application/octet-stream",
+          "Content-Length": object.data.length,
+        });
+        response.end(object.data);
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/clients/register") {
         if (!hasClientKey(request.headers["x-client-key"], config)) {
           writeError(response, 401, "unauthorized_client", "Invalid client key");
@@ -291,7 +363,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         }
 
         const resolvedBaseUrl = resolveServiceBaseUrl(request, body);
-        const client = clients.register(body, resolvedBaseUrl);
+        const client = await clients.register(body, resolvedBaseUrl);
         const payload: ClientRegistrationResponse = {
           clientId: client.clientId,
           callbackUrl: client.callbackUrl,
@@ -329,7 +401,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        const client = clients.heartbeat(body);
+        const client = await clients.heartbeat(body);
 
         if (!client) {
           writeError(response, 404, "client_not_found", "Client is not registered");
@@ -401,7 +473,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         }
 
         const resolvedBaseUrl = resolveServiceBaseUrl(request, body);
-        const worker = workers.register(body, resolvedBaseUrl);
+        const worker = await workers.register(body, resolvedBaseUrl);
         const payload: WorkerRegistrationResponse = {
           workerId: worker.workerId,
           heartbeatIntervalMs: config.workerHeartbeatIntervalMs,
@@ -437,7 +509,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        const worker = workers.heartbeat(body);
+        const worker = await workers.heartbeat(body);
 
         if (!worker) {
           writeError(response, 404, "worker_not_found", "Worker is not registered");
@@ -445,8 +517,8 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         }
 
         if (worker.status === "offline") {
-          failActiveJobsForWorker(worker.workerId, jobs);
-          workers.markOffline(worker.workerId);
+          await failActiveJobsForWorker(worker.workerId, jobs);
+          await workers.markOffline(worker.workerId);
         }
 
         void scheduler.schedule();
@@ -480,7 +552,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        const job = jobs.markRunning(body);
+        const job = await jobs.markRunning(body);
 
         if (!job) {
           writeError(response, 404, "job_not_found", "Job not found");
@@ -513,8 +585,8 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        const previous = jobs.get(body.jobId);
-        const job = jobs.markResult(body);
+        const previous = await jobs.get(body.jobId);
+        const job = await jobs.markResult(body);
 
         if (!job) {
           writeError(response, 404, "job_not_found", "Job not found");
@@ -526,7 +598,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           previous.status !== "succeeded" &&
           previous.status !== "failed"
         ) {
-          workers.release(previous.assignedWorkerId);
+          await workers.release(previous.assignedWorkerId);
         }
 
         void scheduler.schedule();
@@ -579,11 +651,11 @@ function hasAdminKey(
   return value === config.adminApiKey;
 }
 
-function resolveJobCallback(
+async function resolveJobCallback(
   request: CreateTryOnJobRequest,
-  clients: ClientRegistry,
-): CreateTryOnJobRequest | undefined {
-  const client = clients.get(request.sourceClientId);
+  clients: ClientRegistryStore,
+): Promise<CreateTryOnJobRequest | undefined> {
+  const client = await clients.get(request.sourceClientId);
 
   if (!client || client.status === "offline") {
     return undefined;
@@ -673,12 +745,12 @@ function resolveRequiredCapabilities(request: CreateTryOnJobRequest): string[] {
   return [];
 }
 
-function failActiveJobsForWorker(
+async function failActiveJobsForWorker(
   workerId: string,
-  jobs: InMemoryJobStore,
-): void {
-  for (const job of jobs.findActiveByWorker(workerId)) {
-    jobs.markFailed(job.id, {
+  jobs: JobStore,
+): Promise<void> {
+  for (const job of await jobs.findActiveByWorker(workerId)) {
+    await jobs.markFailed(job.id, {
       code: "worker_offline",
       message: "Assigned worker went offline",
       retryable: true,

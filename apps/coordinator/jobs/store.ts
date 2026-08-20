@@ -7,10 +7,34 @@ import type {
   TryOnJob,
 } from "../../shared/contracts/index.js";
 
-export class InMemoryJobStore {
+export interface JobStore {
+  create(request: CreateTryOnJobRequest): Promise<TryOnJob>;
+  createAssigned(
+    request: CreateTryOnJobRequest,
+    workerId: string,
+    dispatchTokenExpiresAt: string,
+  ): Promise<TryOnJob>;
+  get(jobId: string): Promise<TryOnJob | undefined>;
+  list(): Promise<TryOnJob[]>;
+  findQueued(): Promise<TryOnJob[]>;
+  findExpiredAssignments(timeoutMs: number): Promise<TryOnJob[]>;
+  findActiveByWorker(workerId: string): Promise<TryOnJob[]>;
+  findActiveBySourceClient(clientId: string): Promise<TryOnJob[]>;
+  markAssigned(jobId: string, workerId: string): Promise<TryOnJob | undefined>;
+  markRunning(update: JobProgressUpdateRequest): Promise<TryOnJob | undefined>;
+  markResult(update: JobResultUpdateRequest): Promise<TryOnJob | undefined>;
+  requeue(jobId: string): Promise<TryOnJob | undefined>;
+  markAssignmentExpired(jobId: string): Promise<TryOnJob | undefined>;
+  markFailed(
+    jobId: string,
+    error: TryOnJob["error"],
+  ): Promise<TryOnJob | undefined>;
+}
+
+export class InMemoryJobStore implements JobStore {
   private readonly jobs = new Map<string, TryOnJob>();
 
-  create(request: CreateTryOnJobRequest): TryOnJob {
+  async create(request: CreateTryOnJobRequest): Promise<TryOnJob> {
     const now = new Date().toISOString();
     const job: TryOnJob = {
       id: randomUUID(),
@@ -28,11 +52,11 @@ export class InMemoryJobStore {
     return job;
   }
 
-  createAssigned(
+  async createAssigned(
     request: CreateTryOnJobRequest,
     workerId: string,
     dispatchTokenExpiresAt: string,
-  ): TryOnJob {
+  ): Promise<TryOnJob> {
     const now = new Date().toISOString();
     const job: TryOnJob = {
       id: randomUUID(),
@@ -53,22 +77,22 @@ export class InMemoryJobStore {
     return job;
   }
 
-  get(jobId: string): TryOnJob | undefined {
+  async get(jobId: string): Promise<TryOnJob | undefined> {
     return this.jobs.get(jobId);
   }
 
-  list(): TryOnJob[] {
+  async list(): Promise<TryOnJob[]> {
     return [...this.jobs.values()];
   }
 
-  findQueued(): TryOnJob[] {
-    return this.list().filter((job) => job.status === "queued");
+  async findQueued(): Promise<TryOnJob[]> {
+    return (await this.list()).filter((job) => job.status === "queued");
   }
 
-  findExpiredAssignments(timeoutMs: number): TryOnJob[] {
+  async findExpiredAssignments(timeoutMs: number): Promise<TryOnJob[]> {
     const now = Date.now();
 
-    return this.list().filter((job) => {
+    return (await this.list()).filter((job) => {
       if (job.status !== "assigned") {
         return false;
       }
@@ -79,8 +103,8 @@ export class InMemoryJobStore {
     });
   }
 
-  findActiveByWorker(workerId: string): TryOnJob[] {
-    return this.list().filter(
+  async findActiveByWorker(workerId: string): Promise<TryOnJob[]> {
+    return (await this.list()).filter(
       (job) =>
         job.assignedWorkerId === workerId &&
         job.status !== "succeeded" &&
@@ -89,8 +113,8 @@ export class InMemoryJobStore {
     );
   }
 
-  findActiveBySourceClient(clientId: string): TryOnJob[] {
-    return this.list().filter(
+  async findActiveBySourceClient(clientId: string): Promise<TryOnJob[]> {
+    return (await this.list()).filter(
       (job) =>
         job.sourceClientId === clientId &&
         job.status !== "succeeded" &&
@@ -99,7 +123,10 @@ export class InMemoryJobStore {
     );
   }
 
-  markAssigned(jobId: string, workerId: string): TryOnJob | undefined {
+  async markAssigned(
+    jobId: string,
+    workerId: string,
+  ): Promise<TryOnJob | undefined> {
     const job = this.jobs.get(jobId);
 
     if (!job || job.status !== "queued") {
@@ -113,10 +140,17 @@ export class InMemoryJobStore {
     });
   }
 
-  markRunning(update: JobProgressUpdateRequest): TryOnJob | undefined {
+  async markRunning(
+    update: JobProgressUpdateRequest,
+  ): Promise<TryOnJob | undefined> {
     const job = this.jobs.get(update.jobId);
 
-    if (!job || job.status === "succeeded" || job.status === "failed") {
+    if (
+      !job ||
+      job.status === "succeeded" ||
+      job.status === "failed" ||
+      job.status === "cancelled"
+    ) {
       return undefined;
     }
 
@@ -125,7 +159,9 @@ export class InMemoryJobStore {
     });
   }
 
-  markResult(update: JobResultUpdateRequest): TryOnJob | undefined {
+  async markResult(
+    update: JobResultUpdateRequest,
+  ): Promise<TryOnJob | undefined> {
     const job = this.jobs.get(update.jobId);
 
     if (!job) {
@@ -147,7 +183,7 @@ export class InMemoryJobStore {
     });
   }
 
-  requeue(jobId: string): TryOnJob | undefined {
+  async requeue(jobId: string): Promise<TryOnJob | undefined> {
     return this.update(jobId, {
       status: "queued",
       assignedWorkerId: undefined,
@@ -156,7 +192,7 @@ export class InMemoryJobStore {
     });
   }
 
-  markAssignmentExpired(jobId: string): TryOnJob | undefined {
+  async markAssignmentExpired(jobId: string): Promise<TryOnJob | undefined> {
     return this.markFailed(jobId, {
       code: "assignment_expired",
       message: "Worker assignment expired before direct client dispatch",
@@ -164,7 +200,10 @@ export class InMemoryJobStore {
     });
   }
 
-  markFailed(jobId: string, error: TryOnJob["error"]): TryOnJob | undefined {
+  async markFailed(
+    jobId: string,
+    error: TryOnJob["error"],
+  ): Promise<TryOnJob | undefined> {
     const job = this.jobs.get(jobId);
 
     if (

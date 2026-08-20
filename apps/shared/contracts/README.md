@@ -7,6 +7,7 @@
 - создание job;
 - получение статуса job;
 - результат обработки;
+- storage object refs для входных и выходных файлов;
 - ошибки API;
 - регистрацию service client;
 - heartbeat service client;

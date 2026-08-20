@@ -15,6 +15,8 @@ API для клиентов и интеграций должен отвечат�
 
 `POST /jobs` принимает запросы только от зарегистрированных service clients: нужен `x-client-key`, обязательный `sourceClientId`, а callback URL берется из client registry. Клиентский `callbackUrl` из payload не используется как источник доверия.
 
+`POST /storage/objects` нужен для dev/local загрузки файлов в object storage. Клиент или worker отправляет JSON с `dataBase64`, получает `StorageObjectRef` и дальше передает refs в `payload.inputFiles` или `result.files`. Для production этот endpoint должен уступить место signed upload URLs.
+
 ## Worker endpoints
 
 API для worker'ов должен отвечать за:
@@ -58,12 +60,15 @@ Dispatch token подписан `WORKER_DISPATCH_SIGNING_KEY`, но сам се�
 - `x-worker-registration-key` - только регистрация worker'а.
 - `x-worker-service-key` - heartbeat worker'а, prepare assignment, progress/result и cancel.
 - `x-admin-key` - debug/admin ручки `GET /health`, `GET /jobs`, `GET /jobs/:id`.
+- `POST /storage/objects` принимает `x-client-key` или `x-worker-service-key`.
+- `GET /storage/objects/:key` доступен только по `x-admin-key` и предназначен для dev/debug.
 - `API_RATE_LIMIT_WINDOW_MS` и `API_RATE_LIMIT_MAX_REQUESTS` задают простой fixed-window rate limit по direct remote IP.
 - `MAX_JSON_BODY_BYTES` ограничивает размер входящих JSON body.
 
 ## Правила
 
 - В API не должно быть тяжелой бизнес-логики обработки изображений.
+- Coordinator API не должен становиться permanent file data-plane; local storage upload нужен для dev, production должен использовать presigned URLs.
 - API coordinator не должен проксировать клиентский результат.
 - Все входящие payloads валидируются через контракты из `apps/shared/contracts`.
 - Ошибки должны возвращаться в едином формате, чтобы client и worker могли одинаково их обрабатывать.

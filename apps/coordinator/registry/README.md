@@ -2,6 +2,8 @@
 
 Registry хранит сведения о worker'ах и service clients, которые доступны coordinator. Worker и client регистрируются сами при запуске, используя API coordinator и свой registration key.
 
+Хранилище registry выбирается coordinator persistence backend: `memory` для dev или `postgres` для сохранения состояния между рестартами.
+
 ## Что хранит worker registry
 
 - `workerId` - стабильный идентификатор worker'а.

@@ -11,6 +11,7 @@ const envFilePath = existsSync(join(rootDir, envFileName))
   ? join(rootDir, envFileName)
   : join(rootDir, ".env.example");
 const env = loadEnv(envFilePath);
+const rootPackage = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8"));
 const commit = readGitValue(["rev-parse", "--short", "HEAD"]) ?? "unknown";
 const builtAt = new Date().toISOString();
 
@@ -20,6 +21,8 @@ const services = [
     title: "TryOnService Coordinator",
     entry: "app/apps/coordinator/index.js",
     directories: ["coordinator", "shared"],
+    includeNodeModules: true,
+    dependencies: rootPackage.dependencies ?? {},
     envKeys: [
       "COORDINATOR_PORT",
       "COORDINATOR_PUBLIC_URL",
@@ -43,6 +46,15 @@ const services = [
       "HTTP_CLIENT_TIMEOUT_MS",
       "HTTP_CLIENT_RETRIES",
       "MAX_JSON_BODY_BYTES",
+      "COORDINATOR_PERSISTENCE",
+      "POSTGRES_URL",
+      "POSTGRES_SSL",
+      "POSTGRES_MAX_CONNECTIONS",
+      "STORAGE_DRIVER",
+      "STORAGE_LOCAL_ROOT",
+      "STORAGE_PUBLIC_BASE_URL",
+      "STORAGE_BUCKET",
+      "STORAGE_SIGNED_URL_TTL_MS",
     ],
   },
   {
@@ -124,6 +136,12 @@ function writeServicePackage(service) {
     });
   }
 
+  if (service.includeNodeModules) {
+    cpSync(join(rootDir, "node_modules"), join(packageDir, "node_modules"), {
+      recursive: true,
+    });
+  }
+
   writeFileSync(
     join(packageDir, "package.json"),
     `${JSON.stringify(
@@ -135,6 +153,7 @@ function writeServicePackage(service) {
         scripts: {
           start: `node ${service.entry}`,
         },
+        dependencies: service.dependencies,
         engines: {
           node: ">=18",
         },

@@ -3,18 +3,16 @@ import { postJson } from "../shared/http.js";
 import type { RegisteredWorker } from "../shared/contracts/index.js";
 import { createCoordinatorServer } from "./api/server.js";
 import { loadCoordinatorConfig } from "./config/index.js";
-import { InMemoryJobStore } from "./jobs/store.js";
-import { ClientRegistry } from "./registry/clientStore.js";
-import { WorkerRegistry } from "./registry/store.js";
+import { createCoordinatorStores } from "./persistence/index.js";
 import { Scheduler } from "./scheduler/index.js";
+import { createCoordinatorStorage } from "./storage/index.js";
 import { IpBanGuard } from "./utils/ipBanGuard.js";
 
 loadEnvFile();
 
 const config = loadCoordinatorConfig();
-const jobs = new InMemoryJobStore();
-const workers = new WorkerRegistry();
-const clients = new ClientRegistry();
+const { jobs, workers, clients, close } = await createCoordinatorStores(config);
+const storage = createCoordinatorStorage(config);
 const workerRegistrationGuard = new IpBanGuard(
   config.workerRegistrationMaxInvalidAttempts,
 );
@@ -24,16 +22,39 @@ const server = createCoordinatorServer({
   jobs,
   workers,
   clients,
+  storage,
   workerRegistrationGuard,
   scheduler,
 });
 
 server.listen(config.port, () => {
   console.log(`[coordinator] Listening on ${config.publicUrl}`);
+  console.log(`[coordinator] Persistence: ${config.persistenceDriver}`);
+  console.log(`[coordinator] Storage: ${config.storageDriver}`);
 });
 
 setInterval(() => {
-  const staleWorkers = workers.markStaleWorkersOffline(
+  void markStaleWorkersOffline();
+}, config.workerHeartbeatIntervalMs);
+
+setInterval(() => {
+  void markStaleClientsOffline();
+}, config.clientHeartbeatIntervalMs);
+
+setInterval(() => {
+  void scheduler.schedule();
+}, config.schedulerIntervalMs);
+
+process.once("SIGINT", () => {
+  void shutdown("SIGINT");
+});
+
+process.once("SIGTERM", () => {
+  void shutdown("SIGTERM");
+});
+
+async function markStaleWorkersOffline(): Promise<void> {
+  const staleWorkers = await workers.markStaleWorkersOffline(
     config.workerHeartbeatTimeoutMs,
   );
 
@@ -42,8 +63,8 @@ setInterval(() => {
       `[coordinator] Worker ${worker.workerId} marked offline after missed heartbeat`,
     );
 
-    for (const job of jobs.findActiveByWorker(worker.workerId)) {
-      jobs.markFailed(job.id, {
+    for (const job of await jobs.findActiveByWorker(worker.workerId)) {
+      await jobs.markFailed(job.id, {
         code: "worker_offline",
         message: "Assigned worker went offline during processing",
         retryable: true,
@@ -53,10 +74,10 @@ setInterval(() => {
       );
     }
   }
-}, config.workerHeartbeatIntervalMs);
+}
 
-setInterval(() => {
-  const staleClients = clients.markStaleClientsOffline(
+async function markStaleClientsOffline(): Promise<void> {
+  const staleClients = await clients.markStaleClientsOffline(
     config.clientHeartbeatTimeoutMs,
   );
 
@@ -65,9 +86,9 @@ setInterval(() => {
       `[coordinator] Client ${client.clientId} marked offline after missed heartbeat`,
     );
 
-    for (const job of jobs.findActiveBySourceClient(client.clientId)) {
+    for (const job of await jobs.findActiveBySourceClient(client.clientId)) {
       if (job.assignedWorkerId) {
-        const worker = workers.get(job.assignedWorkerId);
+        const worker = await workers.get(job.assignedWorkerId);
 
         if (worker) {
           void cancelWorkerJob(worker, job.id).catch((error) => {
@@ -78,10 +99,10 @@ setInterval(() => {
           });
         }
 
-        workers.release(job.assignedWorkerId);
+        await workers.release(job.assignedWorkerId);
       }
 
-      jobs.markFailed(job.id, {
+      await jobs.markFailed(job.id, {
         code: "client_offline",
         message: "Source client went offline before job completion",
         retryable: true,
@@ -91,17 +112,13 @@ setInterval(() => {
       );
     }
   }
-}, config.clientHeartbeatIntervalMs);
-
-setInterval(() => {
-  void scheduler.schedule();
-}, config.schedulerIntervalMs);
+}
 
 async function cancelWorkerJobById(
   workerId: string,
   jobId: string,
 ): Promise<void> {
-  const worker = workers.get(workerId);
+  const worker = await workers.get(workerId);
 
   if (!worker) {
     return;
@@ -122,4 +139,15 @@ function cancelWorkerJob(worker: RegisteredWorker, jobId: string): Promise<unkno
       timeoutMs: config.httpClientTimeoutMs,
     },
   );
+}
+
+async function shutdown(signal: string): Promise<void> {
+  console.log(`[coordinator] Shutting down after ${signal}`);
+
+  await new Promise<void>((resolve) => {
+    server.close(() => {
+      resolve();
+    });
+  });
+  await close();
 }

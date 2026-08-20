@@ -4,13 +4,33 @@ import type {
   WorkerRegistrationRequest,
 } from "../../shared/contracts/index.js";
 
-export class WorkerRegistry {
-  private readonly workers = new Map<string, RegisteredWorker>();
-
+export interface WorkerRegistryStore {
   register(
     request: WorkerRegistrationRequest,
     resolvedBaseUrl: string,
-  ): RegisteredWorker {
+  ): Promise<RegisteredWorker>;
+  heartbeat(request: WorkerHeartbeatRequest): Promise<RegisteredWorker | undefined>;
+  reserve(workerId: string): Promise<RegisteredWorker | undefined>;
+  release(workerId: string): Promise<RegisteredWorker | undefined>;
+  markOffline(workerId: string): Promise<RegisteredWorker | undefined>;
+  list(): Promise<RegisteredWorker[]>;
+  get(workerId: string): Promise<RegisteredWorker | undefined>;
+  findAvailable(
+    heartbeatTimeoutMs: number,
+    requiredCapabilities?: string[],
+  ): Promise<RegisteredWorker | undefined>;
+  markStaleWorkersOffline(
+    heartbeatTimeoutMs: number,
+  ): Promise<RegisteredWorker[]>;
+}
+
+export class WorkerRegistry implements WorkerRegistryStore {
+  private readonly workers = new Map<string, RegisteredWorker>();
+
+  async register(
+    request: WorkerRegistrationRequest,
+    resolvedBaseUrl: string,
+  ): Promise<RegisteredWorker> {
     const now = new Date().toISOString();
     const previous = this.workers.get(request.workerId);
     const worker: RegisteredWorker = {
@@ -29,7 +49,9 @@ export class WorkerRegistry {
     return worker;
   }
 
-  heartbeat(request: WorkerHeartbeatRequest): RegisteredWorker | undefined {
+  async heartbeat(
+    request: WorkerHeartbeatRequest,
+  ): Promise<RegisteredWorker | undefined> {
     const worker = this.workers.get(request.workerId);
 
     if (!worker) {
@@ -55,7 +77,7 @@ export class WorkerRegistry {
     return updated;
   }
 
-  reserve(workerId: string): RegisteredWorker | undefined {
+  async reserve(workerId: string): Promise<RegisteredWorker | undefined> {
     const worker = this.workers.get(workerId);
 
     if (!worker || worker.runningJobs >= worker.capacity) {
@@ -73,7 +95,7 @@ export class WorkerRegistry {
     return updated;
   }
 
-  release(workerId: string): RegisteredWorker | undefined {
+  async release(workerId: string): Promise<RegisteredWorker | undefined> {
     const worker = this.workers.get(workerId);
 
     if (!worker) {
@@ -92,7 +114,7 @@ export class WorkerRegistry {
     return updated;
   }
 
-  markOffline(workerId: string): RegisteredWorker | undefined {
+  async markOffline(workerId: string): Promise<RegisteredWorker | undefined> {
     const worker = this.workers.get(workerId);
 
     if (!worker) {
@@ -110,21 +132,21 @@ export class WorkerRegistry {
     return updated;
   }
 
-  list(): RegisteredWorker[] {
+  async list(): Promise<RegisteredWorker[]> {
     return [...this.workers.values()];
   }
 
-  get(workerId: string): RegisteredWorker | undefined {
+  async get(workerId: string): Promise<RegisteredWorker | undefined> {
     return this.workers.get(workerId);
   }
 
-  findAvailable(
+  async findAvailable(
     heartbeatTimeoutMs: number,
     requiredCapabilities: string[] = [],
-  ): RegisteredWorker | undefined {
+  ): Promise<RegisteredWorker | undefined> {
     const now = Date.now();
 
-    return this.list().find((worker) => {
+    return (await this.list()).find((worker) => {
       const lastHeartbeatAt = new Date(worker.lastHeartbeatAt).getTime();
       const isFresh = now - lastHeartbeatAt <= heartbeatTimeoutMs;
       const hasRequiredCapabilities = requiredCapabilities.every((required) =>
@@ -140,7 +162,9 @@ export class WorkerRegistry {
     });
   }
 
-  markStaleWorkersOffline(heartbeatTimeoutMs: number): RegisteredWorker[] {
+  async markStaleWorkersOffline(
+    heartbeatTimeoutMs: number,
+  ): Promise<RegisteredWorker[]> {
     const now = Date.now();
     const changed: RegisteredWorker[] = [];
 
@@ -151,7 +175,7 @@ export class WorkerRegistry {
         worker.status !== "offline" &&
         now - lastHeartbeatAt > heartbeatTimeoutMs
       ) {
-        const offline = this.markOffline(worker.workerId);
+        const offline = await this.markOffline(worker.workerId);
 
         if (offline) {
           changed.push(offline);

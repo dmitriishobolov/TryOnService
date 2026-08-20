@@ -13,7 +13,9 @@ TryOnService - сервис примерки на базе AI API. Проект 
 - Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, получает assignment, отправляет job worker'у напрямую и выводит пользователю ответ worker'а.
 - coordinator защищает регистрацию worker'ов от перебора ключа: после превышения лимита неверных попыток IP блокируется до перезапуска coordinator;
 - registration, service-to-service, dispatch token, client callback и admin/debug доступ используют разные ключи;
-- HTTP API имеют лимиты размера JSON body, базовый rate limit и timeout/retry для исходящих service calls.
+- HTTP API имеют лимиты размера JSON body, базовый rate limit и timeout/retry для исходящих service calls;
+- coordinator умеет работать с `memory` или `postgres` persistence backend;
+- для файлов и изображений добавлен object storage слой: в jobs/results передаются `StorageObjectRef`, а не бинарные данные.
 
 ## Как устроен сервис
 
@@ -22,6 +24,8 @@ flowchart LR
     Client["Client integrations"] -->|"request assignment"| CoordinatorAPI["Coordinator API"]
     CoordinatorAPI --> Jobs["Jobs"]
     CoordinatorAPI --> Registry["Worker/client registry"]
+    CoordinatorAPI --> DB["Postgres or memory state"]
+    CoordinatorAPI --> Storage["Object storage"]
     CoordinatorAPI --> Security["Registration guard"]
     CoordinatorAPI -->|"prepare assignment"| WorkerAPI
     CoordinatorAPI -->|"worker endpoint + dispatch token"| Client
@@ -41,6 +45,21 @@ flowchart LR
 6. Клиент отправляет heavy request напрямую на worker endpoint с `x-job-dispatch-token`.
 7. Worker принимает job только если token валиден и assignment заранее подготовлен coordinator-ом, затем запускает runner.
 8. Worker отправляет status-only update в coordinator и результат на callback клиента с `x-client-callback-token`.
+
+## Данные, БД и файлы
+
+Postgres принадлежит coordinator. Worker и client не получают `POSTGRES_URL` и не пишут в БД напрямую. Они меняют состояние только через API coordinator.
+
+В Postgres хранятся:
+
+- jobs и переходы статусов;
+- registered workers и registered service clients;
+- heartbeat/capacity данные;
+- metadata storage-объектов и object keys.
+
+Файлы и изображения хранятся в object storage. В текущем коде есть dev backend `STORAGE_DRIVER=local`, который пишет файлы в `STORAGE_LOCAL_ROOT`, и общий контракт `StorageObjectRef` для будущего S3-compatible backend. В jobs можно передавать `payload.inputFiles`, а worker result может вернуть `result.files`.
+
+Для dev/local загрузки coordinator предоставляет `POST /storage/objects`: service client с `x-client-key` или worker с `x-worker-service-key` отправляет base64 payload и получает `StorageObjectRef`. В production этот путь должен быть заменен signed upload/download URL, чтобы большие файлы не шли через coordinator.
 
 ## Структура репозитория
 
@@ -192,13 +211,14 @@ npm run build:dist
 Каждый пакет содержит:
 
 - `app/` - скомпилированный JavaScript;
+- `node_modules/` - runtime-зависимости, если они нужны пакету; сейчас включаются в coordinator package для Postgres-драйвера;
 - `.env` - настройки, сгенерированные из локального `.env`;
 - `start.cmd` - запуск на Windows;
 - `start.sh` - запуск на Linux/macOS;
 - `package.json` - минимальный package-файл с `npm start`;
 - `BUILD_INFO.txt` - commit и время сборки.
 
-Для запуска deploy-пакета на сервере нужен Node.js `>=18`; выполнять `npm install` внутри пакета не нужно, потому что runtime-зависимости сейчас не используются.
+Для запуска deploy-пакета на сервере нужен Node.js `>=18`; выполнять `npm install` внутри пакета не нужно.
 
 `dist/packages/*/.env` содержит значения из локального `.env`, включая токены, поэтому `dist/` не хранится в git и должен передаваться только в нужное окружение.
 
@@ -231,6 +251,12 @@ npm run build:dist
 - `API_RATE_LIMIT_WINDOW_MS`, `API_RATE_LIMIT_MAX_REQUESTS` - базовый per-IP fixed-window лимит.
 - `HTTP_CLIENT_TIMEOUT_MS`, `HTTP_CLIENT_RETRIES` - timeout и retry для исходящих HTTP-вызовов между сервисами.
 - `MAX_JSON_BODY_BYTES` - лимит JSON body для входящих API-запросов.
+- `COORDINATOR_PERSISTENCE` - `memory` для dev или `postgres` для persistent state coordinator.
+- `POSTGRES_URL`, `POSTGRES_SSL`, `POSTGRES_MAX_CONNECTIONS` - настройки Postgres coordinator.
+- `STORAGE_DRIVER` - сейчас `local`; S3-compatible backend подготовлен архитектурно, но не реализован.
+- `STORAGE_LOCAL_ROOT` - локальная папка dev storage.
+- `STORAGE_PUBLIC_BASE_URL` - опциональная база URL для `StorageObjectRef.url`.
+- `STORAGE_BUCKET`, `STORAGE_SIGNED_URL_TTL_MS` - зарезервированы для production object storage.
 - `TELEGRAM_CLIENT_PUBLIC_PROTOCOL` - протокол публичного Telegram callback endpoint.
 - `TELEGRAM_CLIENT_PUBLIC_URL` - опциональный ручной override для Telegram callback endpoint, если автоопределение по IP/port не подходит.
 
@@ -239,9 +265,9 @@ npm run build:dist
 Текущий срез подходит для локальной разработки и проверки архитектуры control-plane/data-plane. Перед production под растущую нагрузку нужны инфраструктурные слои:
 
 - TLS на всех публичных endpoint, желательно mTLS или private network для coordinator <-> worker.
-- Persistent storage для jobs/registry вместо in-memory state, иначе рестарт coordinator теряет состояние.
+- Persistent storage для jobs/registry: включается через `COORDINATOR_PERSISTENCE=postgres`.
 - Очередь/lease-механизм для повторного назначения jobs и распределенных coordinator-инстансов.
-- Object storage для изображений и больших payload'ов: через coordinator и JSON body должны идти metadata и ссылки, а не бинарные данные.
+- S3-compatible object storage для изображений и больших payload'ов: через coordinator и JSON body должны идти metadata и ссылки, а не бинарные данные.
 - Централизованные metrics/logs/tracing и алерты по capacity, latency, failed jobs, stale worker/client.
 
 ## Расширение системы

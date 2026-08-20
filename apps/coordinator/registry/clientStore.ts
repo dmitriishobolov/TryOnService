@@ -4,13 +4,25 @@ import type {
   RegisteredClient,
 } from "../../shared/contracts/index.js";
 
-export class ClientRegistry {
-  private readonly clients = new Map<string, RegisteredClient>();
-
+export interface ClientRegistryStore {
   register(
     request: ClientRegistrationRequest,
     resolvedBaseUrl: string,
-  ): RegisteredClient {
+  ): Promise<RegisteredClient>;
+  heartbeat(request: ClientHeartbeatRequest): Promise<RegisteredClient | undefined>;
+  get(clientId: string): Promise<RegisteredClient | undefined>;
+  list(): Promise<RegisteredClient[]>;
+  markOffline(clientId: string): Promise<RegisteredClient | undefined>;
+  markStaleClientsOffline(heartbeatTimeoutMs: number): Promise<RegisteredClient[]>;
+}
+
+export class ClientRegistry implements ClientRegistryStore {
+  private readonly clients = new Map<string, RegisteredClient>();
+
+  async register(
+    request: ClientRegistrationRequest,
+    resolvedBaseUrl: string,
+  ): Promise<RegisteredClient> {
     const now = new Date().toISOString();
     const previous = this.clients.get(request.clientId);
     const baseUrl = resolvedBaseUrl.replace(/\/$/, "");
@@ -29,7 +41,9 @@ export class ClientRegistry {
     return client;
   }
 
-  heartbeat(request: ClientHeartbeatRequest): RegisteredClient | undefined {
+  async heartbeat(
+    request: ClientHeartbeatRequest,
+  ): Promise<RegisteredClient | undefined> {
     const client = this.clients.get(request.clientId);
 
     if (!client) {
@@ -47,15 +61,15 @@ export class ClientRegistry {
     return updated;
   }
 
-  get(clientId: string): RegisteredClient | undefined {
+  async get(clientId: string): Promise<RegisteredClient | undefined> {
     return this.clients.get(clientId);
   }
 
-  list(): RegisteredClient[] {
+  async list(): Promise<RegisteredClient[]> {
     return [...this.clients.values()];
   }
 
-  markOffline(clientId: string): RegisteredClient | undefined {
+  async markOffline(clientId: string): Promise<RegisteredClient | undefined> {
     const client = this.clients.get(clientId);
 
     if (!client) {
@@ -72,7 +86,9 @@ export class ClientRegistry {
     return updated;
   }
 
-  markStaleClientsOffline(heartbeatTimeoutMs: number): RegisteredClient[] {
+  async markStaleClientsOffline(
+    heartbeatTimeoutMs: number,
+  ): Promise<RegisteredClient[]> {
     const now = Date.now();
     const changed: RegisteredClient[] = [];
 
@@ -83,7 +99,7 @@ export class ClientRegistry {
         client.status !== "offline" &&
         now - lastHeartbeatAt > heartbeatTimeoutMs
       ) {
-        const offline = this.markOffline(client.clientId);
+        const offline = await this.markOffline(client.clientId);
 
         if (offline) {
           changed.push(offline);

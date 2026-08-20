@@ -24,18 +24,44 @@ export interface TelegramClientRef {
 
 export type ClientRef = TelegramClientRef;
 
+export type StorageObjectDriver = "local" | "s3";
+
+export interface StorageObjectRef {
+  driver: StorageObjectDriver;
+  key: string;
+  bucket?: string;
+  contentType?: string;
+  sizeBytes?: number;
+  checksumSha256?: string;
+  url?: string;
+  createdAt?: string;
+  expiresAt?: string;
+}
+
+export interface StorageObjectUploadRequest {
+  key?: string;
+  contentType?: string;
+  dataBase64: string;
+}
+
+export interface StorageObjectUploadResponse {
+  object: StorageObjectRef;
+}
+
 export interface CreateTryOnJobRequest {
   sourceClientId: string;
   client: ClientRef;
   payload: {
     command: "request";
     text?: string;
+    inputFiles?: StorageObjectRef[];
   };
   callbackUrl?: string;
 }
 
 export interface TryOnJobResult {
   message: string;
+  files?: StorageObjectRef[];
 }
 
 export interface TryOnJobError {
@@ -222,7 +248,44 @@ export function isCreateTryOnJobRequest(
     typeof client.chatId === "string" &&
     client.chatId.length > 0 &&
     payload.command === "request" &&
+    (payload.inputFiles === undefined ||
+      (Array.isArray(payload.inputFiles) &&
+        payload.inputFiles.every(isStorageObjectRef))) &&
     (value.callbackUrl === undefined || typeof value.callbackUrl === "string")
+  );
+}
+
+export function isStorageObjectRef(value: unknown): value is StorageObjectRef {
+  if (!isObject(value)) {
+    return false;
+  }
+
+  return (
+    (value.driver === "local" || value.driver === "s3") &&
+    typeof value.key === "string" &&
+    value.key.length > 0 &&
+    (value.bucket === undefined || typeof value.bucket === "string") &&
+    (value.contentType === undefined ||
+      typeof value.contentType === "string") &&
+    (value.sizeBytes === undefined ||
+      (typeof value.sizeBytes === "number" && value.sizeBytes >= 0)) &&
+    (value.checksumSha256 === undefined ||
+      typeof value.checksumSha256 === "string") &&
+    (value.url === undefined || typeof value.url === "string") &&
+    (value.createdAt === undefined || typeof value.createdAt === "string") &&
+    (value.expiresAt === undefined || typeof value.expiresAt === "string")
+  );
+}
+
+export function isStorageObjectUploadRequest(
+  value: unknown,
+): value is StorageObjectUploadRequest {
+  return (
+    isObject(value) &&
+    typeof value.dataBase64 === "string" &&
+    value.dataBase64.length > 0 &&
+    (value.key === undefined || typeof value.key === "string") &&
+    (value.contentType === undefined || typeof value.contentType === "string")
   );
 }
 
@@ -360,7 +423,11 @@ export function isJobResultUpdateRequest(
   if (value.status === "succeeded") {
     return (
       value.result === undefined ||
-      (isObject(value.result) && typeof value.result.message === "string")
+      (isObject(value.result) &&
+        typeof value.result.message === "string" &&
+        (value.result.files === undefined ||
+          (Array.isArray(value.result.files) &&
+            value.result.files.every(isStorageObjectRef))))
     );
   }
 
@@ -381,6 +448,9 @@ export function isTelegramJobCallbackRequest(
     value.client.type === "telegram" &&
     typeof value.client.chatId === "string" &&
     isObject(value.result) &&
-    typeof value.result.message === "string"
+    typeof value.result.message === "string" &&
+    (value.result.files === undefined ||
+      (Array.isArray(value.result.files) &&
+        value.result.files.every(isStorageObjectRef)))
   );
 }

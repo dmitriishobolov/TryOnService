@@ -5,6 +5,7 @@
 ## Подпапки
 
 - [contracts](contracts/README.md) - DTO, статусы, схемы валидации, request/response contracts.
+- [storage](storage/README.md) - общий object storage интерфейс и local backend для dev.
 
 ## Файлы верхнего уровня
 
@@ -19,6 +20,7 @@
 - типы jobs и worker'ов;
 - enum/status values;
 - DTO для API coordinator и worker;
+- DTO для object storage refs;
 - схемы runtime-валидации;
 - общие ошибки и коды ошибок;
 - небольшие общие helpers, если они действительно нужны нескольким приложениям, например port discovery, HTTP helpers или token signing.

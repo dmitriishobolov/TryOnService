@@ -26,6 +26,15 @@
 - `HTTP_CLIENT_TIMEOUT_MS` - timeout исходящих HTTP-вызовов coordinator.
 - `HTTP_CLIENT_RETRIES` - количество повторов исходящих HTTP-вызовов coordinator.
 - `MAX_JSON_BODY_BYTES` - максимальный размер JSON body входящего запроса.
+- `COORDINATOR_PERSISTENCE` - `memory` или `postgres`.
+- `POSTGRES_URL` - строка подключения к Postgres, используется только coordinator.
+- `POSTGRES_SSL` - включить SSL для подключения к Postgres.
+- `POSTGRES_MAX_CONNECTIONS` - максимальный размер pool coordinator.
+- `STORAGE_DRIVER` - `local` сейчас, `s3` зарезервирован для production backend.
+- `STORAGE_LOCAL_ROOT` - папка local object storage для dev.
+- `STORAGE_PUBLIC_BASE_URL` - публичная база URL, если local storage отдается через reverse proxy.
+- `STORAGE_BUCKET` - имя bucket для будущего S3-compatible backend.
+- `STORAGE_SIGNED_URL_TTL_MS` - TTL будущих signed storage URLs.
 
 ## Правила
 

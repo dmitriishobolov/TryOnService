@@ -1,14 +1,14 @@
 import type { CoordinatorConfig } from "../config/index.js";
-import type { InMemoryJobStore } from "../jobs/store.js";
-import type { WorkerRegistry } from "../registry/store.js";
+import type { JobStore } from "../jobs/store.js";
+import type { WorkerRegistryStore } from "../registry/store.js";
 
 export class Scheduler {
   private isHousekeeping = false;
 
   constructor(
     private readonly config: CoordinatorConfig,
-    private readonly jobs: InMemoryJobStore,
-    private readonly workers: WorkerRegistry,
+    private readonly jobs: JobStore,
+    private readonly workers: WorkerRegistryStore,
     private readonly cancelWorkerJob?: (
       workerId: string,
       jobId: string,
@@ -23,7 +23,7 @@ export class Scheduler {
     this.isHousekeeping = true;
 
     try {
-      for (const job of this.jobs.findExpiredAssignments(
+      for (const job of await this.jobs.findExpiredAssignments(
         this.config.jobAssignmentTimeoutMs,
       )) {
         if (job.assignedWorkerId) {
@@ -35,10 +35,10 @@ export class Scheduler {
               );
             },
           );
-          this.workers.release(job.assignedWorkerId);
+          await this.workers.release(job.assignedWorkerId);
         }
 
-        this.jobs.markAssignmentExpired(job.id);
+        await this.jobs.markAssignmentExpired(job.id);
         console.warn(`[coordinator] Assignment for job ${job.id} expired`);
       }
     } finally {

@@ -5,6 +5,9 @@ import {
   WORKER_HEARTBEAT_TIMEOUT_MS,
 } from "../../shared/contracts/index.js";
 
+export type CoordinatorPersistenceDriver = "memory" | "postgres";
+export type CoordinatorStorageDriver = "local" | "s3";
+
 export interface CoordinatorConfig {
   port: number;
   publicUrl: string;
@@ -28,6 +31,15 @@ export interface CoordinatorConfig {
   httpClientTimeoutMs: number;
   httpClientRetries: number;
   maxJsonBodyBytes: number;
+  persistenceDriver: CoordinatorPersistenceDriver;
+  postgresUrl?: string;
+  postgresSsl: boolean;
+  postgresMaxConnections: number;
+  storageDriver: CoordinatorStorageDriver;
+  storageLocalRoot: string;
+  storagePublicBaseUrl?: string;
+  storageBucket?: string;
+  storageSignedUrlTtlMs: number;
 }
 
 function readNumber(name: string, fallback: number): number {
@@ -48,6 +60,48 @@ function readNumber(name: string, fallback: number): number {
 
 function readString(name: string, fallback: string): string {
   return process.env[name]?.trim() || fallback;
+}
+
+function readOptionalString(name: string): string | undefined {
+  return process.env[name]?.trim() || undefined;
+}
+
+function readBoolean(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+
+  if (!raw) {
+    return fallback;
+  }
+
+  if (raw === "true" || raw === "1" || raw === "yes") {
+    return true;
+  }
+
+  if (raw === "false" || raw === "0" || raw === "no") {
+    return false;
+  }
+
+  throw new Error(`${name} must be a boolean`);
+}
+
+function readPersistenceDriver(): CoordinatorPersistenceDriver {
+  const value = readString("COORDINATOR_PERSISTENCE", "memory");
+
+  if (value !== "memory" && value !== "postgres") {
+    throw new Error("COORDINATOR_PERSISTENCE must be memory or postgres");
+  }
+
+  return value;
+}
+
+function readStorageDriver(): CoordinatorStorageDriver {
+  const value = readString("STORAGE_DRIVER", "local");
+
+  if (value !== "local" && value !== "s3") {
+    throw new Error("STORAGE_DRIVER must be local or s3");
+  }
+
+  return value;
 }
 
 export function loadCoordinatorConfig(): CoordinatorConfig {
@@ -103,5 +157,14 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
     httpClientTimeoutMs: readNumber("HTTP_CLIENT_TIMEOUT_MS", 5_000),
     httpClientRetries: readNumber("HTTP_CLIENT_RETRIES", 1),
     maxJsonBodyBytes: readNumber("MAX_JSON_BODY_BYTES", 1_048_576),
+    persistenceDriver: readPersistenceDriver(),
+    postgresUrl: readOptionalString("POSTGRES_URL"),
+    postgresSsl: readBoolean("POSTGRES_SSL", false),
+    postgresMaxConnections: readNumber("POSTGRES_MAX_CONNECTIONS", 10),
+    storageDriver: readStorageDriver(),
+    storageLocalRoot: readString("STORAGE_LOCAL_ROOT", "tmp/storage"),
+    storagePublicBaseUrl: readOptionalString("STORAGE_PUBLIC_BASE_URL"),
+    storageBucket: readOptionalString("STORAGE_BUCKET"),
+    storageSignedUrlTtlMs: readNumber("STORAGE_SIGNED_URL_TTL_MS", 900_000),
   };
 }

@@ -19,8 +19,10 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - [api](api/README.md) - HTTP/API слой для клиентов, worker'ов и внутренних операций.
 - [config](config/README.md) - конфигурация coordinator, чтение env и валидация настроек.
 - [jobs](jobs/README.md) - модель jobs, статусы, хранение и переходы состояния.
+- [persistence](persistence/README.md) - выбор memory/Postgres backend и миграции coordinator tables.
 - [registry](registry/README.md) - реестр worker'ов, registration, heartbeat, capacity и capabilities.
-- [scheduler](scheduler/README.md) - in-memory housekeeping просроченных assignments и освобождение capacity.
+- [scheduler](scheduler/README.md) - housekeeping просроченных assignments и освобождение capacity.
+- [storage](storage/README.md) - object storage backend для файлов и изображений.
 - [utils](utils/README.md) - утилитарные функции coordinator: IP extraction, registration guards и helpers без доменной логики.
 
 ## Основной поток
@@ -36,8 +38,10 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 ## Реализованные endpoints
 
 - `GET /health` - статус coordinator, worker'ы, service clients и количество queued jobs; требует `x-admin-key`.
-- `GET /jobs` - список jobs в in-memory storage; требует `x-admin-key`.
+- `GET /jobs` - список jobs из активного persistence backend; требует `x-admin-key`.
 - `GET /jobs/:id` - состояние конкретной job; требует `x-admin-key`.
+- `POST /storage/objects` - dev/local upload файла в object storage; требует `x-client-key` или `x-worker-service-key`, возвращает `StorageObjectRef`.
+- `GET /storage/objects/:key` - dev/debug чтение объекта из local storage; требует `x-admin-key`.
 - `POST /jobs` - создание job assignment зарегистрированным клиентом; требует `x-client-key`, валидный `sourceClientId`, возвращает выбранный worker endpoint, `workerRequest` и dispatch token.
 - `POST /clients/register` - регистрация service client; требует `x-client-key`.
 - `POST /clients/:clientId/heartbeat` - heartbeat service client; требует `x-client-key`.
@@ -49,6 +53,8 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 ## Что важно сохранить
 
 - Coordinator является источником правды по состоянию jobs.
+- Postgres, если включен, принадлежит только coordinator: worker/client не получают credentials БД.
+- Файлы и изображения должны жить в object storage; в БД хранятся metadata и object keys.
 - Coordinator не должен быть data-plane для клиентских результатов: результат идет worker -> client callback.
 - Перед выдачей worker клиенту coordinator должен подготовить pending assignment на worker-е.
 - `callbackUrl` при создании job не должен доверяться клиентскому payload: coordinator берет его только из registry зарегистрированного service client.

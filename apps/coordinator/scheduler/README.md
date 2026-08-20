@@ -24,4 +24,4 @@ Worker выбирается в coordinator API по минимальным кр�
 - Assignment job должно быть атомарным: одна job не должна получить два worker'а.
 - Retry policy должна быть явной и наблюдаемой через логи/метрики.
 
-В текущей реализации scheduler работает in-memory и чистит только просроченные assignments. Data-plane остается прямым: client -> worker -> client callback.
+В текущей реализации scheduler работает поверх выбранного persistence backend и чистит только просроченные assignments. Data-plane остается прямым: client -> worker -> client callback.

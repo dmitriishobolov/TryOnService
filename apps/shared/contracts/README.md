@@ -15,8 +15,9 @@
 - регистрацию worker;
 - heartbeat worker;
 - назначение job;
-- assignment response для прямой связи client -> worker;
+- assignment/queued response для прямой связи client -> worker или ожидания capacity;
 - worker assignment prepare для security handshake coordinator -> worker;
+- worker cancel response для pending/running отмены;
 - callback token metadata для прямого ответа worker -> client;
 - storage-access token metadata для прямого upload/download client/worker -> storage-node;
 - обновление прогресса;
@@ -39,4 +40,5 @@
 - Новые обязательные поля требуют миграционного плана.
 - `CreateTryOnJobRequest.sourceClientId` обязателен: jobs создаются только от зарегистрированного service client.
 - Статусы jobs и worker'ов должны быть перечислены явно, без неявных строковых литералов в коде приложений.
+- `delivery_failed` означает, что обработка завершилась и `result` есть, но callback клиенту не доставлен.
 - Ошибки API возвращаются в формате `ApiErrorResponse`.

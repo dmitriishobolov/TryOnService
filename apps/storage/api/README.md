@@ -10,6 +10,8 @@
 
 `x-storage-access-token` подписывает coordinator через `STORAGE_ACCESS_SIGNING_KEY`. Storage-node проверяет подпись, `STORAGE_ACCESS_SIGNING_KEY_VERSION`, storageId, TTL, scope и keyPrefix локально, поэтому для чтения/записи файлов не нужен дополнительный roundtrip в coordinator.
 
+PUT и GET работают потоково: storage-node не собирает объект целиком в память. После успешного PUT backend обновляет metadata index и `usedBytes` инкрементально.
+
 ## Coordinator client
 
 `coordinatorClient.ts` делает:

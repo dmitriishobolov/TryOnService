@@ -13,6 +13,7 @@ export async function runWorkerJob(
   config: WorkerConfig,
   coordinator: CoordinatorClient,
   callbackToken?: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   await coordinator.reportProgress({
     jobId: job.jobId,
@@ -21,7 +22,8 @@ export async function runWorkerJob(
   });
 
   try {
-    const result = await runMockTryOnModel(config.mockProcessingDelayMs);
+    const result = await runMockTryOnModel(config.mockProcessingDelayMs, signal);
+    let deliveryError: unknown;
 
     if (job.callbackUrl) {
       const callback: TelegramJobCallbackRequest = {
@@ -30,31 +32,53 @@ export async function runWorkerJob(
         result,
       };
 
-      await postJson(
-        job.callbackUrl,
-        callback,
-        callbackToken ? { "x-client-callback-token": callbackToken } : {},
-        {
-          retries: config.httpClientRetries,
-          timeoutMs: config.httpClientTimeoutMs,
-        },
-      );
+      try {
+        await postJson(
+          job.callbackUrl,
+          callback,
+          callbackToken ? { "x-client-callback-token": callbackToken } : {},
+          {
+            retries: config.httpClientRetries,
+            timeoutMs: config.httpClientTimeoutMs,
+          },
+        );
+      } catch (error) {
+        deliveryError = error;
+      }
     }
 
-    const update: JobResultUpdateRequest = {
-      jobId: job.jobId,
-      status: "succeeded",
-    };
+    const update: JobResultUpdateRequest = deliveryError
+      ? {
+          jobId: job.jobId,
+          status: "delivery_failed",
+          result,
+          error: {
+            code: "client_callback_failed",
+            message:
+              deliveryError instanceof Error
+                ? deliveryError.message
+                : "Client callback delivery failed",
+            retryable: true,
+          },
+        }
+      : {
+          jobId: job.jobId,
+          status: "succeeded",
+          result,
+        };
 
     await coordinator.reportResult(update);
   } catch (error) {
+    const wasCancelled =
+      error instanceof Error &&
+      (error.name === "AbortError" || signal?.aborted === true);
     const update: JobResultUpdateRequest = {
       jobId: job.jobId,
-      status: "failed",
+      status: wasCancelled ? "cancelled" : "failed",
       error: {
-        code: "worker_processing_failed",
+        code: wasCancelled ? "worker_job_cancelled" : "worker_processing_failed",
         message: error instanceof Error ? error.message : "Worker processing failed",
-        retryable: true,
+        retryable: !wasCancelled,
       },
     };
 

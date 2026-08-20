@@ -24,13 +24,18 @@ import {
   type StorageRegistrationResponse,
   type WorkerAssignmentPrepareRequest,
   type WorkerAssignmentPrepareResponse,
+  type TryOnJob,
   type TryOnJobAssignmentResponse,
+  type TryOnJobCreateResponse,
+  type TryOnJobQueuedResponse,
+  type WorkerJobCancelResponse,
   type WorkerJobRequest,
   type WorkerRegistrationRequest,
   type WorkerRegistrationResponse,
 } from "../../shared/contracts/index.js";
 import { createDispatchToken } from "../../shared/dispatchToken.js";
 import {
+  HttpRequestError,
   writeCaughtError,
   readJsonBody,
   postJson,
@@ -155,6 +160,101 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         return;
       }
 
+      const assignmentMatch = /^\/jobs\/([^/]+)\/assignment$/.exec(url.pathname);
+
+      if (request.method === "GET" && assignmentMatch) {
+        if (!hasClientKey(request.headers["x-client-key"], config)) {
+          writeError(response, 401, "unauthorized_client", "Invalid client key");
+          return;
+        }
+
+        const sourceClientId = url.searchParams.get("sourceClientId");
+
+        if (!sourceClientId) {
+          writeError(
+            response,
+            400,
+            "source_client_required",
+            "sourceClientId query parameter is required",
+          );
+          return;
+        }
+
+        const job = await jobs.get(assignmentMatch[1]);
+
+        if (!job) {
+          writeError(response, 404, "job_not_found", "Job not found");
+          return;
+        }
+
+        if (job.sourceClientId !== sourceClientId) {
+          recordSecurityEvent(audit, {
+            eventType: "job_assignment_forbidden",
+            severity: "warning",
+            ipAddress: requesterIp,
+            actorType: "client",
+            actorId: sourceClientId,
+            resourceType: "job",
+            resourceId: job.id,
+          });
+          writeError(
+            response,
+            403,
+            "job_assignment_forbidden",
+            "Job does not belong to this client",
+          );
+          return;
+        }
+
+        if (job.status !== "queued") {
+          writeError(
+            response,
+            409,
+            "job_not_waiting_for_assignment",
+            `Job is ${job.status}`,
+          );
+          return;
+        }
+
+        const inputFilesStoragePrefix = resolveInputFilesStoragePrefix(
+          job.payload.inputFiles,
+          job.sourceClientId,
+        );
+
+        if (!inputFilesStoragePrefix.valid) {
+          await jobs.markFailed(job.id, {
+            code: "input_files_not_scoped",
+            message: inputFilesStoragePrefix.message,
+            retryable: false,
+          });
+          writeError(
+            response,
+            400,
+            "input_files_not_scoped",
+            inputFilesStoragePrefix.message,
+          );
+          return;
+        }
+
+        const assignment = await assignJobIfPossible({
+          job,
+          config,
+          jobs,
+          workers,
+          storageNodes,
+          audit,
+          requesterIp,
+          inputFilesStoragePrefix,
+        });
+
+        writeJson(
+          response,
+          isQueuedJobResponse(assignment) ? 202 : 200,
+          assignment,
+        );
+        return;
+      }
+
       const getJobMatch = /^\/jobs\/([^/]+)$/.exec(url.pathname);
 
       if (request.method === "GET" && getJobMatch) {
@@ -235,173 +335,38 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        const requiredCapabilities = resolveRequiredCapabilities(body);
-        const worker = await workers.findAvailable(
-          config.workerHeartbeatTimeoutMs,
-          requiredCapabilities,
-        );
-
-        if (!worker) {
-          writeError(
-            response,
-            503,
-            "no_available_worker",
-            "No worker is currently available for this job",
-          );
-          return;
-        }
-
-        const reservedWorker = await workers.reserve(worker.workerId);
-
-        if (!reservedWorker) {
-          writeError(
-            response,
-            409,
-            "worker_not_available",
-            "Selected worker is no longer available",
-          );
-          return;
-        }
-
-        const dispatchTokenExpiresAt = new Date(
-          Date.now() + config.workerDispatchTokenTtlMs,
-        ).toISOString();
-        const callbackTokenExpiresAt = new Date(
-          Date.now() + config.clientCallbackTokenTtlMs,
-        ).toISOString();
-        const job = await jobs.createAssigned(
-          requestWithCallback,
-          reservedWorker.workerId,
-          dispatchTokenExpiresAt,
-        );
-        const workerRequest = createWorkerJobRequest(
-          job.id,
-          requestWithCallback,
-          config,
-        );
-        const storageAccess = await createStorageAccessAssignment(
-          storageNodes,
-          config,
-          resolveJobStorageAccessRequest(
-            job.id,
-            reservedWorker.workerId,
-            inputFilesStoragePrefix.storageId,
-            inputFilesStoragePrefix.keyPrefix,
-          ),
-        );
-
-        if (!storageAccess) {
-          await workers.release(reservedWorker.workerId);
-          await jobs.markFailed(job.id, {
-            code: "no_available_storage",
-            message: "No object storage node is currently available",
-            retryable: true,
-          });
-          writeError(
-            response,
-            503,
-            "no_available_storage",
-            "No object storage node is currently available",
-          );
-          return;
-        }
-
-        workerRequest.storage = storageAccess;
-        const dispatchToken = createDispatchToken(
-          {
-            purpose: "worker-dispatch",
-            keyVersion: config.workerDispatchSigningKeyVersion,
-            jobId: job.id,
-            workerId: reservedWorker.workerId,
-            expiresAt: dispatchTokenExpiresAt,
-          },
-          config.workerDispatchSigningKey,
-        );
-        const callbackToken = createDispatchToken(
-          {
-            purpose: "client-callback",
-            keyVersion: config.clientCallbackSigningKeyVersion,
-            jobId: job.id,
-            clientId: requestWithCallback.sourceClientId,
-            expiresAt: callbackTokenExpiresAt,
-          },
-          config.clientCallbackSigningKey,
-        );
-
-        try {
-          const prepared = await prepareWorkerAssignment(
-            reservedWorker,
-            job.id,
-            requestWithCallback,
-            requiredCapabilities,
-            dispatchTokenExpiresAt,
-            callbackToken,
-            callbackTokenExpiresAt,
-            config,
-          );
-
-          if (!prepared.accepted) {
-            throw new Error("Worker rejected assignment preparation");
-          }
-        } catch (error) {
-          await workers.release(reservedWorker.workerId);
-          void cancelWorkerAssignment(reservedWorker, job.id, config).catch(
-            (cancelError) => {
-              console.error(
-                `[coordinator] Failed to cancel prepared job ${job.id} on worker ${reservedWorker.workerId}`,
-                cancelError,
-              );
-            },
-          );
-          await jobs.markFailed(job.id, {
-            code: "worker_prepare_failed",
-            message:
-              error instanceof Error
-                ? error.message
-                : "Worker failed to prepare assignment",
-            retryable: true,
-          });
-          console.error(
-            `[coordinator] Failed to prepare job ${job.id} on worker ${reservedWorker.workerId}`,
-            error,
-          );
-          writeError(
-            response,
-            502,
-            "worker_prepare_failed",
-            "Worker failed to prepare assignment",
-          );
-          return;
-        }
-
-        const assignment: TryOnJobAssignmentResponse = {
+        const job = await jobs.create(requestWithCallback);
+        const assignment = await assignJobIfPossible({
           job,
-          worker: {
-            workerId: reservedWorker.workerId,
-            baseUrl: reservedWorker.baseUrl,
-            jobUrl: `${reservedWorker.baseUrl}/jobs`,
-            dispatchToken,
-            dispatchTokenExpiresAt,
-          },
-          storage: storageAccess,
-          workerRequest,
-        };
-
-        recordSecurityEvent(audit, {
-          eventType: "job_assignment_issued",
-          severity: "info",
-          ipAddress: requesterIp,
-          actorType: "client",
-          actorId: requestWithCallback.sourceClientId,
-          resourceType: "job",
-          resourceId: job.id,
-          metadata: {
-            workerId: reservedWorker.workerId,
-            storageId: storageAccess.storageId,
-          },
+          config,
+          jobs,
+          workers,
+          storageNodes,
+          audit,
+          requesterIp,
+          inputFilesStoragePrefix,
         });
 
-        writeJson(response, 201, assignment);
+        if (isQueuedJobResponse(assignment)) {
+          recordSecurityEvent(audit, {
+            eventType: "job_queued",
+            severity: "info",
+            ipAddress: requesterIp,
+            actorType: "client",
+            actorId: requestWithCallback.sourceClientId,
+            resourceType: "job",
+            resourceId: job.id,
+            metadata: {
+              reason: assignment.reason,
+            },
+          });
+        }
+
+        writeJson(
+          response,
+          isQueuedJobResponse(assignment) ? 202 : 201,
+          assignment,
+        );
         return;
       }
 
@@ -946,7 +911,11 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        const worker = await workers.heartbeat(body);
+        const activeJobs = await jobs.findActiveByWorker(body.workerId);
+        const worker = await workers.heartbeat({
+          ...body,
+          runningJobs: Math.max(body.runningJobs, activeJobs.length),
+        });
 
         if (!worker) {
           writeError(response, 404, "worker_not_found", "Worker is not registered");
@@ -1050,6 +1019,8 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         if (
           previous?.assignedWorkerId &&
           previous.status !== "succeeded" &&
+          previous.status !== "delivery_failed" &&
+          previous.status !== "cancelled" &&
           previous.status !== "failed"
         ) {
           await workers.release(previous.assignedWorkerId);
@@ -1158,6 +1129,249 @@ function readAuditLimit(raw: string | null): number {
   return Number.isInteger(value) && value > 0 && value <= 1_000 ? value : 100;
 }
 
+interface ValidInputFilesStoragePrefix {
+  valid: true;
+  storageId?: string;
+  keyPrefix?: string;
+}
+
+interface AssignJobDeps {
+  job: TryOnJob;
+  config: CoordinatorConfig;
+  jobs: JobStore;
+  workers: WorkerRegistryStore;
+  storageNodes: StorageRegistryStore;
+  audit: SecurityAuditStore;
+  requesterIp: string;
+  inputFilesStoragePrefix: ValidInputFilesStoragePrefix;
+}
+
+async function assignJobIfPossible({
+  job,
+  config,
+  jobs,
+  workers,
+  storageNodes,
+  audit,
+  requesterIp,
+  inputFilesStoragePrefix,
+}: AssignJobDeps): Promise<TryOnJobCreateResponse> {
+  const firstQueued = (await jobs.findQueued())[0];
+
+  if (firstQueued?.id !== job.id) {
+    return createQueuedJobResponse(job, "waiting_for_turn", config);
+  }
+
+  const request = createTryOnJobRequestFromJob(job);
+  const requiredCapabilities = resolveRequiredCapabilities(request);
+  const worker = await workers.findAvailable(
+    config.workerHeartbeatTimeoutMs,
+    requiredCapabilities,
+  );
+
+  if (!worker) {
+    return createQueuedJobResponse(job, "no_available_worker", config);
+  }
+
+  const reservedWorker = await workers.reserve(worker.workerId);
+
+  if (!reservedWorker) {
+    return createQueuedJobResponse(job, "worker_not_available", config);
+  }
+
+  const dispatchTokenExpiresAt = new Date(
+    Date.now() + config.workerDispatchTokenTtlMs,
+  ).toISOString();
+  const assignedJob = await jobs.markAssigned(
+    job.id,
+    reservedWorker.workerId,
+    dispatchTokenExpiresAt,
+  );
+
+  if (!assignedJob) {
+    await workers.release(reservedWorker.workerId);
+    const current = await jobs.get(job.id);
+
+    return createQueuedJobResponse(current ?? job, "job_not_queue_head", config);
+  }
+
+  const workerRequest = createWorkerJobRequest(assignedJob.id, request, config);
+  const storageAccess = await createStorageAccessAssignment(
+    storageNodes,
+    config,
+    resolveJobStorageAccessRequest(
+      assignedJob.id,
+      reservedWorker.workerId,
+      inputFilesStoragePrefix.storageId,
+      inputFilesStoragePrefix.keyPrefix,
+    ),
+  );
+
+  if (!storageAccess) {
+    await workers.release(reservedWorker.workerId);
+    const requeued = await jobs.requeue(assignedJob.id);
+
+    return createQueuedJobResponse(
+      requeued ?? assignedJob,
+      "no_available_storage",
+      config,
+    );
+  }
+
+  workerRequest.storage = storageAccess;
+  const callbackTokenExpiresAt = new Date(
+    Date.now() + config.clientCallbackTokenTtlMs,
+  ).toISOString();
+  const dispatchToken = createDispatchToken(
+    {
+      purpose: "worker-dispatch",
+      keyVersion: config.workerDispatchSigningKeyVersion,
+      jobId: assignedJob.id,
+      workerId: reservedWorker.workerId,
+      expiresAt: dispatchTokenExpiresAt,
+    },
+    config.workerDispatchSigningKey,
+  );
+  const callbackToken = createDispatchToken(
+    {
+      purpose: "client-callback",
+      keyVersion: config.clientCallbackSigningKeyVersion,
+      jobId: assignedJob.id,
+      clientId: assignedJob.sourceClientId,
+      expiresAt: callbackTokenExpiresAt,
+    },
+    config.clientCallbackSigningKey,
+  );
+
+  try {
+    const prepared = await prepareWorkerAssignment(
+      reservedWorker,
+      assignedJob.id,
+      request,
+      requiredCapabilities,
+      dispatchTokenExpiresAt,
+      callbackToken,
+      callbackTokenExpiresAt,
+      config,
+    );
+
+    if (!prepared.accepted) {
+      throw new Error("Worker rejected assignment preparation");
+    }
+  } catch (error) {
+    console.error(
+      `[coordinator] Failed to prepare job ${assignedJob.id} on worker ${reservedWorker.workerId}`,
+      error,
+    );
+
+    let cancelConfirmed = false;
+
+    try {
+      cancelConfirmed = isWorkerCancelSafeToRelease(
+        await cancelWorkerAssignment(reservedWorker, assignedJob.id, config),
+      );
+    } catch (cancelError) {
+      console.error(
+        `[coordinator] Failed to cancel prepared job ${assignedJob.id} on worker ${reservedWorker.workerId}`,
+        cancelError,
+      );
+    }
+
+    if (!cancelConfirmed) {
+      await workers.markOffline(reservedWorker.workerId);
+      await jobs.markFailed(assignedJob.id, {
+        code: "worker_prepare_failed",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Worker failed to prepare assignment",
+        retryable: true,
+      });
+      throw new HttpRequestError(
+        502,
+        "worker_prepare_failed",
+        "Worker failed to prepare assignment",
+      );
+    }
+
+    await workers.release(reservedWorker.workerId);
+    const requeued = await jobs.requeue(assignedJob.id);
+
+    return createQueuedJobResponse(
+      requeued ?? assignedJob,
+      "worker_prepare_failed",
+      config,
+    );
+  }
+
+  const assignment: TryOnJobAssignmentResponse = {
+    job: assignedJob,
+    worker: {
+      workerId: reservedWorker.workerId,
+      baseUrl: reservedWorker.baseUrl,
+      jobUrl: `${reservedWorker.baseUrl}/jobs`,
+      dispatchToken,
+      dispatchTokenExpiresAt,
+    },
+    storage: storageAccess,
+    workerRequest,
+  };
+
+  recordSecurityEvent(audit, {
+    eventType: "job_assignment_issued",
+    severity: "info",
+    ipAddress: requesterIp,
+    actorType: "client",
+    actorId: assignedJob.sourceClientId,
+    resourceType: "job",
+    resourceId: assignedJob.id,
+    metadata: {
+      workerId: reservedWorker.workerId,
+      storageId: storageAccess.storageId,
+    },
+  });
+
+  return assignment;
+}
+
+function createQueuedJobResponse(
+  job: TryOnJob,
+  reason: string,
+  config: CoordinatorConfig,
+): TryOnJobQueuedResponse {
+  return {
+    job,
+    queued: true,
+    retryAfterMs: Math.max(250, config.schedulerIntervalMs),
+    reason,
+  };
+}
+
+function isQueuedJobResponse(
+  response: TryOnJobCreateResponse,
+): response is TryOnJobQueuedResponse {
+  return "queued" in response;
+}
+
+function createTryOnJobRequestFromJob(job: TryOnJob): CreateTryOnJobRequest {
+  return {
+    sourceClientId: job.sourceClientId,
+    client: job.client,
+    payload: job.payload,
+    callbackUrl: job.callbackUrl,
+  };
+}
+
+function isWorkerCancelSafeToRelease(
+  cancellation: WorkerJobCancelResponse,
+): boolean {
+  return (
+    cancellation.cancelledPending ||
+    cancellation.cancelledRunning ||
+    cancellation.runningCancellationSupported
+  );
+}
+
 async function resolveJobCallback(
   request: CreateTryOnJobRequest,
   clients: ClientRegistryStore,
@@ -1230,8 +1444,8 @@ function cancelWorkerAssignment(
   worker: RegisteredWorker,
   jobId: string,
   config: CoordinatorConfig,
-): Promise<unknown> {
-  return postJson(
+): Promise<WorkerJobCancelResponse> {
+  return postJson<WorkerJobCancelResponse>(
     `${worker.baseUrl}/jobs/${jobId}/cancel`,
     {},
     {

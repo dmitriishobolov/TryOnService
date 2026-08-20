@@ -4,9 +4,9 @@ import type {
   ClientRegistrationResponse,
   CreateTryOnJobRequest,
   StorageAccessResponse,
-  TryOnJobAssignmentResponse,
+  TryOnJobCreateResponse,
 } from "../../shared/contracts/index.js";
-import { postJson } from "../../shared/http.js";
+import { getJson, postJson } from "../../shared/http.js";
 import type { TelegramClientConfig } from "./config.js";
 
 export class TelegramCoordinatorClient {
@@ -48,7 +48,7 @@ export class TelegramCoordinatorClient {
     chatId: string;
     username?: string;
     text?: string;
-  }): Promise<TryOnJobAssignmentResponse> {
+  }): Promise<TryOnJobCreateResponse> {
     const payload: CreateTryOnJobRequest = {
       sourceClientId: this.config.clientId,
       client: {
@@ -62,9 +62,22 @@ export class TelegramCoordinatorClient {
       },
     };
 
-    return postJson<TryOnJobAssignmentResponse>(
+    return postJson<TryOnJobCreateResponse>(
       `${this.config.coordinatorUrl}/jobs`,
       payload,
+      this.headers(),
+      this.postOptions(),
+    );
+  }
+
+  getJobAssignment(jobId: string): Promise<TryOnJobCreateResponse> {
+    const url = new URL(
+      `${this.config.coordinatorUrl}/jobs/${encodeURIComponent(jobId)}/assignment`,
+    );
+    url.searchParams.set("sourceClientId", this.config.clientId);
+
+    return getJson<TryOnJobCreateResponse>(
+      url.toString(),
       this.headers(),
       this.postOptions(),
     );

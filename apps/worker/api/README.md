@@ -8,7 +8,7 @@
 - отправка heartbeat;
 - прием `POST /assignments` от coordinator для подготовки будущего client dispatch;
 - прием `POST /jobs` от клиента по `x-job-dispatch-token`;
-- прием `POST /jobs/:jobId/cancel` от coordinator для отмены pending assignment;
+- прием `POST /jobs/:jobId/cancel` от coordinator для отмены pending или running job;
 - отправка прогресса выполнения;
 - отправка финального результата;
 - отправка структурированной ошибки.
@@ -25,5 +25,6 @@
 - Доступ к object storage не идет через coordinator; worker получает `StorageAccessAssignment` в `workerRequest` или запрашивает его через `POST /storage/access`.
 - Signed dispatch token сам по себе недостаточен: worker также требует заранее подготовленный pending assignment.
 - Pending assignments учитываются как занятые slots, чтобы coordinator видел реальную нагрузку сети.
+- Running jobs отменяются через `AbortController`; ответ cancel сообщает `cancelledPending`, `cancelledRunning` и `runningCancellationSupported`.
 - Сетевые ошибки не должны падать неуправляемо внутри runner: API слой должен возвращать понятную ошибку.
 - Форматы запросов и ответов берутся из `apps/shared/contracts`.

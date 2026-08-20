@@ -1,9 +1,9 @@
 import { createServer } from "node:http";
-import type { IncomingHttpHeaders, IncomingMessage, Server } from "node:http";
+import type { IncomingHttpHeaders, Server } from "node:http";
+import { pipeline } from "node:stream/promises";
 
 import { verifyDispatchToken } from "../../shared/dispatchToken.js";
 import {
-  HttpRequestError,
   requestUrl,
   writeCaughtError,
   writeError,
@@ -12,6 +12,7 @@ import {
 import { FixedWindowRateLimiter } from "../../shared/rateLimit.js";
 import {
   normalizeStorageKey,
+  StorageObjectTooLargeError,
   type ObjectStorage,
 } from "../../shared/storage/index.js";
 import type { StorageConfig } from "../config/index.js";
@@ -75,11 +76,11 @@ export function createStorageServer(deps: StorageServerDeps): Server {
           return;
         }
 
-        const data = await readRawBody(request, config.maxObjectBytes);
         const object = await objects.putObject({
           key,
           contentType: firstHeaderValue(request.headers["content-type"]),
-          data,
+          body: request,
+          maxBytes: config.maxObjectBytes,
         });
 
         writeJson(response, 201, {
@@ -107,15 +108,30 @@ export function createStorageServer(deps: StorageServerDeps): Server {
         const object = await objects.getObject(key);
 
         response.writeHead(200, {
-          "Content-Type": object.ref.contentType ?? "application/octet-stream",
-          "Content-Length": object.data.length,
+          "Content-Type":
+            object.contentType ??
+            object.ref.contentType ??
+            "application/octet-stream",
+          ...(object.sizeBytes !== undefined
+            ? { "Content-Length": object.sizeBytes }
+            : {}),
         });
-        response.end(object.data);
+        await pipeline(object.stream, response);
         return;
       }
 
       writeError(response, 404, "not_found", "Route not found");
     } catch (error) {
+      if (error instanceof StorageObjectTooLargeError) {
+        writeError(
+          response,
+          413,
+          "object_too_large",
+          `Storage object exceeds ${error.maxBytes} bytes`,
+        );
+        return;
+      }
+
       console.error("[storage] Unhandled request error", error);
       writeCaughtError(response, error);
     }
@@ -167,31 +183,6 @@ function hasStorageObjectAccess(
   }
 
   return true;
-}
-
-async function readRawBody(
-  request: IncomingMessage,
-  maxBytes: number,
-): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  let totalBytes = 0;
-
-  for await (const chunk of request) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    totalBytes += buffer.length;
-
-    if (totalBytes > maxBytes) {
-      throw new HttpRequestError(
-        413,
-        "object_too_large",
-        `Storage object exceeds ${maxBytes} bytes`,
-      );
-    }
-
-    chunks.push(buffer);
-  }
-
-  return Buffer.concat(chunks);
 }
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {

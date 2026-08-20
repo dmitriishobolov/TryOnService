@@ -23,11 +23,12 @@
 3. Клиент каждые `CLIENT_HEARTBEAT_INTERVAL_MS` отправляет `POST /clients/:clientId/heartbeat`.
 4. Пользователь создает запрос в своем канале: сайт, Discord, Telegram или другой источник.
 5. Если есть файлы, клиент запрашивает `POST /storage/access`, загружает файлы напрямую в storage-node и получает `StorageObjectRef`.
-6. Клиент создает job assignment через `POST /jobs`, передавая `sourceClientId`, `client` metadata и payload.
-7. Coordinator выбирает worker, готовит pending assignment на worker-е и возвращает клиенту `worker.jobUrl`, `worker.dispatchToken` и `workerRequest`.
-8. Клиент отправляет `workerRequest` напрямую в worker с header `x-job-dispatch-token`.
-9. Worker обрабатывает задачу и отправляет результат на callback URL клиента с header `x-client-callback-token`.
-10. Клиент проверяет callback token, связывает `jobId` со своим пользователем/каналом и показывает результат.
+6. Клиент создает job через `POST /jobs`, передавая `sourceClientId`, `client` metadata и payload.
+7. Coordinator либо сразу возвращает assignment, либо отвечает `202 queued`; в этом случае клиент polling-ом вызывает `GET /jobs/:jobId/assignment`.
+8. Coordinator выбирает worker, готовит pending assignment на worker-е и возвращает клиенту `worker.jobUrl`, `worker.dispatchToken` и `workerRequest`.
+9. Клиент отправляет `workerRequest` напрямую в worker с header `x-job-dispatch-token`.
+10. Worker обрабатывает задачу и отправляет результат на callback URL клиента с header `x-client-callback-token`.
+11. Клиент проверяет callback token, связывает `jobId` со своим пользователем/каналом и показывает результат.
 
 Coordinator остается control-plane: registry, assignment, security, metadata. Файлы и результат job идут по data-plane напрямую: client -> storage/worker -> client.
 
@@ -50,7 +51,7 @@ apps/client/<client-name>/
 
 - `README.md` - как запустить интеграцию, какие env нужны, какой пользовательский поток реализован.
 - `config.ts` - чтение env, defaults, валидация портов, URL и секретов.
-- `coordinatorClient.ts` - регистрация клиента, heartbeat, `POST /storage/access`, `POST /jobs`.
+- `coordinatorClient.ts` - регистрация клиента, heartbeat, `POST /storage/access`, `POST /jobs`, polling `GET /jobs/:jobId/assignment`.
 - `workerClient.ts` - прямой `POST` на `assignment.worker.jobUrl` с `x-job-dispatch-token`.
 - `callbackServer.ts` - HTTP callback endpoint, проверка `x-client-callback-token`, replay guard по `tokenId`.
 - `index.ts` - старт callback server, регистрация в coordinator, запуск heartbeat и платформенного клиента.
@@ -201,7 +202,7 @@ content-type: application/json
 }
 ```
 
-Если клиент падает или перестает отправлять heartbeat, coordinator пометит его offline, освободит зарезервированные worker slots и переведет активные jobs этого клиента в `failed`.
+Если клиент падает или перестает отправлять heartbeat, coordinator пометит его offline и попробует отменить pending/running job на worker-е. При подтвержденной отмене job станет `cancelled`, иначе coordinator не освободит capacity до финального отчета worker-а.
 
 ## Шаг 5. Работайте с файлами через storage-node
 
@@ -233,7 +234,7 @@ Coordinator не выдаст клиенту доступ за пределы `c
 
 ## Шаг 6. Создайте job assignment
 
-Клиент запрашивает assignment в coordinator. Payload должен быть легким: текст, параметры, ссылки на storage objects.
+Клиент запрашивает job/assignment в coordinator. Payload должен быть легким: текст, параметры, ссылки на storage objects.
 
 ```http
 POST /jobs
@@ -295,6 +296,28 @@ content-type: application/json
 
 Coordinator сам подставит trusted callback URL из registry по `sourceClientId`. Не передавайте callback URL от пользователя как источник доверия.
 
+Если coordinator вернул `202`, job поставлена в очередь:
+
+```json
+{
+  "queued": true,
+  "retryAfterMs": 1000,
+  "reason": "no_available_worker",
+  "job": {
+    "id": "..."
+  }
+}
+```
+
+После такого ответа клиент должен polling-ом ждать assignment:
+
+```http
+GET /jobs/<jobId>/assignment?sourceClientId=<clientId>
+x-client-key: <CLIENT_REGISTRATION_KEY>
+```
+
+Пока capacity нет, endpoint снова вернет `202 queued`; когда worker выбран и prepared, вернет обычный assignment.
+
 ## Шаг 7. Отправьте job напрямую worker-у
 
 Coordinator вернет:
@@ -349,7 +372,7 @@ Backend сайта:
 - регистрируется в coordinator и отправляет heartbeat;
 - принимает upload от браузера или выдает браузеру свой upload flow;
 - получает storage access у coordinator и загружает файлы напрямую в storage-node;
-- создает job assignment и отправляет `workerRequest` worker-у;
+- создает job assignment, обрабатывает queued-ответ и отправляет `workerRequest` worker-у;
 - принимает callback от worker-а и обновляет состояние заявки пользователя;
 - отдает браузеру статус через polling, SSE, WebSocket или собственный API.
 
@@ -363,7 +386,7 @@ Discord bot работает по той же схеме, что Telegram client
 - slash command или button создает `requestId`;
 - attachments скачиваются bot-процессом или прямым backend-потоком и загружаются в storage-node;
 - `client` metadata должен содержать минимум `channelId` и `userId`, чтобы callback знал куда отправить результат;
-- после `POST /jobs` бот может сразу ответить пользователю статусом `accepted`;
+- после `POST /jobs` бот может сразу ответить пользователю статусом `accepted` или `queued`;
 - callback от worker-а редактирует исходное сообщение или отправляет новое сообщение в канал.
 
 Не кладите Discord-specific поля в worker runner. Runner должен работать с общим `ClientRef` только как с metadata для callback.
@@ -434,7 +457,7 @@ Discord bot работает по той же схеме, что Telegram client
 4. Обновите validators и callback payload.
 5. Реализуйте регистрацию, heartbeat и callback server.
 6. Реализуйте upload в storage-node через `POST /storage/access`.
-7. Реализуйте `POST /jobs` и прямой dispatch в worker.
+7. Реализуйте `POST /jobs`, обработку `202 queued`, polling assignment и прямой dispatch в worker.
 8. Добавьте scripts, `.env.example`, README клиента и deploy package entry.
 9. Запустите coordinator, storage-node, worker и новый клиент локально.
 10. Проверьте happy path: пользовательский запрос -> storage upload -> assignment -> worker dispatch -> callback -> сообщение пользователю.

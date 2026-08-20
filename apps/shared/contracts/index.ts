@@ -13,6 +13,7 @@ export type JobStatus =
   | "assigned"
   | "running"
   | "succeeded"
+  | "delivery_failed"
   | "failed"
   | "cancelled";
 
@@ -248,9 +249,28 @@ export interface TryOnJobAssignmentResponse {
   workerRequest: WorkerJobRequest;
 }
 
+export interface TryOnJobQueuedResponse {
+  job: TryOnJob;
+  queued: true;
+  retryAfterMs: number;
+  reason?: string;
+}
+
+export type TryOnJobCreateResponse =
+  | TryOnJobAssignmentResponse
+  | TryOnJobQueuedResponse;
+
 export interface WorkerJobAcceptedResponse {
   jobId: string;
   accepted: boolean;
+}
+
+export interface WorkerJobCancelResponse {
+  ok: true;
+  jobId: string;
+  cancelledPending: boolean;
+  cancelledRunning: boolean;
+  runningCancellationSupported: boolean;
 }
 
 export interface JobProgressUpdateRequest {
@@ -261,7 +281,7 @@ export interface JobProgressUpdateRequest {
 
 export interface JobResultUpdateRequest {
   jobId: string;
-  status: Extract<JobStatus, "succeeded" | "failed">;
+  status: Extract<JobStatus, "succeeded" | "delivery_failed" | "failed" | "cancelled">;
   result?: TryOnJobResult;
   error?: TryOnJobError;
 }
@@ -515,19 +535,23 @@ export function isJobResultUpdateRequest(
     return false;
   }
 
-  if (value.status === "succeeded") {
+  if (value.status === "succeeded" || value.status === "delivery_failed") {
     return (
-      value.result === undefined ||
-      (isObject(value.result) &&
+      isObject(value.result) &&
         typeof value.result.message === "string" &&
         (value.result.files === undefined ||
           (Array.isArray(value.result.files) &&
-            value.result.files.every(isStorageObjectRef))))
+            value.result.files.every(isStorageObjectRef))) &&
+      (value.status === "succeeded" ||
+        (isObject(value.error) && typeof value.error.message === "string"))
     );
   }
 
-  if (value.status === "failed") {
-    return isObject(value.error) && typeof value.error.message === "string";
+  if (value.status === "failed" || value.status === "cancelled") {
+    return (
+      value.error === undefined ||
+      (isObject(value.error) && typeof value.error.message === "string")
+    );
   }
 
   return false;

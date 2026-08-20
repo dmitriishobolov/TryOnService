@@ -12,7 +12,7 @@ export class Scheduler {
     private readonly cancelWorkerJob?: (
       workerId: string,
       jobId: string,
-    ) => Promise<void>,
+    ) => Promise<boolean>,
   ) {}
 
   async schedule(): Promise<void> {
@@ -26,20 +26,33 @@ export class Scheduler {
       for (const job of await this.jobs.findExpiredAssignments(
         this.config.jobAssignmentTimeoutMs,
       )) {
+        let cancelledOnWorker = true;
+
         if (job.assignedWorkerId) {
-          void this.cancelWorkerJob?.(job.assignedWorkerId, job.id).catch(
-            (error) => {
+          if (this.cancelWorkerJob) {
+            try {
+              cancelledOnWorker = await this.cancelWorkerJob(
+                job.assignedWorkerId,
+                job.id,
+              );
+            } catch (error) {
+              cancelledOnWorker = false;
               console.error(
                 `[coordinator] Failed to cancel expired assignment ${job.id} on worker ${job.assignedWorkerId}`,
                 error,
               );
-            },
-          );
-          await this.workers.release(job.assignedWorkerId);
+            }
+          }
+
+          if (cancelledOnWorker) {
+            await this.workers.release(job.assignedWorkerId);
+          }
         }
 
-        await this.jobs.markAssignmentExpired(job.id);
-        console.warn(`[coordinator] Assignment for job ${job.id} expired`);
+        if (cancelledOnWorker) {
+          await this.jobs.markAssignmentExpired(job.id);
+          console.warn(`[coordinator] Assignment for job ${job.id} expired`);
+        }
       }
     } finally {
       this.isHousekeeping = false;

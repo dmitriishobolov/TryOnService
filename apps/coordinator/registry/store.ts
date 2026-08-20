@@ -58,7 +58,7 @@ export class WorkerRegistry implements WorkerRegistryStore {
       return undefined;
     }
 
-    const runningJobs = Math.max(worker.runningJobs, request.runningJobs);
+    const runningJobs = Math.max(0, request.runningJobs);
     const updated: RegisteredWorker = {
       ...worker,
       status:

@@ -327,7 +327,7 @@ export class PostgresJobStore implements JobStore {
         SELECT *
         FROM tryon_jobs
         WHERE assigned_worker_id = $1
-          AND status NOT IN ('succeeded', 'failed', 'cancelled')
+          AND status NOT IN ('succeeded', 'delivery_failed', 'failed', 'cancelled')
         ORDER BY updated_at ASC
       `,
       [workerId],
@@ -342,7 +342,7 @@ export class PostgresJobStore implements JobStore {
         SELECT *
         FROM tryon_jobs
         WHERE source_client_id = $1
-          AND status NOT IN ('succeeded', 'failed', 'cancelled')
+          AND status NOT IN ('succeeded', 'delivery_failed', 'failed', 'cancelled')
         ORDER BY updated_at ASC
       `,
       [clientId],
@@ -354,6 +354,7 @@ export class PostgresJobStore implements JobStore {
   async markAssigned(
     jobId: string,
     workerId: string,
+    dispatchTokenExpiresAt: string,
   ): Promise<TryOnJob | undefined> {
     const now = new Date().toISOString();
     const result = await this.pool.query<JobRow>(
@@ -362,12 +363,13 @@ export class PostgresJobStore implements JobStore {
         SET status = 'assigned',
             assigned_worker_id = $2,
             assigned_at = $3,
+            dispatch_token_expires_at = $4,
             updated_at = $3
         WHERE id = $1
           AND status = 'queued'
         RETURNING *
       `,
-      [jobId, workerId, now],
+      [jobId, workerId, now, dispatchTokenExpiresAt],
     );
 
     return result.rows[0] ? mapJobRow(result.rows[0]) : undefined;
@@ -383,7 +385,7 @@ export class PostgresJobStore implements JobStore {
         SET status = 'running',
             updated_at = $2
         WHERE id = $1
-          AND status NOT IN ('succeeded', 'failed', 'cancelled')
+          AND status NOT IN ('succeeded', 'delivery_failed', 'failed', 'cancelled')
         RETURNING *
       `,
       [update.jobId, now],
@@ -403,6 +405,7 @@ export class PostgresJobStore implements JobStore {
 
     if (
       current.status === "succeeded" ||
+      current.status === "delivery_failed" ||
       current.status === "failed" ||
       current.status === "cancelled"
     ) {
@@ -441,6 +444,8 @@ export class PostgresJobStore implements JobStore {
             assigned_worker_id = NULL,
             assigned_at = NULL,
             dispatch_token_expires_at = NULL,
+            result = NULL,
+            error = NULL,
             updated_at = $2
         WHERE id = $1
         RETURNING *
@@ -452,11 +457,7 @@ export class PostgresJobStore implements JobStore {
   }
 
   async markAssignmentExpired(jobId: string): Promise<TryOnJob | undefined> {
-    return this.markFailed(jobId, {
-      code: "assignment_expired",
-      message: "Worker assignment expired before direct client dispatch",
-      retryable: true,
-    });
+    return this.requeue(jobId);
   }
 
   async markFailed(
@@ -468,6 +469,7 @@ export class PostgresJobStore implements JobStore {
     if (
       !current ||
       current.status === "succeeded" ||
+      current.status === "delivery_failed" ||
       current.status === "failed" ||
       current.status === "cancelled"
     ) {
@@ -580,11 +582,11 @@ export class PostgresWorkerRegistry implements WorkerRegistryStore {
     const result = await this.pool.query<WorkerRow>(
       `
         UPDATE tryon_workers
-        SET running_jobs = GREATEST(running_jobs, $2),
+        SET running_jobs = GREATEST(0, $2),
             capacity = $3,
             status = CASE
               WHEN $4 = 'offline' THEN 'offline'
-              WHEN GREATEST(running_jobs, $2) >= $3 THEN 'busy'
+              WHEN GREATEST(0, $2) >= $3 THEN 'busy'
               ELSE $4
             END,
             last_heartbeat_at = $5

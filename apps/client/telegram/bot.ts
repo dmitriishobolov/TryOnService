@@ -1,4 +1,8 @@
 import { sleep } from "../../shared/http.js";
+import type {
+  TryOnJobCreateResponse,
+  TryOnJobQueuedResponse,
+} from "../../shared/contracts/index.js";
 import type { TelegramClientConfig } from "./config.js";
 import type { TelegramCoordinatorClient } from "./coordinatorClient.js";
 import type { TelegramWorkerClient } from "./workerClient.js";
@@ -106,6 +110,19 @@ export class TelegramBot {
         text: message.text,
       });
 
+      if (isQueuedJobResponse(assignment)) {
+        await this.sendMessage(
+          chatId,
+          `Запрос ${assignment.job.id} поставлен в очередь. Подберу свободный сервер автоматически.`,
+        );
+        void this.waitForAssignmentAndDispatch(
+          chatId,
+          assignment.job.id,
+          assignment.retryAfterMs,
+        );
+        return;
+      }
+
       await this.worker.dispatchJob(assignment);
 
       await this.sendMessage(
@@ -119,6 +136,42 @@ export class TelegramBot {
         "Не удалось создать запрос. Попробуйте еще раз позже.",
       );
     }
+  }
+
+  private async waitForAssignmentAndDispatch(
+    chatId: string,
+    jobId: string,
+    initialRetryAfterMs: number,
+  ): Promise<void> {
+    let retryAfterMs = initialRetryAfterMs;
+
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await sleep(retryAfterMs);
+
+      try {
+        const assignment = await this.coordinator.getJobAssignment(jobId);
+
+        if (isQueuedJobResponse(assignment)) {
+          retryAfterMs = assignment.retryAfterMs;
+          continue;
+        }
+
+        await this.worker.dispatchJob(assignment);
+        await this.sendMessage(
+          chatId,
+          `Запрос ${assignment.job.id} отправлен на сервер. Ожидаю ответ.`,
+        );
+        return;
+      } catch (error) {
+        console.error(`[telegram] Failed to poll assignment for job ${jobId}`, error);
+        retryAfterMs = Math.min(retryAfterMs * 2, 10_000);
+      }
+    }
+
+    await this.sendMessage(
+      chatId,
+      `Запрос ${jobId} все еще в очереди. Попробуйте проверить позже.`,
+    );
   }
 
   private setupCommands(): Promise<unknown> {
@@ -169,4 +222,10 @@ export class TelegramBot {
 
     return data.result as T;
   }
+}
+
+function isQueuedJobResponse(
+  response: TryOnJobCreateResponse,
+): response is TryOnJobQueuedResponse {
+  return "queued" in response;
 }

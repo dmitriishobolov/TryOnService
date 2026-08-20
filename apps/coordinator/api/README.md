@@ -6,7 +6,7 @@
 
 API для клиентов и интеграций должен отвечать за:
 
-- создание job assignment на примерку;
+- создание job и выдачу assignment или queued-ответа на примерку;
 - регистрацию service client при запуске;
 - прием heartbeat от service client;
 - выдачу storage-access для прямого upload/download в storage-node;
@@ -14,7 +14,9 @@ API для клиентов и интеграций должен отвечат�
 - получение состояния обработки без обязательного хранения клиентского результата;
 - отмену job, если сценарий это поддерживает.
 
-`POST /jobs` принимает запросы только от зарегистрированных service clients: нужен `x-client-key`, обязательный `sourceClientId`, а callback URL берется из client registry. Клиентский `callbackUrl` из payload не используется как источник доверия.
+`POST /jobs` принимает запросы только от зарегистрированных service clients: нужен `x-client-key`, обязательный `sourceClientId`, а callback URL берется из client registry. Клиентский `callbackUrl` из payload не используется как источник доверия. Если worker/storage capacity сейчас нет, endpoint возвращает `202` и `{ queued: true, job, retryAfterMs }`.
+
+`GET /jobs/:jobId/assignment?sourceClientId=<clientId>` позволяет клиенту polling-ом дождаться assignment-а для своей queued job. Endpoint требует `x-client-key` и не выдает assignment для чужого `sourceClientId`.
 
 `POST /storage/access` выдает клиенту или worker'у подходящий storage-node и scoped signed token. После этого файлы загружаются и читаются напрямую через storage-node, а coordinator получает только `StorageObjectRef` в payload/result.
 
@@ -43,7 +45,7 @@ Coordinator не принимает `dataBase64` и не отдает бинар
 
 ## Assignment flow
 
-`POST /jobs` не отправляет heavy payload на worker. Coordinator выбирает доступный worker, резервирует его capacity, создает `assigned` job, отправляет worker-у lightweight prepare-запрос и только после подтверждения возвращает клиенту:
+`POST /jobs` не отправляет heavy payload на worker. Coordinator создает queued job, затем пытается выбрать доступный worker, резервирует его capacity, переводит job в `assigned`, отправляет worker-у lightweight prepare-запрос и только после подтверждения возвращает клиенту:
 
 - `job` - состояние job в coordinator.
 - `worker` - endpoint выбранного worker'а и signed dispatch token.
@@ -56,13 +58,13 @@ Dispatch token подписан `WORKER_DISPATCH_SIGNING_KEY`, но сам се�
 
 Для результата worker -> client coordinator создает отдельный callback token с purpose `client-callback`, подписанный `CLIENT_CALLBACK_SIGNING_KEY`. Token передается worker-у только в prepare-запросе и затем идет в `x-client-callback-token` на callback endpoint клиента. Telegram client проверяет `keyVersion` и защищается от повторного использования `tokenId`.
 
-Если prepare на worker-е не прошел, coordinator освобождает worker slot, помечает job как `failed` с `worker_prepare_failed` и не отдает этот worker клиенту.
+Если prepare на worker-е не прошел, coordinator освобождает worker slot, возвращает job в очередь и не отдает этот worker клиенту.
 
 ## Failure handling
 
 - Stale worker heartbeat: worker помечается offline, активные jobs этого worker'а переводятся в `failed`.
-- Stale client heartbeat: client помечается offline, активные jobs этого client переводятся в `failed`, зарезервированные worker slots освобождаются.
-- Expired assignment: job переводится в `failed`, worker slot освобождается.
+- Stale client heartbeat: client помечается offline, coordinator пытается отменить pending/running job на worker-е; при подтвержденной отмене job становится `cancelled`, иначе capacity не освобождается до финального отчета worker-а.
+- Expired assignment: coordinator отправляет worker-у cancel; если cancel подтвержден, job возвращается в `queued`, worker slot освобождается.
 
 ## Registration Security
 

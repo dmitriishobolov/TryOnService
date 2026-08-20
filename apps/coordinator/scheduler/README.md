@@ -1,13 +1,13 @@
 # Scheduler
 
-Scheduler в текущей архитектуре отвечает не за отправку job worker'у, а за housekeeping назначений. Выбор worker'а происходит синхронно в `POST /jobs`, где coordinator возвращает клиенту assignment.
+Scheduler в текущей архитектуре отвечает не за отправку job worker'у, а за housekeeping назначений. Выбор worker'а происходит в `POST /jobs` или `GET /jobs/:jobId/assignment`, где coordinator возвращает клиенту assignment или queued-ответ.
 
 ## Задачи scheduler
 
 - находить jobs в статусе `assigned`, которые не перешли в `running` до `JOB_ASSIGNMENT_TIMEOUT_MS`;
-- переводить просроченный assignment в `failed`;
-- отправлять worker-у best-effort cancel для pending assignment;
-- освобождать зарезервированную capacity worker'а;
+- возвращать просроченный assignment в `queued`, если cancel на worker-е подтвержден;
+- отправлять worker-у cancel для pending/running assignment;
+- освобождать зарезервированную capacity worker'а только после подтвержденной отмены;
 - логировать просрочки assignment.
 
 ## Где выбирается worker

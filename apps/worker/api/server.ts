@@ -6,6 +6,7 @@ import {
   isWorkerJobRequest,
   type WorkerAssignmentPrepareResponse,
   type WorkerJobAcceptedResponse,
+  type WorkerJobCancelResponse,
 } from "../../shared/contracts/index.js";
 import { verifyDispatchToken } from "../../shared/dispatchToken.js";
 import {
@@ -47,6 +48,7 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
     config.apiRateLimitWindowMs,
   );
   const dispatchReplayGuard = new TokenReplayGuard();
+  const runningJobControllers = new Map<string, AbortController>();
   setInterval(() => {
     rateLimiter.cleanup();
   }, config.apiRateLimitWindowMs).unref();
@@ -143,14 +145,22 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
           return;
         }
 
-        const cancelled = assignments.cancel(cancelMatch[1]);
+        const cancelledPending = assignments.cancel(cancelMatch[1]);
+        const runningController = runningJobControllers.get(cancelMatch[1]);
 
-        writeJson(response, 200, {
+        if (runningController) {
+          runningController.abort();
+        }
+
+        const payload: WorkerJobCancelResponse = {
           ok: true,
           jobId: cancelMatch[1],
-          cancelledPending: Boolean(cancelled),
-          runningCancellationSupported: false,
-        });
+          cancelledPending: Boolean(cancelledPending),
+          cancelledRunning: Boolean(runningController),
+          runningCancellationSupported: true,
+        };
+
+        writeJson(response, 200, payload);
         return;
       }
 
@@ -224,12 +234,21 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
         dispatchReplayGuard.remember(token.tokenId, token.expiresAt);
         assignments.consume(body.jobId);
         incrementRunningJobs();
+        const controller = new AbortController();
+        runningJobControllers.set(body.jobId, controller);
 
-        void runWorkerJob(body, config, coordinator, assignment.callbackToken)
+        void runWorkerJob(
+          body,
+          config,
+          coordinator,
+          assignment.callbackToken,
+          controller.signal,
+        )
           .catch((error) => {
             console.error(`[worker] Job ${body.jobId} failed`, error);
           })
           .finally(() => {
+            runningJobControllers.delete(body.jobId);
             decrementRunningJobs();
             void coordinator.heartbeat(getCurrentLoad()).catch((error) => {
               console.error("[worker] Failed to send heartbeat after job", error);

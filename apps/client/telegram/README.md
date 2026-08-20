@@ -1,6 +1,6 @@
 # Telegram Client
 
-Папка для Telegram-интеграции TryOnService. Здесь находится бот, callback server, HTTP client к coordinator и HTTP client к worker. Сейчас бот создает demo request по команде `/request` или кнопке `Request`, получает assignment от coordinator, отправляет job worker'у напрямую и после callback отправляет пользователю текст результата.
+Папка для Telegram-интеграции TryOnService. Здесь находится бот, callback server, HTTP client к coordinator и HTTP client к worker. Сейчас бот создает demo request по команде `/request` или кнопке `Request`, получает assignment или queued-ответ от coordinator, при необходимости polling-ом ждет свободный worker, отправляет job worker'у напрямую и после callback отправляет пользователю текст результата.
 
 Когда сценарий начнет принимать фотографии, Telegram client должен сначала запросить `POST /storage/access`, загрузить файлы напрямую в storage-node и передать в `POST /jobs` только `StorageObjectRef`.
 
@@ -17,7 +17,7 @@ npm run dev:telegram
 
 Telegram client автоматически регистрируется в coordinator через `POST /clients/register`, передает свой фактический callback-порт и дальше отправляет heartbeat.
 
-Для обработки запроса Telegram client вызывает `POST /jobs` coordinator. Coordinator выбирает worker и заранее готовит assignment на worker-е. После этого Telegram client получает выбранный worker, `workerRequest` и `dispatchToken`, затем отправляет `POST /jobs` напрямую на worker endpoint с header `x-job-dispatch-token`.
+Для обработки запроса Telegram client вызывает `POST /jobs` coordinator. Coordinator выбирает worker и заранее готовит assignment на worker-е. После этого Telegram client получает выбранный worker, `workerRequest` и `dispatchToken`, затем отправляет `POST /jobs` напрямую на worker endpoint с header `x-job-dispatch-token`. Если coordinator возвращает `202 queued`, бот сообщает пользователю об очереди и вызывает `GET /jobs/:jobId/assignment` до получения assignment-а.
 
 Deploy-пакет собирается командой `npm run build:dist` в `dist/packages/telegram-client`.
 
@@ -27,7 +27,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 2. Пользователь отправляет `/request` или нажимает кнопку.
 3. Если в запросе есть файлы, Telegram client получает storage-access у coordinator и загружает файлы напрямую в storage-node.
 4. Telegram client запрашивает assignment через coordinator API и передает `sourceClientId`.
-5. Coordinator находит callback URL Telegram client, выбирает worker и отправляет worker-у prepare по этой job.
+5. Coordinator находит callback URL Telegram client, создает queued job, выбирает worker и отправляет worker-у prepare по этой job, когда capacity доступна.
 6. Coordinator возвращает signed dispatch token только после подтверждения worker prepare.
 7. Telegram client отправляет `workerRequest` напрямую выбранному worker'у.
 8. Worker обрабатывает job и отправляет callback в `POST /callbacks/jobs` с `x-client-callback-token`.
@@ -36,7 +36,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 ## Реализовано сейчас
 
 - `/start` настраивает команды бота через Telegram Bot API и показывает кнопку `Request`.
-- `/request` или кнопка `Request` создают assignment в coordinator и отправляют job worker'у напрямую.
+- `/request` или кнопка `Request` создают job в coordinator, ждут assignment при очереди и отправляют job worker'у напрямую.
 - HTTP client умеет запросить storage-access у coordinator для будущей загрузки пользовательских фото.
 - client registration и heartbeat в coordinator.
 - автоматический выбор ближайшего свободного callback-порта.

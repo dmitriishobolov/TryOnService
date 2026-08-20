@@ -29,11 +29,12 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 1. API принимает запрос на создание примерки.
 2. Request валидируется через контракты из `apps/shared`.
 3. Coordinator находит callback URL зарегистрированного service client, если запрос пришел с `sourceClientId`.
-4. Coordinator выбирает доступный worker и storage-node из `registry`, резервирует worker capacity и создает job со статусом `assigned`.
-5. Coordinator вызывает `POST /assignments` выбранного worker'а по общему `WORKER_SERVICE_KEY`, чтобы подготовить будущий client dispatch и передать worker-у signed callback token.
+4. Coordinator создает job со статусом `queued`, затем пытается выбрать доступный worker и storage-node из `registry`.
+5. Если capacity есть, coordinator резервирует worker slot, переводит job в `assigned` и вызывает `POST /assignments` выбранного worker'а по общему `WORKER_SERVICE_KEY`.
 6. API возвращает клиенту `job`, `worker`, `storage` и готовый `workerRequest` с signed dispatch token. Callback token клиенту не возвращается.
-7. Client отправляет `workerRequest` напрямую worker'у, а файлы читает/пишет напрямую через storage-node по storage-access token.
-8. Worker сообщает progress/result status обратно в coordinator и результат в callback клиента.
+7. Если capacity нет, API возвращает `202 queued`; client polling-ом вызывает `GET /jobs/:id/assignment`.
+8. Client отправляет `workerRequest` напрямую worker'у, а файлы читает/пишет напрямую через storage-node по storage-access token.
+9. Worker сообщает progress/result status обратно в coordinator и результат в callback клиента.
 
 ## Реализованные endpoints
 
@@ -44,7 +45,8 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - `POST /storage/register` - регистрация storage-node; требует `x-storage-registration-key`.
 - `POST /storage/:storageId/heartbeat` - heartbeat storage-node; требует `x-storage-service-key`.
 - `POST /storage/access` - выдача подходящего storage-node и scoped token для прямого upload/download; требует `x-client-key` для clients или `x-worker-service-key` для worker'ов.
-- `POST /jobs` - создание job assignment зарегистрированным клиентом; требует `x-client-key`, валидный `sourceClientId`, возвращает выбранный worker endpoint, `workerRequest` и dispatch token.
+- `POST /jobs` - создание job/assignment зарегистрированным клиентом; требует `x-client-key`, валидный `sourceClientId`, возвращает выбранный worker endpoint, `workerRequest` и dispatch token или `202 queued`.
+- `GET /jobs/:id/assignment` - polling assignment для queued job; требует `x-client-key` и `sourceClientId`.
 - `POST /clients/register` - регистрация service client; требует `x-client-key`.
 - `POST /clients/:clientId/heartbeat` - heartbeat service client; требует `x-client-key`.
 - `POST /workers/register` - регистрация worker'а; требует `x-worker-registration-key`.
@@ -67,7 +69,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - Регистрация service clients и создание jobs должны быть защищены общим `CLIENT_REGISTRATION_KEY`.
 - Неверные попытки регистрации worker'а, service client и storage-node считаются по IP и после лимита переводят IP в ban; в Postgres режиме ban переживает restart coordinator.
 - Недоступный worker должен автоматически выпадать из активного пула после пропущенных heartbeat.
-- Активные jobs упавшего worker'а или service client должны переводиться в `failed`, а pending assignment на worker-е должен отменяться, когда это возможно.
+- Активные jobs упавшего worker'а переводятся в `failed`; при падении service client coordinator должен отменять pending/running job на worker-е и освобождать capacity только после подтвержденной отмены.
 - Повторные запросы worker'а на обновление статуса должны обрабатываться идемпотентно.
 - Storage-access для client должен оставаться в namespace `clients/<clientId>`, а worker не должен получать arbitrary prefix за пределами `workers/<workerId>` или `jobs/...`.
 - Security-sensitive события пишутся в audit store, а signing tokens должны содержать `tokenId` и `keyVersion`.

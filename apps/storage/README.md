@@ -21,7 +21,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 
 ## Жизненный цикл
 
-1. Storage-node стартует, выбирает порт и локальный backend.
+1. Storage-node стартует, выбирает порт и backend `local` или `s3`.
 2. Storage-node вызывает `POST /storage/register` coordinator-а с `x-storage-registration-key`.
 3. Coordinator проверяет общий registration key, определяет публичный endpoint по IP registration-запроса + port или берет `STORAGE_PUBLIC_URL`.
 4. Storage-node отправляет heartbeat каждые `STORAGE_HEARTBEAT_INTERVAL_MS`.
@@ -37,6 +37,9 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - Storage-node не принимает master credentials от clients/worker'ов.
 - Доступ к объектам только по signed token purpose `storage-access`.
 - Storage-node доверяет `keyPrefix` только из token coordinator-а; client/worker не могут расширить scope на стороне storage-node.
-- В dev реализован только `STORAGE_DRIVER=local`; production backend можно заменить на S3-compatible реализацию за интерфейсом `ObjectStorage`.
+- `STORAGE_DRIVER=local` пишет файлы в `STORAGE_LOCAL_ROOT`.
+- `STORAGE_DRIVER=s3` пишет файлы в S3-compatible backend напрямую из request stream.
+- PUT/GET работают streaming-ом и не собирают объект целиком в память storage-node.
+- `usedBytes` берется из metadata index (`STORAGE_METADATA_PATH` или файл рядом с storage root) и обновляется при PUT/DELETE без рекурсивного обхода папки.
 - Upload response добавляет `storageId` в `StorageObjectRef`; client обязан передать этот ref в job payload без потери поля.
 - Object keys должны быть scoped и предсказуемыми, например `clients/<clientId>/input/<requestId>/<file>` или `jobs/<jobId>/output/<file>`.

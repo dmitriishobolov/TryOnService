@@ -5,7 +5,7 @@ Persistence слой выбирает, где coordinator хранит сост�
 ## Backends
 
 - `memory` - dev backend по умолчанию. Быстрый локальный запуск, состояние теряется при рестарте.
-- `postgres` - production-направление. Coordinator сам создает таблицы `tryon_jobs`, `tryon_workers`, `tryon_clients`, `tryon_storage_nodes`, `tryon_storage_objects`, `tryon_security_events` и `tryon_registration_bans`, если их еще нет.
+- `postgres` - production-направление. Coordinator сам создает таблицы `tryon_jobs`, `tryon_workers`, `tryon_clients`, `tryon_storage_nodes`, `tryon_storage_objects`, `tryon_security_events` и `tryon_registration_bans`, если их еще нет. `tryon_storage_objects` сейчас остается reserved/reference таблицей: фактический PUT/DELETE metadata index ведет storage-node.
 
 ## Security State
 

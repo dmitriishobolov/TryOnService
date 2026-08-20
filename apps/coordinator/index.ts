@@ -1,6 +1,9 @@
 import { loadEnvFile } from "../shared/env.js";
 import { postJson } from "../shared/http.js";
-import type { RegisteredWorker } from "../shared/contracts/index.js";
+import type {
+  RegisteredWorker,
+  WorkerJobCancelResponse,
+} from "../shared/contracts/index.js";
 import { createCoordinatorServer } from "./api/server.js";
 import { loadCoordinatorConfig } from "./config/index.js";
 import { createCoordinatorStores } from "./persistence/index.js";
@@ -102,29 +105,52 @@ async function markStaleClientsOffline(): Promise<void> {
     );
 
     for (const job of await jobs.findActiveBySourceClient(client.clientId)) {
+      let cancelledOnWorker = true;
+
       if (job.assignedWorkerId) {
         const worker = await workers.get(job.assignedWorkerId);
 
         if (worker) {
-          void cancelWorkerJob(worker, job.id).catch((error) => {
+          try {
+            const cancellation = await cancelWorkerJob(worker, job.id);
+            cancelledOnWorker =
+              cancellation.cancelledPending ||
+              cancellation.cancelledRunning ||
+              cancellation.runningCancellationSupported;
+          } catch (error) {
+            cancelledOnWorker = false;
             console.error(
               `[coordinator] Failed to cancel job ${job.id} on worker ${worker.workerId} after client offline`,
               error,
             );
-          });
+          }
+        } else {
+          cancelledOnWorker = false;
         }
 
-        await workers.release(job.assignedWorkerId);
+        if (cancelledOnWorker) {
+          await workers.release(job.assignedWorkerId);
+        }
       }
 
-      await jobs.markFailed(job.id, {
-        code: "client_offline",
-        message: "Source client went offline before job completion",
-        retryable: true,
-      });
-      console.warn(
-        `[coordinator] Job ${job.id} failed because client ${client.clientId} is offline`,
-      );
+      if (cancelledOnWorker) {
+        await jobs.markResult({
+          jobId: job.id,
+          status: "cancelled",
+          error: {
+            code: "client_offline",
+            message: "Source client went offline before job completion",
+            retryable: true,
+          },
+        });
+        console.warn(
+          `[coordinator] Job ${job.id} cancelled because client ${client.clientId} is offline`,
+        );
+      } else {
+        console.warn(
+          `[coordinator] Job ${job.id} kept assigned after client ${client.clientId} went offline because worker cancellation was not confirmed`,
+        );
+      }
     }
   }
 }
@@ -144,18 +170,27 @@ async function markStaleStorageOffline(): Promise<void> {
 async function cancelWorkerJobById(
   workerId: string,
   jobId: string,
-): Promise<void> {
+): Promise<boolean> {
   const worker = await workers.get(workerId);
 
   if (!worker) {
-    return;
+    return false;
   }
 
-  await cancelWorkerJob(worker, jobId);
+  const cancellation = await cancelWorkerJob(worker, jobId);
+
+  return (
+    cancellation.cancelledPending ||
+    cancellation.cancelledRunning ||
+    cancellation.runningCancellationSupported
+  );
 }
 
-function cancelWorkerJob(worker: RegisteredWorker, jobId: string): Promise<unknown> {
-  return postJson(
+function cancelWorkerJob(
+  worker: RegisteredWorker,
+  jobId: string,
+): Promise<WorkerJobCancelResponse> {
+  return postJson<WorkerJobCancelResponse>(
     `${worker.baseUrl}/jobs/${jobId}/cancel`,
     {},
     {

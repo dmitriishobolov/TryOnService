@@ -8,10 +8,10 @@ TryOnService - сервис примерки на базе AI API. Проект 
 
 Сейчас реализован первый вертикальный срез на Node.js/TypeScript:
 
-- coordinator регистрирует worker'ы и service clients, получает heartbeat, выбирает worker по capacity/capabilities, готовит assignment на worker-е и возвращает клиенту выбранный worker;
-- object storage node регистрируется в coordinator по отдельному ключу, отправляет heartbeat и принимает прямой upload/download от клиентов и worker'ов по короткоживущему signed storage token;
+- coordinator регистрирует worker'ы и service clients, получает heartbeat, ведет очередь jobs, выбирает worker по capacity/capabilities, готовит assignment на worker-е и возвращает клиенту выбранный worker;
+- object storage node регистрируется в coordinator по отдельному ключу, отправляет heartbeat и принимает streaming upload/download от клиентов и worker'ов по короткоживущему signed storage token;
 - worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat с учетом running jobs и pending assignments, принимает jobs напрямую от клиентов только после prepare от coordinator;
-- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, получает assignment, отправляет job worker'у напрямую и выводит пользователю ответ worker'а;
+- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, получает assignment или `queued`-ответ, polling-ом дожидается свободного worker'а, отправляет job worker'у напрямую и выводит пользователю ответ worker'а;
 - coordinator защищает регистрацию worker'ов, service clients и storage-node от перебора ключа: после достижения лимита неверных попыток IP блокируется; при `COORDINATOR_PERSISTENCE=postgres` ban сохраняется в БД и переживает restart;
 - registration, service-to-service, dispatch token, client callback, storage access и admin/debug доступ используют разные ключи;
 - clients, worker и storage-node регистрируются по общим registration keys для быстрого горизонтального масштабирования;
@@ -19,7 +19,7 @@ TryOnService - сервис примерки на базе AI API. Проект 
 - coordinator пишет security audit events в memory/Postgres backend;
 - HTTP API имеют лимиты размера JSON body, базовый rate limit и timeout/retry для исходящих service calls;
 - coordinator умеет работать с `memory` или `postgres` persistence backend;
-- для файлов и изображений добавлен object storage слой: в jobs/results передаются `StorageObjectRef`, а не бинарные данные.
+- для файлов и изображений добавлен object storage слой: в jobs/results передаются `StorageObjectRef`, а не бинарные данные; доступны `local` и S3-compatible storage drivers.
 
 ## Как устроен сервис
 
@@ -49,12 +49,12 @@ flowchart LR
 1. Client, worker и storage-node при запуске регистрируются в coordinator и регулярно подтверждают доступность.
 2. Клиент запрашивает у coordinator storage-access, получает подходящий storage-node и короткоживущий token, затем загружает изображения напрямую в storage-node.
 3. Клиент отправляет запрос на assignment в coordinator, передавая в payload только `StorageObjectRef` со `storageId`, metadata и пользовательский контекст.
-4. Coordinator валидирует запрос, находит callback URL клиента, выбирает доступный worker и storage-node, резервирует capacity и создает job.
+4. Coordinator валидирует запрос, находит callback URL клиента, создает queued job и пытается сразу выбрать доступный worker и storage-node.
 5. Coordinator отправляет worker-у lightweight prepare-запрос: `jobId`, client/callback metadata, required capabilities, срок жизни dispatch token и signed callback token для ответа клиенту.
-6. Если worker подтвердил prepare, coordinator возвращает клиенту assignment с worker endpoint, `workerRequest`, signed dispatch token и scoped storage-access для worker'а. Если в job есть входные файлы, token ограничен их `storageId` и общим prefix.
+6. Если worker подтвердил prepare, coordinator возвращает клиенту assignment с worker endpoint, `workerRequest`, signed dispatch token и scoped storage-access для worker'а. Если свободного worker/storage нет, coordinator возвращает `202 queued`, а client polling-ом вызывает `GET /jobs/:id/assignment`.
 7. Клиент отправляет heavy request напрямую на worker endpoint с `x-job-dispatch-token`.
 8. Worker принимает job только если token валиден и assignment заранее подготовлен coordinator-ом, затем запускает runner и работает с файлами напрямую через storage-node.
-9. Worker отправляет status-only update в coordinator и результат на callback клиента с `x-client-callback-token`.
+9. Worker отправляет status-only update в coordinator и результат на callback клиента с `x-client-callback-token`. Если AI обработка завершилась, но callback клиенту не доставлен, job получает статус `delivery_failed`, сохраняя `result`.
 
 ## Данные, БД и файлы
 
@@ -65,10 +65,10 @@ Postgres принадлежит coordinator. Worker и client не получа�
 - jobs и переходы статусов;
 - registered workers и registered service clients;
 - registered storage-node и heartbeat/capacity данные;
-- metadata storage-объектов и object keys, когда они появляются в payload/result.
+- ссылки на storage-объекты внутри payload/result jobs; инкрементальная metadata объектов и `usedBytes` ведутся самим storage-node.
 - security audit events и persistent registration bans, если включен Postgres backend.
 
-Файлы и изображения хранятся в отдельном object storage node. В текущем коде есть dev backend `STORAGE_DRIVER=local`, который пишет файлы в `STORAGE_LOCAL_ROOT`, и общий контракт `StorageObjectRef` для будущего S3-compatible backend. В jobs можно передавать `payload.inputFiles`, а worker result может вернуть `result.files`. Ref, который вернул storage-node, содержит `storageId`, чтобы coordinator выдал worker'у доступ к правильному узлу.
+Файлы и изображения хранятся в отдельном object storage node. Есть dev backend `STORAGE_DRIVER=local`, который пишет файлы в `STORAGE_LOCAL_ROOT`, и S3-compatible backend `STORAGE_DRIVER=s3`. Storage-node ведет metadata index (`STORAGE_METADATA_PATH` или файл рядом с local root), поэтому `usedBytes` обновляется инкрементально при PUT/DELETE и heartbeat не обходит всю папку. В jobs можно передавать `payload.inputFiles`, а worker result может вернуть `result.files`. Ref, который вернул storage-node, содержит `storageId`, чтобы coordinator выдал worker'у доступ к правильному узлу.
 
 Coordinator не принимает и не отдает бинарные файлы. Он выдает `POST /storage/access`: клиент или worker получает `StorageAccessAssignment` с `objectBaseUrl`, scoped `accessToken`, TTL и, при необходимости, `keyPrefix`. После этого upload/download идет напрямую в storage-node через `PUT /objects/<key>` и `GET /objects/<key>`.
 
@@ -95,8 +95,8 @@ Coordinator:
 - подбирает worker, готовит pending assignment на worker-е и выдает клиенту signed assignment для прямой отправки job;
 - ведет registry storage-node, выдает клиентам и worker'ам scoped storage-access token;
 - проверяет ownership storage-prefix, чтобы client не мог запросить доступ к чужому `clients/<id>` namespace;
-- чистит просроченные assignments и освобождает capacity worker'а;
-- пытается отменять pending assignment на worker-е, если assignment истек или service client пропал;
+- чистит просроченные assignments, возвращает jobs в очередь и освобождает capacity worker'а только после подтвержденной отмены;
+- пытается отменять pending/running job на worker-е, если assignment истек или service client пропал;
 - блокирует IP, которые пытаются подобрать `WORKER_REGISTRATION_KEY`, `CLIENT_REGISTRATION_KEY` или `STORAGE_REGISTRATION_KEY`; в Postgres режиме ban сохраняется в `tryon_registration_bans`.
 
 Object storage node:
@@ -104,7 +104,9 @@ Object storage node:
 - при старте выбирает свободный порт, регистрируется в coordinator по `STORAGE_REGISTRATION_KEY` и сообщает публичный endpoint;
 - отправляет heartbeat coordinator-у по `STORAGE_SERVICE_KEY`;
 - принимает `PUT /objects/<key>` и `GET /objects/<key>` только с signed token purpose `storage-access`;
-- хранит файлы локально в dev backend или станет точкой расширения под S3-compatible backend.
+- хранит файлы локально или в S3-compatible backend за единым `ObjectStorage` интерфейсом;
+- пишет и читает объекты streaming-ом, без полной загрузки файла в память процесса;
+- ведет metadata index и `usedBytes` инкрементально, без рекурсивного обхода storage на heartbeat.
 
 Worker:
 
@@ -179,7 +181,7 @@ npm run dev:telegram
 npm run devtest
 ```
 
-Команда пересобирает TypeScript в `devtest/app`, создает `devtest/.env`, запускает coordinator, storage-node, worker и Telegram client из папки `devtest`, а логи пишет в `devtest/logs`. Local object storage в этом режиме находится в `devtest/runtime/storage/objects`.
+Команда пересобирает TypeScript в `devtest/app`, создает `devtest/.env`, запускает coordinator, storage-node, worker и Telegram client из папки `devtest`, а логи пишет в `devtest/logs`. Local object storage в этом режиме находится в `devtest/runtime/storage/objects`, metadata index - в `devtest/runtime/storage/metadata.json`.
 
 `devtest/.env` собирается из `.env.example` и файла `DEVTEST_ENV_FILE` (`.env` по умолчанию), но devtest принудительно использует `COORDINATOR_PERSISTENCE=memory`, `REQUIRE_HTTPS_ENDPOINTS=false` и локальные public URL. Если `TELEGRAM_BOT_TOKEN` не настроен и оставлен demo-placeholder, Telegram client будет пропущен; для строгой проверки задайте `DEVTEST_REQUIRE_TELEGRAM=true`.
 
@@ -216,7 +218,7 @@ npm run build:devtest
 
 `REQUIRE_HTTPS_ENDPOINTS=true` заставляет coordinator принимать регистрацию только с `https` public endpoint. Для mTLS используйте reverse proxy/private network перед Node.js процессами: приложения умеют работать по `https://` URL, а проверка клиентских сертификатов должна выполняться на edge/proxy уровне.
 
-Все security-sensitive события (`invalid_*_registration_key`, `*_ip_banned`, `storage_prefix_forbidden`, `input_files_prefix_forbidden`, `job_assignment_issued`, выдача storage-access) пишутся в audit store. В Postgres это таблица `tryon_security_events`; последние события доступны через admin endpoint `GET /security/events`.
+Все security-sensitive события (`invalid_*_registration_key`, `*_ip_banned`, `storage_prefix_forbidden`, `input_files_prefix_forbidden`, `job_queued`, `job_assignment_issued`, выдача storage-access) пишутся в audit store. В Postgres это таблица `tryon_security_events`; последние события доступны через admin endpoint `GET /security/events`.
 
 ## Проверка без Telegram Bot API
 
@@ -264,7 +266,7 @@ curl.exe -s http://localhost:3000/jobs/$($assignment.job.id) `
 
 После обработки job статус станет `succeeded`, а тестовый callback server напечатает тело callback и `x-client-callback-token`. Сам клиентский ответ не проходит через coordinator: worker отправляет его только в callback URL зарегистрированного клиента.
 
-Если worker перестал отправлять heartbeat во время обработки, coordinator помечает его offline и переводит активные jobs этого worker'а в `failed`. Если service client перестал отправлять heartbeat, coordinator помечает client offline, освобождает зарезервированные worker slots и переводит активные jobs этого client в `failed`.
+Если worker перестал отправлять heartbeat во время обработки, coordinator помечает его offline и переводит активные jobs этого worker'а в `failed`. Если service client перестал отправлять heartbeat, coordinator помечает client offline и пытается отменить pending/running job на worker-е. При подтвержденной отмене job становится `cancelled` и capacity освобождается; если отмена не подтверждена, coordinator не переоценивает capacity и ждет финальный результат worker-а.
 
 ## Сборка deploy-пакетов
 
@@ -326,8 +328,10 @@ npm run build:dist
 - `STORAGE_PORT` - порт storage-node; coordinator использует его вместе с IP registration-запроса.
 - `STORAGE_PUBLIC_PROTOCOL` - протокол публичного storage endpoint.
 - `STORAGE_PUBLIC_URL` - опциональный ручной override для storage endpoint, если автоопределение по IP/port не подходит.
-- `STORAGE_DRIVER` - сейчас `local`; S3-compatible backend подготовлен архитектурно, но не реализован.
+- `STORAGE_DRIVER` - `local` или `s3`.
 - `STORAGE_LOCAL_ROOT` - локальная папка dev storage-node.
+- `STORAGE_METADATA_PATH` - путь к metadata index storage-node; если пусто, выбирается рядом с storage root.
+- `STORAGE_S3_ENDPOINT`, `STORAGE_S3_REGION`, `STORAGE_S3_BUCKET`, `STORAGE_S3_ACCESS_KEY_ID`, `STORAGE_S3_SECRET_ACCESS_KEY`, `STORAGE_S3_FORCE_PATH_STYLE` - настройки S3-compatible backend.
 - `STORAGE_CAPACITY_BYTES` - опциональная capacity storage-node для выбора coordinator-ом.
 - `STORAGE_MAX_OBJECT_BYTES` - максимальный размер одного объекта для прямого upload.
 - `WORKER_PORT` - порт worker; coordinator использует его вместе с IP registration-запроса, чтобы отправлять jobs на worker.
@@ -350,8 +354,8 @@ npm run build:dist
 
 - TLS на всех публичных endpoint и mTLS/private network на edge/proxy уровне; в приложениях включайте `REQUIRE_HTTPS_ENDPOINTS=true`.
 - Persistent storage для jobs/registry: включается через `COORDINATOR_PERSISTENCE=postgres`.
-- Очередь/lease-механизм для повторного назначения jobs и распределенных coordinator-инстансов.
-- S3-compatible backend внутри storage-node или отдельный production storage provider; через coordinator и JSON body должны идти metadata, access assignments и ссылки, а не бинарные данные.
+- Distributed lease/lock механизм для нескольких coordinator-инстансов; текущая очередь и polling assignment рассчитаны на один активный coordinator.
+- Production-grade object storage: S3-compatible backend уже есть, но для больших объемов нужно добавить multipart upload, lifecycle policy, bucket-level encryption и мониторинг ошибок backend-а.
 - Централизованные metrics/logs/tracing и алерты по capacity, latency, failed jobs, stale worker/client; security events уже пишутся coordinator-ом, но их нужно вывести в SIEM/alerts.
 
 ## Расширение системы

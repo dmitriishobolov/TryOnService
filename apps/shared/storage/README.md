@@ -4,14 +4,16 @@ Storage слой описывает работу с файлами и изобр
 
 ## Текущая реализация
 
-- `ObjectStorage` - общий интерфейс для записи, чтения, stream-read и удаления объекта.
+- `ObjectStorage` - общий stream-first интерфейс для записи, чтения и удаления объекта.
 - `LocalObjectStorage` - dev backend, который пишет файлы в локальную папку и возвращает `StorageObjectRef`.
+- `S3CompatibleObjectStorage` - backend для S3-compatible storage с AWS SigV4 подписью.
+- `StorageMetadataIndex` внутри backend-а хранит object metadata и считает `usedBytes` инкрементально, без полного обхода папки или bucket.
 
 `StorageObjectRef` живет в `apps/shared/contracts`: его можно передавать в `CreateTryOnJobRequest.payload.inputFiles` и `TryOnJobResult.files`. Реальный HTTP upload/download выполняет `apps/storage`: coordinator только выдает storage endpoint и signed access token. Для объектов, загруженных через storage-node, ref должен содержать `storageId`, чтобы worker получил доступ к правильному узлу.
 
 ## Production направление
 
-Для production нужен S3-compatible backend внутри storage-node или выделенный storage provider: AWS S3, Cloudflare R2, MinIO, Yandex Object Storage. Воркерам и клиентам не нужно знать master credentials storage. Coordinator выдает короткоживущий scoped token, а storage-node проверяет его локально.
+Для production можно использовать S3-compatible backend внутри storage-node: AWS S3, Cloudflare R2, MinIO, Yandex Object Storage. Воркерам и клиентам не нужно знать master credentials storage. Coordinator выдает короткоживущий scoped token, а storage-node проверяет его локально. Для очень больших файлов следующим шагом нужен multipart upload и lifecycle policy на bucket.
 
 ## Правила
 

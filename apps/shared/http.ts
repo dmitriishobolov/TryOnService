@@ -32,6 +32,8 @@ export interface PostJsonOptions {
   retryDelayMs?: number;
 }
 
+export type GetJsonOptions = PostJsonOptions;
+
 export async function readJsonBody<T = unknown>(
   request: IncomingMessage,
   options: ReadJsonBodyOptions = {},
@@ -117,7 +119,7 @@ export async function postJson<TResponse = unknown>(
     } catch (error) {
       lastError = error;
 
-      if (attempt >= retries || !isRetryablePostError(error)) {
+      if (attempt >= retries || !isRetryableRequestError(error)) {
         break;
       }
 
@@ -126,6 +128,35 @@ export async function postJson<TResponse = unknown>(
   }
 
   throw lastError instanceof Error ? lastError : new Error("POST request failed");
+}
+
+export async function getJson<TResponse = unknown>(
+  url: string,
+  headers: Record<string, string> = {},
+  options: Omit<GetJsonOptions, "headers"> = {},
+): Promise<TResponse> {
+  const retries = options.retries ?? 1;
+  const retryDelayMs = options.retryDelayMs ?? 250;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await getJsonOnce<TResponse>(url, {
+        headers,
+        timeoutMs: options.timeoutMs,
+      });
+    } catch (error) {
+      lastError = error;
+
+      if (attempt >= retries || !isRetryableRequestError(error)) {
+        break;
+      }
+
+      await sleep(retryDelayMs * (attempt + 1));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("GET request failed");
 }
 
 async function postJsonOnce<TResponse>(
@@ -174,6 +205,47 @@ async function postJsonOnce<TResponse>(
   return parsed as TResponse;
 }
 
+async function getJsonOnce<TResponse>(
+  url: string,
+  options: Pick<GetJsonOptions, "headers" | "timeoutMs">,
+): Promise<TResponse> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, options.timeoutMs ?? 5_000);
+
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: options.headers,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  const text = await response.text();
+  const parsed = parseJsonResponse(text);
+
+  if (!response.ok) {
+    const message =
+      parsed &&
+      typeof parsed === "object" &&
+      "error" in parsed &&
+      parsed.error &&
+      typeof parsed.error === "object" &&
+      "message" in parsed.error
+        ? String(parsed.error.message)
+        : `Request failed with status ${response.status}`;
+
+    throw new HttpResponseError(response.status, message);
+  }
+
+  return parsed as TResponse;
+}
+
 function parseJsonResponse(text: string): unknown {
   if (!text) {
     return undefined;
@@ -186,7 +258,7 @@ function parseJsonResponse(text: string): unknown {
   }
 }
 
-function isRetryablePostError(error: unknown): boolean {
+function isRetryableRequestError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return true;
   }

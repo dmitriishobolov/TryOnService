@@ -13,8 +13,14 @@
 - `STORAGE_SERVICE_KEY` - общий service key для heartbeat/health после регистрации.
 - `STORAGE_ACCESS_SIGNING_KEY` - секрет проверки storage-access token; должен совпадать с coordinator.
 - `STORAGE_ACCESS_SIGNING_KEY_VERSION` - версия storage-access signing key; storage-node принимает только token текущей версии.
-- `STORAGE_DRIVER` - `local` сейчас, `s3` зарезервирован как следующий backend.
+- `STORAGE_DRIVER` - `local` или `s3`.
 - `STORAGE_LOCAL_ROOT` - локальная папка для объектов в dev/local backend.
+- `STORAGE_METADATA_PATH` - файл metadata index для объектов и инкрементального `usedBytes`.
+- `STORAGE_S3_ENDPOINT` - endpoint S3-compatible backend.
+- `STORAGE_S3_REGION` - region S3-compatible backend.
+- `STORAGE_S3_BUCKET` - bucket для объектов.
+- `STORAGE_S3_ACCESS_KEY_ID`, `STORAGE_S3_SECRET_ACCESS_KEY` - credentials S3-compatible backend.
+- `STORAGE_S3_FORCE_PATH_STYLE` - использовать path-style URL `/bucket/key`; удобно для MinIO.
 - `STORAGE_CAPACITY_BYTES` - опциональная capacity storage-node.
 - `STORAGE_HEARTBEAT_INTERVAL_MS` - интервал heartbeat.
 - `STORAGE_MAX_OBJECT_BYTES` - максимальный размер одного upload.

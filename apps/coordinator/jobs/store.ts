@@ -20,7 +20,11 @@ export interface JobStore {
   findExpiredAssignments(timeoutMs: number): Promise<TryOnJob[]>;
   findActiveByWorker(workerId: string): Promise<TryOnJob[]>;
   findActiveBySourceClient(clientId: string): Promise<TryOnJob[]>;
-  markAssigned(jobId: string, workerId: string): Promise<TryOnJob | undefined>;
+  markAssigned(
+    jobId: string,
+    workerId: string,
+    dispatchTokenExpiresAt: string,
+  ): Promise<TryOnJob | undefined>;
   markRunning(update: JobProgressUpdateRequest): Promise<TryOnJob | undefined>;
   markResult(update: JobResultUpdateRequest): Promise<TryOnJob | undefined>;
   requeue(jobId: string): Promise<TryOnJob | undefined>;
@@ -108,6 +112,7 @@ export class InMemoryJobStore implements JobStore {
       (job) =>
         job.assignedWorkerId === workerId &&
         job.status !== "succeeded" &&
+        job.status !== "delivery_failed" &&
         job.status !== "failed" &&
         job.status !== "cancelled",
     );
@@ -118,6 +123,7 @@ export class InMemoryJobStore implements JobStore {
       (job) =>
         job.sourceClientId === clientId &&
         job.status !== "succeeded" &&
+        job.status !== "delivery_failed" &&
         job.status !== "failed" &&
         job.status !== "cancelled",
     );
@@ -126,6 +132,7 @@ export class InMemoryJobStore implements JobStore {
   async markAssigned(
     jobId: string,
     workerId: string,
+    dispatchTokenExpiresAt: string,
   ): Promise<TryOnJob | undefined> {
     const job = this.jobs.get(jobId);
 
@@ -137,6 +144,7 @@ export class InMemoryJobStore implements JobStore {
       status: "assigned",
       assignedWorkerId: workerId,
       assignedAt: new Date().toISOString(),
+      dispatchTokenExpiresAt,
     });
   }
 
@@ -148,6 +156,7 @@ export class InMemoryJobStore implements JobStore {
     if (
       !job ||
       job.status === "succeeded" ||
+      job.status === "delivery_failed" ||
       job.status === "failed" ||
       job.status === "cancelled"
     ) {
@@ -170,6 +179,7 @@ export class InMemoryJobStore implements JobStore {
 
     if (
       job.status === "succeeded" ||
+      job.status === "delivery_failed" ||
       job.status === "failed" ||
       job.status === "cancelled"
     ) {
@@ -189,15 +199,13 @@ export class InMemoryJobStore implements JobStore {
       assignedWorkerId: undefined,
       assignedAt: undefined,
       dispatchTokenExpiresAt: undefined,
+      result: undefined,
+      error: undefined,
     });
   }
 
   async markAssignmentExpired(jobId: string): Promise<TryOnJob | undefined> {
-    return this.markFailed(jobId, {
-      code: "assignment_expired",
-      message: "Worker assignment expired before direct client dispatch",
-      retryable: true,
-    });
+    return this.requeue(jobId);
   }
 
   async markFailed(
@@ -209,6 +217,7 @@ export class InMemoryJobStore implements JobStore {
     if (
       !job ||
       job.status === "succeeded" ||
+      job.status === "delivery_failed" ||
       job.status === "failed" ||
       job.status === "cancelled"
     ) {

@@ -1,14 +1,16 @@
 import type { Server } from "node:http";
-import { readdir, stat } from "node:fs/promises";
-import type { Dirent } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import { loadEnvFile } from "../shared/env.js";
 import { findAvailablePort } from "../shared/net.js";
-import { LocalObjectStorage } from "../shared/storage/index.js";
+import {
+  LocalObjectStorage,
+  S3CompatibleObjectStorage,
+  type ObjectStorage,
+} from "../shared/storage/index.js";
 import { StorageCoordinatorClient } from "./api/coordinatorClient.js";
 import { createStorageServer } from "./api/server.js";
-import { loadStorageConfig } from "./config/index.js";
+import { loadStorageConfig, type StorageConfig } from "./config/index.js";
 
 loadEnvFile();
 
@@ -23,21 +25,14 @@ if (selectedPort !== config.port) {
   config.localUrl = `http://localhost:${selectedPort}`;
 }
 
-if (config.driver !== "local") {
-  throw new Error("Only STORAGE_DRIVER=local is implemented for storage-node");
-}
-
-const localRoot = resolve(process.cwd(), config.localRoot);
-const objects = new LocalObjectStorage({
-  rootDir: localRoot,
-});
+const objects = createObjectStorage(config);
 const coordinator = new StorageCoordinatorClient(config);
 let isRegistered = false;
 
 const server = createStorageServer({
   config,
   objects,
-  getUsedBytes: () => getDirectorySize(localRoot),
+  getUsedBytes: async () => objects.getUsedBytes(),
 });
 
 await listen(server, config.port);
@@ -58,7 +53,7 @@ setInterval(() => {
     return;
   }
 
-  void getDirectorySize(localRoot)
+  void Promise.resolve(objects.getUsedBytes())
     .then((usedBytes) => coordinator.heartbeat(usedBytes))
     .catch((error) => {
       isRegistered = false;
@@ -93,28 +88,42 @@ function listen(server: Server, port: number): Promise<void> {
   });
 }
 
-async function getDirectorySize(path: string): Promise<number> {
-  let total = 0;
-  let entries: Dirent[];
+function createObjectStorage(config: StorageConfig): ObjectStorage {
+  const metadataPath = config.metadataPath
+    ? resolve(process.cwd(), config.metadataPath)
+    : undefined;
 
-  try {
-    entries = await readdir(path, { withFileTypes: true });
-  } catch {
-    return 0;
+  if (config.driver === "local") {
+    return new LocalObjectStorage({
+      rootDir: resolve(process.cwd(), config.localRoot),
+      metadataPath,
+      publicBaseUrl: config.publicUrl
+        ? `${config.publicUrl.replace(/\/$/, "")}/objects`
+        : undefined,
+    });
   }
 
-  for (const entry of entries) {
-    const entryPath = join(path, entry.name);
-
-    if (entry.isDirectory()) {
-      total += await getDirectorySize(entryPath);
-      continue;
-    }
-
-    if (entry.isFile()) {
-      total += (await stat(entryPath)).size;
-    }
+  if (
+    !config.s3Endpoint ||
+    !config.s3Bucket ||
+    !config.s3AccessKeyId ||
+    !config.s3SecretAccessKey
+  ) {
+    throw new Error("S3 storage config is incomplete");
   }
 
-  return total;
+  return new S3CompatibleObjectStorage({
+    endpoint: config.s3Endpoint,
+    region: config.s3Region,
+    bucket: config.s3Bucket,
+    accessKeyId: config.s3AccessKeyId,
+    secretAccessKey: config.s3SecretAccessKey,
+    forcePathStyle: config.s3ForcePathStyle,
+    metadataPath:
+      metadataPath ??
+      resolve(process.cwd(), config.localRoot, ".tryon-s3-storage-metadata.json"),
+    publicBaseUrl: config.publicUrl
+      ? `${config.publicUrl.replace(/\/$/, "")}/objects`
+      : undefined,
+  });
 }

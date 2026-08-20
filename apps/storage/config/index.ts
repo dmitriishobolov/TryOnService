@@ -19,6 +19,13 @@ export interface StorageConfig {
   accessSigningKeyVersion: string;
   driver: StorageObjectDriver;
   localRoot: string;
+  metadataPath?: string;
+  s3Endpoint?: string;
+  s3Region: string;
+  s3Bucket?: string;
+  s3AccessKeyId?: string;
+  s3SecretAccessKey?: string;
+  s3ForcePathStyle: boolean;
   capacityBytes?: number;
   heartbeatIntervalMs: number;
   apiRateLimitWindowMs: number;
@@ -69,6 +76,24 @@ function readOptionalString(name: string): string | undefined {
   return process.env[name]?.trim() || undefined;
 }
 
+function readBoolean(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+
+  if (!raw) {
+    return fallback;
+  }
+
+  if (raw === "true" || raw === "1" || raw === "yes") {
+    return true;
+  }
+
+  if (raw === "false" || raw === "0" || raw === "no") {
+    return false;
+  }
+
+  throw new Error(`${name} must be a boolean`);
+}
+
 function readPublicProtocol(): PublicProtocol {
   const value = readString("STORAGE_PUBLIC_PROTOCOL", "http");
 
@@ -92,6 +117,20 @@ function readDriver(): StorageObjectDriver {
 export function loadStorageConfig(): StorageConfig {
   const port = readNumber("STORAGE_PORT", 4200);
   const storageId = readString("STORAGE_ID", `${hostname()}-${port}`);
+  const driver = readDriver();
+  const s3Endpoint = readOptionalString("STORAGE_S3_ENDPOINT");
+  const s3Bucket = readOptionalString("STORAGE_S3_BUCKET");
+  const s3AccessKeyId = readOptionalString("STORAGE_S3_ACCESS_KEY_ID");
+  const s3SecretAccessKey = readOptionalString("STORAGE_S3_SECRET_ACCESS_KEY");
+
+  if (
+    driver === "s3" &&
+    (!s3Endpoint || !s3Bucket || !s3AccessKeyId || !s3SecretAccessKey)
+  ) {
+    throw new Error(
+      "STORAGE_DRIVER=s3 requires STORAGE_S3_ENDPOINT, STORAGE_S3_BUCKET, STORAGE_S3_ACCESS_KEY_ID and STORAGE_S3_SECRET_ACCESS_KEY",
+    );
+  }
 
   return {
     port,
@@ -113,8 +152,15 @@ export function loadStorageConfig(): StorageConfig {
       "STORAGE_ACCESS_SIGNING_KEY_VERSION",
       "dev-v1",
     ),
-    driver: readDriver(),
+    driver,
     localRoot: readString("STORAGE_LOCAL_ROOT", "tmp/storage"),
+    metadataPath: readOptionalString("STORAGE_METADATA_PATH"),
+    s3Endpoint,
+    s3Region: readString("STORAGE_S3_REGION", "us-east-1"),
+    s3Bucket,
+    s3AccessKeyId,
+    s3SecretAccessKey,
+    s3ForcePathStyle: readBoolean("STORAGE_S3_FORCE_PATH_STYLE", true),
     capacityBytes: readOptionalNumber("STORAGE_CAPACITY_BYTES"),
     heartbeatIntervalMs: readNumber(
       "STORAGE_HEARTBEAT_INTERVAL_MS",

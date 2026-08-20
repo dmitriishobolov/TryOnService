@@ -8,10 +8,33 @@ import {
   selectInputFile,
   TryOnModelError,
 } from "../providerUtils.js";
-import type { WorkerConfig } from "../../config/index.js";
+import type {
+  OpenAiImageDetail,
+  OpenAiReasoningEffort,
+  OpenAiTextVerbosity,
+  WorkerConfig,
+} from "../../config/index.js";
 import type { TryOnModelAdapter } from "../types.js";
 
 const provider = "openai";
+const imageDetailValues = [
+  "low",
+  "auto",
+  "high",
+] as const satisfies readonly OpenAiImageDetail[];
+const textVerbosityValues = [
+  "low",
+  "medium",
+  "high",
+] as const satisfies readonly OpenAiTextVerbosity[];
+const reasoningEffortValues = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const satisfies readonly OpenAiReasoningEffort[];
 
 export const openAiTryOnAdapter: TryOnModelAdapter = {
   provider,
@@ -29,6 +52,9 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
     );
     const personImage = await downloadInputImage(job, personRef, config, signal);
     const prompt = job.payload.text?.trim() || config.openai.wardrobePrompt;
+    const options = isRecord(job.payload.model?.options)
+      ? job.payload.model.options
+      : {};
     const response = await fetchJson<unknown>(
       provider,
       joinUrl(config.openai.baseUrl, "/v1/responses"),
@@ -60,12 +86,38 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
                     personImage.buffer,
                     personImage.contentType,
                   ),
-                  detail: config.openai.imageDetail,
+                  detail: readEnumOption(
+                    options,
+                    "imageDetail",
+                    imageDetailValues,
+                    config.openai.imageDetail,
+                  ),
                 },
               ],
             },
           ],
-          max_output_tokens: config.openai.maxOutputTokens,
+          text: {
+            format: {
+              type: "text",
+            },
+            verbosity: readEnumOption(
+              options,
+              "textVerbosity",
+              textVerbosityValues,
+              config.openai.textVerbosity,
+            ),
+          },
+          reasoning: buildReasoningConfig(options, config),
+          max_output_tokens: readNumberOption(
+            options,
+            "maxOutputTokens",
+            config.openai.maxOutputTokens,
+          ),
+          store: readBooleanOption(
+            options,
+            "store",
+            config.openai.storeResponse,
+          ),
         }),
       },
       config.tryOnModelHttpTimeoutMs,
@@ -105,6 +157,143 @@ function openAiHeaders(
 
 function toDataUrl(buffer: Buffer, contentType: string): string {
   return `data:${contentType};base64,${buffer.toString("base64")}`;
+}
+
+function buildReasoningConfig(
+  options: Record<string, unknown>,
+  config: WorkerConfig,
+): Record<string, string> {
+  const reasoning: Record<string, string> = {
+    effort: readEnumOption(
+      options,
+      "reasoningEffort",
+      reasoningEffortValues,
+      config.openai.reasoningEffort,
+    ),
+  };
+  const mode = readStringOption(
+    options,
+    "reasoningMode",
+    config.openai.reasoningMode,
+  );
+
+  if (mode) {
+    reasoning.mode = mode;
+  }
+
+  return reasoning;
+}
+
+function readEnumOption<T extends string>(
+  options: Record<string, unknown>,
+  key: string,
+  allowed: readonly T[],
+  fallback: T,
+): T {
+  const value = options[key];
+
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+
+    if ((allowed as readonly string[]).includes(normalized)) {
+      return normalized as T;
+    }
+  }
+
+  throw new TryOnModelError(
+    `openai_invalid_${key}`,
+    `OpenAI option ${key} must be one of: ${allowed.join(", ")}`,
+    false,
+  );
+}
+
+function readStringOption(
+  options: Record<string, unknown>,
+  key: string,
+  fallback: string | undefined,
+): string | undefined {
+  const value = options[key];
+
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (typeof value === "string") {
+    return value.trim() || fallback;
+  }
+
+  throw new TryOnModelError(
+    `openai_invalid_${key}`,
+    `OpenAI option ${key} must be a string`,
+    false,
+  );
+}
+
+function readNumberOption(
+  options: Record<string, unknown>,
+  key: string,
+  fallback: number,
+): number {
+  const value = options[key];
+
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value.trim())
+        : Number.NaN;
+
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return parsed;
+  }
+
+  throw new TryOnModelError(
+    `openai_invalid_${key}`,
+    `OpenAI option ${key} must be a positive number`,
+    false,
+  );
+}
+
+function readBooleanOption(
+  options: Record<string, unknown>,
+  key: string,
+  fallback: boolean,
+): boolean {
+  const value = options[key];
+
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+
+    if (normalized === "true" || normalized === "1" || normalized === "yes") {
+      return true;
+    }
+
+    if (normalized === "false" || normalized === "0" || normalized === "no") {
+      return false;
+    }
+  }
+
+  throw new TryOnModelError(
+    `openai_invalid_${key}`,
+    `OpenAI option ${key} must be a boolean`,
+    false,
+  );
 }
 
 function extractOutputText(value: unknown): string | undefined {

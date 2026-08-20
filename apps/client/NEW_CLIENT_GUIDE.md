@@ -259,7 +259,14 @@ content-type: application/json
     "model": {
       "provider": "openai",
       "task": "wardrobe-recommendation",
-      "providerModel": "gpt-5"
+      "providerModel": "gpt-5.6-luna",
+      "options": {
+        "imageDetail": "high",
+        "textVerbosity": "high",
+        "reasoningEffort": "low",
+        "reasoningMode": "standard",
+        "store": false
+      }
     },
     "text": "try this outfit",
     "inputFiles": [
@@ -305,7 +312,7 @@ content-type: application/json
 
 Coordinator сам подставит trusted callback URL из registry по `sourceClientId`. Не передавайте callback URL от пользователя как источник доверия.
 
-`payload.model` выбирает provider для конкретной job. Например, `openai` подходит для анализа фото пользователя и wardrobe-рекомендаций, а virtual try-on provider-ы вроде `pixelcut`, `tryoncloud`, `wearfits`, `pruna` и `genlook` ожидают фото пользователя и фото одежды. Coordinator использует `payload.model.provider`, чтобы найти worker с capability `try-on.<provider>`.
+`payload.model` выбирает provider для конкретной job. Например, `openai` подходит для анализа фото пользователя и wardrobe-рекомендаций, а virtual try-on provider-ы вроде `pixelcut`, `tryoncloud`, `wearfits`, `pruna` и `genlook` ожидают фото пользователя и фото одежды. Coordinator использует `payload.model.provider`, чтобы найти worker с capability `try-on.<provider>`. `payload.model.providerModel` передает конкретную модель provider-а, а `payload.model.options` - provider-specific настройки вроде `imageDetail`, `textVerbosity`, `reasoningEffort`, `reasoningMode`, `maxOutputTokens` и `store` для OpenAI.
 
 Если coordinator вернул `202`, job поставлена в очередь:
 

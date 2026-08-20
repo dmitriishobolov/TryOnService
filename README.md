@@ -11,7 +11,7 @@ TryOnService - сервис примерки на базе AI API. Проект 
 - coordinator регистрирует worker'ы и service clients, получает heartbeat, ведет очередь jobs, выбирает worker по capacity/capabilities, готовит assignment на worker-е и возвращает клиенту выбранный worker;
 - object storage node регистрируется в coordinator по отдельному ключу, отправляет heartbeat и принимает streaming upload/download от клиентов и worker'ов по короткоживущему signed storage token;
 - worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat с учетом running jobs и pending assignments, принимает jobs напрямую от клиентов только после prepare от coordinator и выбирает AI provider из `payload.model.provider` конкретной job;
-- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, получает assignment или `queued`-ответ, polling-ом дожидается свободного worker'а, отправляет job worker'у напрямую и выводит пользователю ответ worker'а; фото с подписью `/request openai` отправляется на OpenAI/ChatGPT vision adapter;
+- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, получает assignment или `queued`-ответ, polling-ом дожидается свободного worker'а, отправляет job worker'у напрямую и выводит пользователю ответ worker'а; фото с подписью `/request openai:gpt-5.6-luna` отправляется на OpenAI/ChatGPT vision adapter с выбранной моделью из запроса;
 - coordinator защищает регистрацию worker'ов, service clients и storage-node от перебора ключа: после достижения лимита неверных попыток IP блокируется; при `COORDINATOR_PERSISTENCE=postgres` ban сохраняется в БД и переживает restart;
 - registration, service-to-service, dispatch token, client callback, storage access и admin/debug доступ используют разные ключи;
 - clients, worker и storage-node регистрируются по общим registration keys для быстрого горизонтального масштабирования;
@@ -115,7 +115,7 @@ Worker:
 - держит pending assignments, принимает jobs от клиентов по signed dispatch token, запускает runner и обновляет статус выполнения;
 - выбирает adapter из `apps/worker/models` через `payload.model.provider`: доступны `mock`, `pruna`, `pixelcut`, `tryoncloud`, `genlook`, `wearfits`, `openai`;
 - объявляет provider-specific capabilities только для настроенных API keys, чтобы coordinator не выдавал job на неподходящий worker;
-- для virtual try-on provider-ов ожидает в `payload.inputFiles` фото пользователя и фото одежды/товара, индексы задаются `TRYON_PERSON_IMAGE_INDEX` и `TRYON_GARMENT_IMAGE_INDEX`; OpenAI adapter использует фото пользователя для анализа внешности и wardrobe-рекомендаций;
+- для virtual try-on provider-ов ожидает в `payload.inputFiles` фото пользователя и фото одежды/товара, индексы задаются `TRYON_PERSON_IMAGE_INDEX` и `TRYON_GARMENT_IMAGE_INDEX`; OpenAI adapter использует фото пользователя для анализа внешности и wardrobe-рекомендаций, принимает `providerModel`/`options` из job и по умолчанию отправляет `store=false`;
 - отправляет клиентский результат напрямую в callback URL из assignment;
 - изолирует конкретные AI API в `apps/worker/models`.
 

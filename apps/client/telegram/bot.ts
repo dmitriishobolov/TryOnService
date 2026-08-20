@@ -377,8 +377,9 @@ function parseModelSelection(
     return undefined;
   }
 
-  const [providerRaw, providerModel] = value.toLowerCase().split(":", 2);
-  const provider = parseProvider(providerRaw);
+  const [providerRaw, providerModelRaw] = value.split(":", 2);
+  const provider = parseProvider(providerRaw.toLowerCase());
+  const providerModel = providerModelRaw?.trim() || undefined;
 
   if (!provider) {
     return undefined;
@@ -388,6 +389,16 @@ function parseModelSelection(
     provider,
     providerModel,
     task: provider === "openai" ? "wardrobe-recommendation" : "try-on",
+    options:
+      provider === "openai"
+        ? {
+            imageDetail: "high",
+            textVerbosity: "high",
+            reasoningEffort: "low",
+            reasoningMode: "standard",
+            store: false,
+          }
+        : undefined,
   };
 }
 

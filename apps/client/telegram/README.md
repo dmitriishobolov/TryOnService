@@ -38,6 +38,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - `/start` настраивает команды бота через Telegram Bot API и показывает кнопку `Request`.
 - `/request` или кнопка `Request` создают mock/demo job в coordinator, ждут assignment при очереди и отправляют job worker'у напрямую.
 - Фото с подписью `/request openai` загружается в object storage и создает job с `payload.model.provider=openai`.
+- Чтобы выбрать конкретную OpenAI-модель из запроса клиента, используйте подпись вида `/request openai:gpt-5.6-luna`.
 - HTTP client умеет запросить storage-access у coordinator для загрузки пользовательских фото.
 - client registration и heartbeat в coordinator.
 - автоматический выбор ближайшего свободного callback-порта.

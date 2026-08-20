@@ -11,6 +11,14 @@ export type TryOnCloudMode = "developer" | "platform";
 export type GenlookUploadMode = "multipart" | "url";
 export type WearfitsImageInputMode = "base64" | "url";
 export type OpenAiImageDetail = "low" | "auto" | "high";
+export type OpenAiTextVerbosity = "low" | "medium" | "high";
+export type OpenAiReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
 
 export interface PrunaTryOnConfig {
   apiKey?: string;
@@ -65,7 +73,11 @@ export interface OpenAiTryOnConfig {
   baseUrl: string;
   model: string;
   imageDetail: OpenAiImageDetail;
+  textVerbosity: OpenAiTextVerbosity;
+  reasoningEffort: OpenAiReasoningEffort;
+  reasoningMode?: string;
   maxOutputTokens: number;
+  storeResponse: boolean;
   organization?: string;
   project?: string;
   systemPrompt: string;
@@ -220,10 +232,39 @@ function readWearfitsImageInputMode(): WearfitsImageInputMode {
 }
 
 function readOpenAiImageDetail(): OpenAiImageDetail {
-  const value = readString("OPENAI_IMAGE_DETAIL", "auto").toLowerCase();
+  const value = readString("OPENAI_IMAGE_DETAIL", "high").toLowerCase();
 
   if (value !== "low" && value !== "auto" && value !== "high") {
     throw new Error("OPENAI_IMAGE_DETAIL must be low, auto or high");
+  }
+
+  return value;
+}
+
+function readOpenAiTextVerbosity(): OpenAiTextVerbosity {
+  const value = readString("OPENAI_TEXT_VERBOSITY", "high").toLowerCase();
+
+  if (value !== "low" && value !== "medium" && value !== "high") {
+    throw new Error("OPENAI_TEXT_VERBOSITY must be low, medium or high");
+  }
+
+  return value;
+}
+
+function readOpenAiReasoningEffort(): OpenAiReasoningEffort {
+  const value = readString("OPENAI_REASONING_EFFORT", "low").toLowerCase();
+
+  if (
+    value !== "none" &&
+    value !== "minimal" &&
+    value !== "low" &&
+    value !== "medium" &&
+    value !== "high" &&
+    value !== "xhigh"
+  ) {
+    throw new Error(
+      "OPENAI_REASONING_EFFORT must be none, minimal, low, medium, high or xhigh",
+    );
   }
 
   return value;
@@ -359,18 +400,22 @@ export function loadWorkerConfig(): WorkerConfig {
     openai: {
       apiKey: readOptionalString("OPENAI_API_KEY"),
       baseUrl: readString("OPENAI_API_BASE_URL", "https://api.openai.com"),
-      model: readString("OPENAI_MODEL", "gpt-5"),
+      model: readString("OPENAI_MODEL", "gpt-5.6-luna"),
       imageDetail: readOpenAiImageDetail(),
+      textVerbosity: readOpenAiTextVerbosity(),
+      reasoningEffort: readOpenAiReasoningEffort(),
+      reasoningMode: readOptionalString("OPENAI_REASONING_MODE") ?? "standard",
       maxOutputTokens: readNumber("OPENAI_MAX_OUTPUT_TOKENS", 1_200),
+      storeResponse: readBoolean("OPENAI_STORE_RESPONSE", false),
       organization: readOptionalString("OPENAI_ORGANIZATION"),
       project: readOptionalString("OPENAI_PROJECT"),
       systemPrompt: readString(
         "OPENAI_SYSTEM_PROMPT",
-        "You are a careful fashion assistant. Analyze only visible style, clothing, colors, proportions, and wardrobe context. Do not identify the person or infer sensitive attributes.",
+        "Ты аккуратный fashion assistant. Анализируй только видимые признаки стиля, одежды, цветов, пропорций и контекста гардероба. Не пытайся устанавливать личность человека и не делай выводы о чувствительных признаках.",
       ),
       wardrobePrompt: readString(
         "OPENAI_WARDROBE_PROMPT",
-        "Analyze the user's appearance from the image and suggest a practical wardrobe direction: colors, silhouettes, fit notes, outfit ideas, and what garments would pair well. Answer in Russian.",
+        "Проанализируй внешность человека на фотографии. Определи: форму лица; визуальный контраст внешности; пропорции фигуры; какие цвета одежды подходят; каких цветов лучше избегать; подходящие фасоны футболок, рубашек, курток и брюк; подходящие аксессуары; рекомендации по прическе; 3 наиболее подходящих стилевых направления. Не пытайся устанавливать личность человека. Если освещение мешает точно определить цветотип, явно скажи об этом.",
       ),
     },
     apiRateLimitWindowMs: readNumber("API_RATE_LIMIT_WINDOW_MS", 60_000),

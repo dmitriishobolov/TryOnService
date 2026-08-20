@@ -27,14 +27,14 @@
 - `TRYONCLOUD_API_KEY`, `TRYONCLOUD_API_BASE_URL`, `TRYONCLOUD_MODE` - настройки TryOnCloud API. `developer` отправляет файлы и получает raw PNG; `platform` требует публичный URL garment image.
 - `GENLOOK_API_KEY`, `GENLOOK_API_BASE_URL`, `GENLOOK_API_KEY_HEADER`, `GENLOOK_API_KEY_PREFIX`, `GENLOOK_UPLOAD_MODE`, `GENLOOK_UPLOAD_PATH`, `GENLOOK_TRYON_PATH`, `GENLOOK_GENERATION_PATH_TEMPLATE` - настройки Genlook. Endpoint paths оставлены конфигурируемыми, потому что dashboard/provider setup может отличаться.
 - `WEARFITS_API_KEY`, `WEARFITS_API_BASE_URL`, `WEARFITS_IMAGE_INPUT_MODE`, `WEARFITS_PRODUCT_CATEGORY`, `WEARFITS_QUALITY`, `WEARFITS_PRESERVE_BACKGROUND` - настройки WEARFITS Virtual Try-On API.
-- `OPENAI_API_KEY`, `OPENAI_API_BASE_URL`, `OPENAI_MODEL`, `OPENAI_IMAGE_DETAIL`, `OPENAI_MAX_OUTPUT_TOKENS`, `OPENAI_ORGANIZATION`, `OPENAI_PROJECT`, `OPENAI_SYSTEM_PROMPT`, `OPENAI_WARDROBE_PROMPT` - настройки OpenAI/ChatGPT vision adapter для анализа внешности и подбора гардероба.
+- `OPENAI_API_KEY`, `OPENAI_API_BASE_URL`, `OPENAI_MODEL`, `OPENAI_IMAGE_DETAIL`, `OPENAI_TEXT_VERBOSITY`, `OPENAI_REASONING_EFFORT`, `OPENAI_REASONING_MODE`, `OPENAI_MAX_OUTPUT_TOKENS`, `OPENAI_STORE_RESPONSE`, `OPENAI_ORGANIZATION`, `OPENAI_PROJECT`, `OPENAI_SYSTEM_PROMPT`, `OPENAI_WARDROBE_PROMPT` - настройки OpenAI/ChatGPT vision adapter для анализа внешности и подбора гардероба. `OPENAI_MODEL` используется только как fallback, если клиент не передал `payload.model.providerModel`.
 - `API_RATE_LIMIT_WINDOW_MS` - окно входящего rate limit.
 - `API_RATE_LIMIT_MAX_REQUESTS` - максимум входящих запросов с одного IP за окно.
 - `HTTP_CLIENT_TIMEOUT_MS` - timeout исходящих HTTP-вызовов worker.
 - `HTTP_CLIENT_RETRIES` - количество повторов исходящих HTTP-вызовов worker.
 - `MAX_JSON_BODY_BYTES` - максимальный размер JSON body входящего запроса.
 
-Production API keys не хранятся в git. Для `npm run build:dist` значения API keys подтягиваются из `BUILD_ENV_FILE` и попадают в готовый пакет worker-а в `dist/packages/worker/.env`. Конкретный provider выбирает клиент в `payload.model`, а не worker env.
+Production API keys не хранятся в git. Для `npm run build:dist` значения API keys подтягиваются из `BUILD_ENV_FILE` и попадают в готовый пакет worker-а в `dist/packages/worker/.env`. Конкретный provider и provider model выбирает клиент в `payload.model`, а не worker env.
 
 ## Правила
 

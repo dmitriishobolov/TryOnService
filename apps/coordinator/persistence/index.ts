@@ -12,9 +12,19 @@ import {
   type StorageRegistryStore,
 } from "../registry/storageStore.js";
 import {
+  InMemorySecurityAuditStore,
+  type SecurityAuditStore,
+} from "../security/auditStore.js";
+import {
+  InMemoryRegistrationBanStore,
+  type RegistrationBanStore,
+} from "../security/registrationBanStore.js";
+import {
   migrateCoordinatorPostgres,
   PostgresClientRegistry,
   PostgresJobStore,
+  PostgresRegistrationBanStore,
+  PostgresSecurityAuditStore,
   PostgresStorageRegistry,
   PostgresWorkerRegistry,
 } from "./postgresStores.js";
@@ -24,6 +34,8 @@ export interface CoordinatorStores {
   workers: WorkerRegistryStore;
   clients: ClientRegistryStore;
   storageNodes: StorageRegistryStore;
+  audit: SecurityAuditStore;
+  registrationBans: RegistrationBanStore;
   close(): Promise<void>;
 }
 
@@ -36,6 +48,8 @@ export async function createCoordinatorStores(
       workers: new WorkerRegistry(),
       clients: new ClientRegistry(),
       storageNodes: new StorageRegistry(),
+      audit: new InMemorySecurityAuditStore(),
+      registrationBans: new InMemoryRegistrationBanStore(),
       close: async () => undefined,
     };
   }
@@ -57,6 +71,8 @@ export async function createCoordinatorStores(
     workers: new PostgresWorkerRegistry(pool),
     clients: new PostgresClientRegistry(pool),
     storageNodes: new PostgresStorageRegistry(pool),
+    audit: new PostgresSecurityAuditStore(pool),
+    registrationBans: new PostgresRegistrationBanStore(pool),
     close: () => pool.end(),
   };
 }

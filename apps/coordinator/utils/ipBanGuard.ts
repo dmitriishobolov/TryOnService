@@ -9,7 +9,22 @@ export interface IpBanRecord {
 export class IpBanGuard {
   private readonly records = new Map<string, IpBanRecord>();
 
-  constructor(private readonly maxInvalidAttempts: number) {}
+  constructor(
+    private readonly maxInvalidAttempts: number,
+    bannedIpAddresses: string[] = [],
+  ) {
+    const now = new Date().toISOString();
+
+    for (const ipAddress of bannedIpAddresses) {
+      this.records.set(ipAddress, {
+        ipAddress,
+        failedAttempts: maxInvalidAttempts,
+        lastFailedAt: now,
+        banned: true,
+        bannedAt: now,
+      });
+    }
+  }
 
   isBanned(ipAddress: string): boolean {
     return this.records.get(ipAddress)?.banned ?? false;

@@ -12,6 +12,7 @@ export interface TelegramClientConfig {
   coordinatorUrl: string;
   registrationKey: string;
   callbackSigningKey: string;
+  callbackSigningKeyVersion: string;
   botToken: string;
   heartbeatIntervalMs: number;
   pollingTimeoutSeconds: number;
@@ -77,12 +78,19 @@ export function loadTelegramClientConfig(): TelegramClientConfig {
     publicUrl: readOptionalString("TELEGRAM_CLIENT_PUBLIC_URL"),
     coordinatorUrl: readString("COORDINATOR_URL", "http://localhost:3000"),
     registrationKey: readString(
-      "CLIENT_REGISTRATION_KEY",
-      "dev-client-registration-key",
+      "TELEGRAM_CLIENT_KEY",
+      readString(
+        "CLIENT_REGISTRATION_KEY",
+        "dev-client-registration-key",
+      ),
     ),
     callbackSigningKey: readString(
       "CLIENT_CALLBACK_SIGNING_KEY",
       "dev-client-callback-signing-key",
+    ),
+    callbackSigningKeyVersion: readString(
+      "CLIENT_CALLBACK_SIGNING_KEY_VERSION",
+      "dev-v1",
     ),
     botToken: readRequiredString("TELEGRAM_BOT_TOKEN"),
     heartbeatIntervalMs: readNumber(

@@ -24,9 +24,9 @@ Client слой должен:
 
 ## Правила
 
-- В client не должно быть секретов coordinator или AI provider'ов, кроме тех, которые нужны самой интеграции.
+- В client не должно быть секретов coordinator или AI provider'ов, кроме собственного per-client key и callback signing key, которые нужны интеграции.
 - Client не должен знать `WORKER_REGISTRATION_KEY`, `WORKER_SERVICE_KEY` или `WORKER_DISPATCH_SIGNING_KEY`; для прямой отправки job используется signed dispatch token из assignment.
-- Callback service client должен знать `CLIENT_CALLBACK_SIGNING_KEY`, чтобы проверить ответ worker'а.
+- Callback service client должен знать `CLIENT_CALLBACK_SIGNING_KEY` и текущий `CLIENT_CALLBACK_SIGNING_KEY_VERSION`, чтобы проверить ответ worker'а.
 - Client не должен хранить пользовательские фото как постоянное хранилище сервиса: после direct upload в storage-node локальные временные файлы можно очищать.
 - Бизнес-логика пайплайна находится в worker runner.
 - Форматы запросов берутся из `apps/shared/contracts`.

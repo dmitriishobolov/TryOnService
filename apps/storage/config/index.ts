@@ -16,6 +16,7 @@ export interface StorageConfig {
   registrationKey: string;
   serviceKey: string;
   accessSigningKey: string;
+  accessSigningKeyVersion: string;
   driver: StorageObjectDriver;
   localRoot: string;
   capacityBytes?: number;
@@ -103,10 +104,17 @@ export function loadStorageConfig(): StorageConfig {
       "STORAGE_REGISTRATION_KEY",
       "dev-storage-registration-key",
     ),
-    serviceKey: readString("STORAGE_SERVICE_KEY", "dev-storage-service-key"),
+    serviceKey: readString(
+      "STORAGE_KEY",
+      readString("STORAGE_SERVICE_KEY", "dev-storage-service-key"),
+    ),
     accessSigningKey: readString(
       "STORAGE_ACCESS_SIGNING_KEY",
       "dev-storage-access-signing-key",
+    ),
+    accessSigningKeyVersion: readString(
+      "STORAGE_ACCESS_SIGNING_KEY_VERSION",
+      "dev-v1",
     ),
     driver: readDriver(),
     localRoot: readString("STORAGE_LOCAL_ROOT", "tmp/storage"),

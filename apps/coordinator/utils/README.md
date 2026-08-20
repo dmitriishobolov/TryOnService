@@ -5,7 +5,7 @@
 ## Что здесь есть сейчас
 
 - `requestAddress.ts` - нормализация remote address, direct socket IP и host для автоопределения публичного endpoint при регистрации worker/client.
-- `ipBanGuard.ts` - in-memory guard для бана IP после повторных неверных worker registration ключей.
+- `ipBanGuard.ts` - runtime guard для бана IP после повторных неверных worker/client/storage registration ключей; стартовое состояние может загружаться из persistent `RegistrationBanStore`.
 
 ## Правила
 

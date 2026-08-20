@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
 export type SignedTokenPurpose =
   | "worker-dispatch"
@@ -9,6 +9,8 @@ export type SignedTokenStorageScope = "read" | "write" | "read-write";
 
 export interface DispatchTokenPayload {
   purpose: SignedTokenPurpose;
+  tokenId?: string;
+  keyVersion?: string;
   jobId?: string;
   workerId?: string;
   clientId?: string;
@@ -29,7 +31,10 @@ export function createDispatchToken(
   payload: DispatchTokenPayload,
   secret: string,
 ): string {
-  const encodedPayload = encodePayload(payload);
+  const encodedPayload = encodePayload({
+    ...payload,
+    tokenId: randomUUID(),
+  });
   const signature = sign(encodedPayload, secret);
 
   return `${encodedPayload}.${signature}`;
@@ -97,6 +102,8 @@ function decodePayload(value: string): DispatchTokenPayload | undefined {
       (parsed?.purpose !== "worker-dispatch" &&
         parsed?.purpose !== "client-callback" &&
         parsed?.purpose !== "storage-access") ||
+      (parsed.tokenId !== undefined && typeof parsed.tokenId !== "string") ||
+      (parsed.keyVersion !== undefined && typeof parsed.keyVersion !== "string") ||
       (parsed.jobId !== undefined && typeof parsed.jobId !== "string") ||
       (parsed.workerId !== undefined && typeof parsed.workerId !== "string") ||
       (parsed.clientId !== undefined && typeof parsed.clientId !== "string") ||

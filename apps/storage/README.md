@@ -22,20 +22,21 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 ## Жизненный цикл
 
 1. Storage-node стартует, выбирает порт и локальный backend.
-2. Storage-node вызывает `POST /storage/register` coordinator-а с `x-storage-registration-key`.
-3. Coordinator проверяет ключ, определяет публичный endpoint по IP registration-запроса + port или берет `STORAGE_PUBLIC_URL`.
+2. Storage-node вызывает `POST /storage/register` coordinator-а с `x-storage-registration-key` и `x-storage-service-key`.
+3. Coordinator проверяет registration key и per-storage service key, определяет публичный endpoint по IP registration-запроса + port или берет `STORAGE_PUBLIC_URL`.
 4. Storage-node отправляет heartbeat каждые `STORAGE_HEARTBEAT_INTERVAL_MS`.
 5. Client или worker запрашивает у coordinator `POST /storage/access`.
 6. Client или worker вызывает storage-node напрямую:
    - `PUT /objects/<key>` для записи файла.
    - `GET /objects/<key>` для чтения файла.
-7. Storage-node проверяет `x-storage-access-token`, scope, storageId, TTL и keyPrefix.
+7. Storage-node проверяет `x-storage-access-token`, scope, storageId, TTL, signing key version и keyPrefix.
 
 ## Правила
 
 - Storage-node не знает Telegram, jobs workflow или AI API.
 - Storage-node не принимает master credentials от clients/worker'ов.
 - Доступ к объектам только по signed token purpose `storage-access`.
+- Storage-node доверяет `keyPrefix` только из token coordinator-а; client/worker не могут расширить scope на стороне storage-node.
 - В dev реализован только `STORAGE_DRIVER=local`; production backend можно заменить на S3-compatible реализацию за интерфейсом `ObjectStorage`.
 - Upload response добавляет `storageId` в `StorageObjectRef`; client обязан передать этот ref в job payload без потери поля.
 - Object keys должны быть scoped и предсказуемыми, например `clients/<clientId>/input/<requestId>/<file>` или `jobs/<jobId>/output/<file>`.

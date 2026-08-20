@@ -143,7 +143,9 @@ function hasStorageObjectAccess(
     !verification.valid ||
     payload?.purpose !== "storage-access" ||
     payload.storageId !== config.storageId ||
-    !payload.scope
+    payload.keyVersion !== config.accessSigningKeyVersion ||
+    !payload.scope ||
+    !payload.tokenId
   ) {
     return false;
   }

@@ -11,6 +11,7 @@ import {
   writeJson,
 } from "../../shared/http.js";
 import { FixedWindowRateLimiter } from "../../shared/rateLimit.js";
+import { TokenReplayGuard } from "../../shared/tokenReplayGuard.js";
 import type { TelegramBot } from "./bot.js";
 import type { TelegramClientConfig } from "./config.js";
 
@@ -22,6 +23,7 @@ export function createTelegramCallbackServer(
     config.apiRateLimitMaxRequests,
     config.apiRateLimitWindowMs,
   );
+  const callbackReplayGuard = new TokenReplayGuard();
   setInterval(() => {
     rateLimiter.cleanup();
   }, config.apiRateLimitWindowMs).unref();
@@ -60,7 +62,9 @@ export function createTelegramCallbackServer(
           return;
         }
 
-        if (!hasValidCallbackToken(request.headers, body.jobId, config)) {
+        const token = validateCallbackToken(request.headers, body.jobId, config);
+
+        if (!token.valid) {
           writeError(
             response,
             401,
@@ -69,6 +73,18 @@ export function createTelegramCallbackServer(
           );
           return;
         }
+
+        if (callbackReplayGuard.hasSeen(token.tokenId)) {
+          writeError(
+            response,
+            409,
+            "callback_token_replayed",
+            "Callback token has already been used",
+          );
+          return;
+        }
+
+        callbackReplayGuard.remember(token.tokenId, token.expiresAt);
 
         await bot.sendMessage(body.client.chatId, body.result.message);
 
@@ -87,20 +103,33 @@ export function createTelegramCallbackServer(
   });
 }
 
-function hasValidCallbackToken(
+function validateCallbackToken(
   headers: Record<string, string | string[] | undefined>,
   jobId: string,
   config: TelegramClientConfig,
-): boolean {
+): { valid: true; tokenId: string; expiresAt: string } | { valid: false } {
   const token = firstHeaderValue(headers["x-client-callback-token"]);
   const verification = verifyDispatchToken(token, config.callbackSigningKey);
+  const payload = verification.payload;
 
-  return (
+  if (
     verification.valid &&
-    verification.payload?.purpose === "client-callback" &&
-    verification.payload.jobId === jobId &&
-    verification.payload.clientId === config.clientId
-  );
+    payload?.purpose === "client-callback" &&
+    payload.jobId === jobId &&
+    payload.clientId === config.clientId &&
+    payload.keyVersion === config.callbackSigningKeyVersion &&
+    payload.tokenId
+  ) {
+    return {
+      valid: true,
+      tokenId: payload.tokenId,
+      expiresAt: payload.expiresAt,
+    };
+  }
+
+  return {
+    valid: false,
+  };
 }
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {

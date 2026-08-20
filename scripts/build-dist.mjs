@@ -10,7 +10,11 @@ const envFileName = process.env.BUILD_ENV_FILE ?? ".env";
 const envFilePath = existsSync(join(rootDir, envFileName))
   ? join(rootDir, envFileName)
   : join(rootDir, ".env.example");
-const env = loadEnv(envFilePath);
+const exampleEnvFilePath = join(rootDir, ".env.example");
+const env = {
+  ...loadEnv(exampleEnvFilePath),
+  ...loadEnv(envFilePath),
+};
 const rootPackage = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8"));
 const commit = readGitValue(["rev-parse", "--short", "HEAD"]) ?? "unknown";
 const builtAt = new Date().toISOString();
@@ -28,16 +32,26 @@ const services = [
       "COORDINATOR_PUBLIC_URL",
       "WORKER_REGISTRATION_KEY",
       "WORKER_SERVICE_KEY",
+      "WORKER_KEYS",
+      "REQUIRE_WORKER_INSTANCE_KEYS",
       "WORKER_DISPATCH_SIGNING_KEY",
+      "WORKER_DISPATCH_SIGNING_KEY_VERSION",
       "CLIENT_CALLBACK_SIGNING_KEY",
+      "CLIENT_CALLBACK_SIGNING_KEY_VERSION",
       "ADMIN_API_KEY",
       "WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS",
       "STORAGE_REGISTRATION_KEY",
       "STORAGE_SERVICE_KEY",
+      "STORAGE_KEYS",
+      "REQUIRE_STORAGE_INSTANCE_KEYS",
       "STORAGE_ACCESS_SIGNING_KEY",
+      "STORAGE_ACCESS_SIGNING_KEY_VERSION",
       "STORAGE_REGISTRATION_MAX_INVALID_ATTEMPTS",
       "CLIENT_REGISTRATION_KEY",
       "CLIENT_REGISTRATION_MAX_INVALID_ATTEMPTS",
+      "CLIENT_KEYS",
+      "REQUIRE_CLIENT_INSTANCE_KEYS",
+      "REQUIRE_HTTPS_ENDPOINTS",
       "WORKER_HEARTBEAT_INTERVAL_MS",
       "WORKER_HEARTBEAT_TIMEOUT_MS",
       "CLIENT_HEARTBEAT_INTERVAL_MS",
@@ -68,6 +82,7 @@ const services = [
     envKeys: [
       "STORAGE_PORT",
       "STORAGE_ID",
+      "STORAGE_KEY",
       "STORAGE_PUBLIC_PROTOCOL",
       "STORAGE_PUBLIC_URL",
       "STORAGE_DRIVER",
@@ -79,6 +94,7 @@ const services = [
       "STORAGE_REGISTRATION_KEY",
       "STORAGE_SERVICE_KEY",
       "STORAGE_ACCESS_SIGNING_KEY",
+      "STORAGE_ACCESS_SIGNING_KEY_VERSION",
       "API_RATE_LIMIT_WINDOW_MS",
       "API_RATE_LIMIT_MAX_REQUESTS",
       "HTTP_CLIENT_TIMEOUT_MS",
@@ -94,6 +110,7 @@ const services = [
     envKeys: [
       "WORKER_PORT",
       "WORKER_ID",
+      "WORKER_KEY",
       "WORKER_PUBLIC_PROTOCOL",
       "WORKER_PUBLIC_URL",
       "WORKER_CAPACITY",
@@ -104,6 +121,7 @@ const services = [
       "WORKER_REGISTRATION_KEY",
       "WORKER_SERVICE_KEY",
       "WORKER_DISPATCH_SIGNING_KEY",
+      "WORKER_DISPATCH_SIGNING_KEY_VERSION",
       "API_RATE_LIMIT_WINDOW_MS",
       "API_RATE_LIMIT_MAX_REQUESTS",
       "HTTP_CLIENT_TIMEOUT_MS",
@@ -118,6 +136,7 @@ const services = [
     directories: ["client", "shared"],
     envKeys: [
       "TELEGRAM_CLIENT_ID",
+      "TELEGRAM_CLIENT_KEY",
       "TELEGRAM_CLIENT_PORT",
       "TELEGRAM_CLIENT_PUBLIC_PROTOCOL",
       "TELEGRAM_CLIENT_PUBLIC_URL",
@@ -126,6 +145,7 @@ const services = [
       "COORDINATOR_URL",
       "CLIENT_REGISTRATION_KEY",
       "CLIENT_CALLBACK_SIGNING_KEY",
+      "CLIENT_CALLBACK_SIGNING_KEY_VERSION",
       "CLIENT_HEARTBEAT_INTERVAL_MS",
       "API_RATE_LIMIT_WINDOW_MS",
       "API_RATE_LIMIT_MAX_REQUESTS",

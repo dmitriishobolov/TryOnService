@@ -12,8 +12,11 @@ TryOnService - сервис примерки на базе AI API. Проект 
 - object storage node регистрируется в coordinator по отдельному ключу, отправляет heartbeat и принимает прямой upload/download от клиентов и worker'ов по короткоживущему signed storage token;
 - worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat с учетом running jobs и pending assignments, принимает jobs напрямую от клиентов только после prepare от coordinator;
 - Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, получает assignment, отправляет job worker'у напрямую и выводит пользователю ответ worker'а;
-- coordinator защищает регистрацию worker'ов, service clients и storage-node от перебора ключа: после достижения лимита неверных попыток IP блокируется до перезапуска coordinator;
-- registration, service-to-service, dispatch token, client callback и admin/debug доступ используют разные ключи;
+- coordinator защищает регистрацию worker'ов, service clients и storage-node от перебора ключа: после достижения лимита неверных попыток IP блокируется; при `COORDINATOR_PERSISTENCE=postgres` ban сохраняется в БД и переживает restart;
+- registration, service-to-service, dispatch token, client callback, storage access и admin/debug доступ используют разные ключи;
+- для production можно включить per-instance identity через `WORKER_KEYS`, `STORAGE_KEYS`, `CLIENT_KEYS` и флаги `REQUIRE_WORKER_INSTANCE_KEYS`, `REQUIRE_STORAGE_INSTANCE_KEYS`, `REQUIRE_CLIENT_INSTANCE_KEYS`;
+- signed tokens содержат `tokenId` и `keyVersion`: worker dispatch и client callback защищены от replay, а storage-access ограничивается TTL, storageId, scope и ownership prefix;
+- coordinator пишет security audit events в memory/Postgres backend;
 - HTTP API имеют лимиты размера JSON body, базовый rate limit и timeout/retry для исходящих service calls;
 - coordinator умеет работать с `memory` или `postgres` persistence backend;
 - для файлов и изображений добавлен object storage слой: в jobs/results передаются `StorageObjectRef`, а не бинарные данные.
@@ -63,12 +66,13 @@ Postgres принадлежит coordinator. Worker и client не получа�
 - registered workers и registered service clients;
 - registered storage-node и heartbeat/capacity данные;
 - metadata storage-объектов и object keys, когда они появляются в payload/result.
+- security audit events и persistent registration bans, если включен Postgres backend.
 
 Файлы и изображения хранятся в отдельном object storage node. В текущем коде есть dev backend `STORAGE_DRIVER=local`, который пишет файлы в `STORAGE_LOCAL_ROOT`, и общий контракт `StorageObjectRef` для будущего S3-compatible backend. В jobs можно передавать `payload.inputFiles`, а worker result может вернуть `result.files`. Ref, который вернул storage-node, содержит `storageId`, чтобы coordinator выдал worker'у доступ к правильному узлу.
 
 Coordinator не принимает и не отдает бинарные файлы. Он выдает `POST /storage/access`: клиент или worker получает `StorageAccessAssignment` с `objectBaseUrl`, scoped `accessToken`, TTL и, при необходимости, `keyPrefix`. После этого upload/download идет напрямую в storage-node через `PUT /objects/<key>` и `GET /objects/<key>`.
 
-Если job содержит несколько входных файлов, они должны лежать на одном storage-node и под общим prefix, например `clients/<clientId>/input/<requestId>/...`.
+Если job содержит несколько входных файлов, они должны лежать на одном storage-node и под общим prefix, например `clients/<clientId>/input/<requestId>/...`. Coordinator не выдает клиенту доступ за пределы `clients/<clientId>`; worker может получить доступ к `workers/<workerId>` или `jobs/<jobId>`/общему job prefix, который выдал coordinator.
 
 ## Структура репозитория
 
@@ -89,22 +93,21 @@ Coordinator:
 - ведет реестр worker'ов и service clients, их heartbeat, capacity и capabilities;
 - подбирает worker, готовит pending assignment на worker-е и выдает клиенту signed assignment для прямой отправки job;
 - ведет registry storage-node, выдает клиентам и worker'ам scoped storage-access token;
+- проверяет ownership storage-prefix, чтобы client не мог запросить доступ к чужому `clients/<id>` namespace;
 - чистит просроченные assignments и освобождает capacity worker'а;
 - пытается отменять pending assignment на worker-е, если assignment истек или service client пропал;
-- блокирует IP, которые пытаются подобрать `WORKER_REGISTRATION_KEY` через регистрацию worker'а;
-- блокирует IP, которые пытаются подобрать `CLIENT_REGISTRATION_KEY` через регистрацию service client;
-- блокирует IP, которые пытаются подобрать `STORAGE_REGISTRATION_KEY` через регистрацию storage-node.
+- блокирует IP, которые пытаются подобрать `WORKER_REGISTRATION_KEY`, `CLIENT_REGISTRATION_KEY` или `STORAGE_REGISTRATION_KEY`; в Postgres режиме ban сохраняется в `tryon_registration_bans`.
 
 Object storage node:
 
 - при старте выбирает свободный порт, регистрируется в coordinator по `STORAGE_REGISTRATION_KEY` и сообщает публичный endpoint;
-- отправляет heartbeat coordinator-у по `STORAGE_SERVICE_KEY`;
+- отправляет heartbeat coordinator-у по `STORAGE_KEY` или dev fallback `STORAGE_SERVICE_KEY`;
 - принимает `PUT /objects/<key>` и `GET /objects/<key>` только с signed token purpose `storage-access`;
 - хранит файлы локально в dev backend или станет точкой расширения под S3-compatible backend.
 
 Worker:
 
-- при старте читает конфиг и регистрируется в coordinator по API key;
+- при старте читает конфиг и регистрируется в coordinator по registration key и своему service key;
 - сообщает о готовности, capacity и поддерживаемых моделях/пайплайнах;
 - держит pending assignments, принимает jobs от клиентов по signed dispatch token, запускает runner и обновляет статус выполнения;
 - отправляет клиентский результат напрямую в callback URL из assignment;
@@ -171,21 +174,31 @@ npm run dev:telegram
 
 Секреты разделены по зонам ответственности:
 
-- `WORKER_REGISTRATION_KEY` - только регистрация worker'ов в `POST /workers/register`, передается как `x-worker-registration-key`.
-- `WORKER_SERVICE_KEY` - служебные вызовы coordinator <-> worker: heartbeat, prepare, progress, result, cancel; передается как `x-worker-service-key`.
+- `WORKER_REGISTRATION_KEY` - registration gate для worker'ов в `POST /workers/register`, передается как `x-worker-registration-key`.
+- `WORKER_SERVICE_KEY` - dev fallback для служебных вызовов coordinator <-> worker: heartbeat, prepare, progress, result, cancel; передается как `x-worker-service-key`.
+- `WORKER_KEYS` - production карта `workerId=secret,otherWorker=secret`, которая задает per-worker service key. Worker доказывает владение ключом уже при регистрации через `x-worker-service-key`; при `REQUIRE_WORKER_INSTANCE_KEYS=true` worker без записи в карте не регистрируется и не проходит heartbeat/progress/result.
 - `WORKER_DISPATCH_SIGNING_KEY` - подпись dispatch token, который coordinator выдает клиенту для прямого `POST /jobs` на worker.
-- `CLIENT_REGISTRATION_KEY` - регистрация и heartbeat service clients, а также создание jobs в coordinator; передается как `x-client-key`.
+- `WORKER_DISPATCH_SIGNING_KEY_VERSION` - версия ключа подписи dispatch token; worker принимает только токены текущей версии.
+- `CLIENT_REGISTRATION_KEY` - dev fallback для регистрации и heartbeat service clients, а также создания jobs в coordinator; передается как `x-client-key`.
+- `CLIENT_KEYS` - production карта `clientId=secret`, которая задает per-client API key. При `REQUIRE_CLIENT_INSTANCE_KEYS=true` общий `CLIENT_REGISTRATION_KEY` перестает давать доступ клиентам без записи в карте.
 - `CLIENT_CALLBACK_SIGNING_KEY` - подпись callback token, по которому Telegram client проверяет ответ worker'а.
+- `CLIENT_CALLBACK_SIGNING_KEY_VERSION` - версия callback signing key; Telegram client отклоняет токены другой версии.
 - `ADMIN_API_KEY` - доступ к debug/admin endpoints coordinator: `GET /health`, `GET /jobs`, `GET /jobs/:id`; передается как `x-admin-key`.
-- `STORAGE_REGISTRATION_KEY` - только регистрация storage-node в `POST /storage/register`, передается как `x-storage-registration-key`.
-- `STORAGE_SERVICE_KEY` - служебные вызовы coordinator <-> storage-node: heartbeat и health; передается как `x-storage-service-key`.
+- `STORAGE_REGISTRATION_KEY` - registration gate для storage-node в `POST /storage/register`, передается как `x-storage-registration-key`.
+- `STORAGE_SERVICE_KEY` - dev fallback для служебных вызовов coordinator <-> storage-node: heartbeat и health; передается как `x-storage-service-key`.
+- `STORAGE_KEYS` - production карта `storageId=secret`, которая задает per-storage service key. Storage-node доказывает владение ключом уже при регистрации через `x-storage-service-key`; при `REQUIRE_STORAGE_INSTANCE_KEYS=true` storage-node без записи в карте не регистрируется и не проходит heartbeat.
 - `STORAGE_ACCESS_SIGNING_KEY` - подпись scoped token, по которому client/worker ходят напрямую в storage-node.
+- `STORAGE_ACCESS_SIGNING_KEY_VERSION` - версия storage-access signing key; storage-node принимает только токены текущей версии.
 
 Клиент не может подставить произвольный `callbackUrl` при создании job. Coordinator всегда берет callback URL из registry по `sourceClientId`, поэтому `POST /jobs` требует зарегистрированный и ready service client.
 
-Для worker, client и storage registration есть in-memory защита от перебора: если один direct remote IP достигнет лимита неверных ключей в `POST /workers/register`, `POST /clients/register` или `POST /storage/register`, coordinator вернет `403 ..._ip_banned` и будет держать этот IP в бане до перезапуска процесса.
+Для worker, client и storage registration есть защита от перебора: если один direct remote IP достигнет лимита неверных ключей в `POST /workers/register`, `POST /clients/register` или `POST /storage/register`, coordinator вернет `403 ..._ip_banned`. В memory режиме ban живет до restart; в Postgres режиме ban хранится в `tryon_registration_bans` и загружается при старте coordinator.
 
 Адрес для бана берется из прямого socket remote address, а не из `x-forwarded-for`, чтобы атакующий не мог легко менять IP заголовком. `x-forwarded-for` и `x-real-ip` используются только для автоопределения публичного endpoint storage-node/worker/client при регистрации.
+
+`REQUIRE_HTTPS_ENDPOINTS=true` заставляет coordinator принимать регистрацию только с `https` public endpoint. Для mTLS используйте reverse proxy/private network перед Node.js процессами: приложения умеют работать по `https://` URL, а проверка клиентских сертификатов должна выполняться на edge/proxy уровне.
+
+Все security-sensitive события (`invalid_*_registration_key`, `*_ip_banned`, `storage_prefix_forbidden`, `input_files_prefix_forbidden`, `job_assignment_issued`, выдача storage-access) пишутся в audit store. В Postgres это таблица `tryon_security_events`; последние события доступны через admin endpoint `GET /security/events`.
 
 ## Проверка без Telegram Bot API
 
@@ -278,16 +291,21 @@ npm run build:dist
 - `COORDINATOR_PUBLIC_URL` - публичный URL coordinator для status callbacks от worker'ов.
 - `COORDINATOR_URL` - адрес coordinator для worker и Telegram client.
 - `WORKER_REGISTRATION_KEY` - ключ регистрации worker'ов в coordinator.
-- `WORKER_SERVICE_KEY` - ключ служебного общения coordinator <-> worker.
-- `WORKER_DISPATCH_SIGNING_KEY` - секрет подписи dispatch token для прямого client -> worker запроса.
-- `CLIENT_CALLBACK_SIGNING_KEY` - секрет подписи callback token для worker -> client результата.
-- `CLIENT_REGISTRATION_KEY` - ключ регистрации service clients в coordinator и создания jobs.
+- `WORKER_SERVICE_KEY` - dev fallback ключ служебного общения coordinator <-> worker.
+- `WORKER_DISPATCH_SIGNING_KEY`, `WORKER_DISPATCH_SIGNING_KEY_VERSION` - секрет и версия подписи dispatch token для прямого client -> worker запроса.
+- `CLIENT_CALLBACK_SIGNING_KEY`, `CLIENT_CALLBACK_SIGNING_KEY_VERSION` - секрет и версия подписи callback token для worker -> client результата.
+- `CLIENT_REGISTRATION_KEY` - dev fallback ключ регистрации service clients в coordinator и создания jobs.
+- `CLIENT_KEYS` - per-client ключи в формате `clientId=secret,client2=secret2`.
+- `TELEGRAM_CLIENT_KEY` - конкретный ключ Telegram client; должен совпадать с записью `CLIENT_KEYS` для `TELEGRAM_CLIENT_ID`, если включен `REQUIRE_CLIENT_INSTANCE_KEYS=true`.
+- `WORKER_KEYS`, `WORKER_KEY`, `STORAGE_KEYS`, `STORAGE_KEY` - per-instance service keys для production.
+- `REQUIRE_WORKER_INSTANCE_KEYS`, `REQUIRE_STORAGE_INSTANCE_KEYS`, `REQUIRE_CLIENT_INSTANCE_KEYS` - запрет fallback на общие dev keys.
+- `REQUIRE_HTTPS_ENDPOINTS` - запрет регистрации non-HTTPS public endpoints.
 - `CLIENT_REGISTRATION_MAX_INVALID_ATTEMPTS` - сколько неверных client registration-ключей с одного IP допускается до бана; по умолчанию `5`.
 - `ADMIN_API_KEY` - ключ доступа к debug/admin endpoints coordinator.
 - `WORKER_REGISTRATION_MAX_INVALID_ATTEMPTS` - сколько неверных registration-ключей с одного IP допускается до бана; по умолчанию `5`.
 - `STORAGE_REGISTRATION_KEY` - ключ регистрации storage-node в coordinator.
-- `STORAGE_SERVICE_KEY` - ключ heartbeat/health для storage-node.
-- `STORAGE_ACCESS_SIGNING_KEY` - секрет подписи storage-access token.
+- `STORAGE_SERVICE_KEY` - dev fallback ключ heartbeat/health для storage-node.
+- `STORAGE_ACCESS_SIGNING_KEY`, `STORAGE_ACCESS_SIGNING_KEY_VERSION` - секрет и версия подписи storage-access token.
 - `STORAGE_REGISTRATION_MAX_INVALID_ATTEMPTS` - сколько неверных storage registration-ключей с одного IP допускается до бана.
 - `STORAGE_HEARTBEAT_INTERVAL_MS`, `STORAGE_HEARTBEAT_TIMEOUT_MS` - heartbeat storage-node и timeout исключения из активного пула.
 - `STORAGE_ACCESS_TOKEN_TTL_MS` - срок жизни token для прямого upload/download в storage-node.
@@ -316,11 +334,11 @@ npm run build:dist
 
 Текущий срез подходит для локальной разработки и проверки архитектуры control-plane/data-plane. Перед production под растущую нагрузку нужны инфраструктурные слои:
 
-- TLS на всех публичных endpoint, желательно mTLS или private network для coordinator <-> worker.
+- TLS на всех публичных endpoint и mTLS/private network на edge/proxy уровне; в приложениях включайте `REQUIRE_HTTPS_ENDPOINTS=true`.
 - Persistent storage для jobs/registry: включается через `COORDINATOR_PERSISTENCE=postgres`.
 - Очередь/lease-механизм для повторного назначения jobs и распределенных coordinator-инстансов.
 - S3-compatible backend внутри storage-node или отдельный production storage provider; через coordinator и JSON body должны идти metadata, access assignments и ссылки, а не бинарные данные.
-- Централизованные metrics/logs/tracing и алерты по capacity, latency, failed jobs, stale worker/client.
+- Централизованные metrics/logs/tracing и алерты по capacity, latency, failed jobs, stale worker/client; security events уже пишутся coordinator-ом, но их нужно вывести в SIEM/alerts.
 
 ## Расширение системы
 

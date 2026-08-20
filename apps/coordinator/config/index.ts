@@ -14,16 +14,26 @@ export interface CoordinatorConfig {
   publicUrl: string;
   workerRegistrationKey: string;
   workerServiceKey: string;
+  workerKeys: Record<string, string>;
+  requireWorkerInstanceKeys: boolean;
   workerDispatchSigningKey: string;
+  workerDispatchSigningKeyVersion: string;
   storageRegistrationKey: string;
   storageServiceKey: string;
+  storageKeys: Record<string, string>;
+  requireStorageInstanceKeys: boolean;
   storageAccessSigningKey: string;
+  storageAccessSigningKeyVersion: string;
   clientCallbackSigningKey: string;
+  clientCallbackSigningKeyVersion: string;
   adminApiKey: string;
   workerRegistrationMaxInvalidAttempts: number;
   storageRegistrationMaxInvalidAttempts: number;
   clientRegistrationMaxInvalidAttempts: number;
   clientRegistrationKey: string;
+  clientKeys: Record<string, string>;
+  requireClientInstanceKeys: boolean;
+  requireHttpsEndpoints: boolean;
   workerHeartbeatIntervalMs: number;
   workerHeartbeatTimeoutMs: number;
   storageHeartbeatIntervalMs: number;
@@ -98,6 +108,35 @@ function readPersistenceDriver(): CoordinatorPersistenceDriver {
   return value;
 }
 
+function readKeyMap(name: string): Record<string, string> {
+  const raw = process.env[name]?.trim();
+
+  if (!raw) {
+    return {};
+  }
+
+  const result: Record<string, string> = {};
+
+  for (const entry of raw.split(",")) {
+    const separatorIndex = entry.indexOf("=");
+
+    if (separatorIndex <= 0) {
+      throw new Error(`${name} entries must use id=secret format`);
+    }
+
+    const id = entry.slice(0, separatorIndex).trim();
+    const secret = entry.slice(separatorIndex + 1).trim();
+
+    if (!id || !secret) {
+      throw new Error(`${name} entries must include non-empty id and secret`);
+    }
+
+    result[id] = secret;
+  }
+
+  return result;
+}
+
 export function loadCoordinatorConfig(): CoordinatorConfig {
   const port = readNumber("COORDINATOR_PORT", 3000);
 
@@ -109,22 +148,44 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
       "dev-worker-registration-key",
     ),
     workerServiceKey: readString("WORKER_SERVICE_KEY", "dev-worker-service-key"),
+    workerKeys: readKeyMap("WORKER_KEYS"),
+    requireWorkerInstanceKeys: readBoolean(
+      "REQUIRE_WORKER_INSTANCE_KEYS",
+      false,
+    ),
     workerDispatchSigningKey: readString(
       "WORKER_DISPATCH_SIGNING_KEY",
       "dev-worker-dispatch-signing-key",
+    ),
+    workerDispatchSigningKeyVersion: readString(
+      "WORKER_DISPATCH_SIGNING_KEY_VERSION",
+      "dev-v1",
     ),
     storageRegistrationKey: readString(
       "STORAGE_REGISTRATION_KEY",
       "dev-storage-registration-key",
     ),
     storageServiceKey: readString("STORAGE_SERVICE_KEY", "dev-storage-service-key"),
+    storageKeys: readKeyMap("STORAGE_KEYS"),
+    requireStorageInstanceKeys: readBoolean(
+      "REQUIRE_STORAGE_INSTANCE_KEYS",
+      false,
+    ),
     storageAccessSigningKey: readString(
       "STORAGE_ACCESS_SIGNING_KEY",
       "dev-storage-access-signing-key",
     ),
+    storageAccessSigningKeyVersion: readString(
+      "STORAGE_ACCESS_SIGNING_KEY_VERSION",
+      "dev-v1",
+    ),
     clientCallbackSigningKey: readString(
       "CLIENT_CALLBACK_SIGNING_KEY",
       "dev-client-callback-signing-key",
+    ),
+    clientCallbackSigningKeyVersion: readString(
+      "CLIENT_CALLBACK_SIGNING_KEY_VERSION",
+      "dev-v1",
     ),
     adminApiKey: readString("ADMIN_API_KEY", "dev-admin-key"),
     workerRegistrationMaxInvalidAttempts: readNumber(
@@ -143,6 +204,12 @@ export function loadCoordinatorConfig(): CoordinatorConfig {
       "CLIENT_REGISTRATION_KEY",
       "dev-client-registration-key",
     ),
+    clientKeys: readKeyMap("CLIENT_KEYS"),
+    requireClientInstanceKeys: readBoolean(
+      "REQUIRE_CLIENT_INSTANCE_KEYS",
+      false,
+    ),
+    requireHttpsEndpoints: readBoolean("REQUIRE_HTTPS_ENDPOINTS", false),
     workerHeartbeatIntervalMs: readNumber(
       "WORKER_HEARTBEAT_INTERVAL_MS",
       WORKER_HEARTBEAT_INTERVAL_MS,

@@ -16,6 +16,7 @@ export interface WorkerConfig {
   registrationKey: string;
   serviceKey: string;
   dispatchSigningKey: string;
+  dispatchSigningKeyVersion: string;
   capacity: number;
   capabilities: WorkerCapability[];
   heartbeatIntervalMs: number;
@@ -86,10 +87,17 @@ export function loadWorkerConfig(): WorkerConfig {
       "WORKER_REGISTRATION_KEY",
       "dev-worker-registration-key",
     ),
-    serviceKey: readString("WORKER_SERVICE_KEY", "dev-worker-service-key"),
+    serviceKey: readString(
+      "WORKER_KEY",
+      readString("WORKER_SERVICE_KEY", "dev-worker-service-key"),
+    ),
     dispatchSigningKey: readString(
       "WORKER_DISPATCH_SIGNING_KEY",
       "dev-worker-dispatch-signing-key",
+    ),
+    dispatchSigningKeyVersion: readString(
+      "WORKER_DISPATCH_SIGNING_KEY_VERSION",
+      "dev-v1",
     ),
     capacity: readNumber("WORKER_CAPACITY", 1),
     capabilities: readCapabilities(),

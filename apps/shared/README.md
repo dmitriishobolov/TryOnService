@@ -12,7 +12,8 @@
 - `env.ts` - простой загрузчик `.env` без внешней runtime-зависимости.
 - `http.ts` - JSON helpers, единый формат API errors, лимит чтения body и `postJson` с timeout/retry.
 - `net.ts` - подбор ближайшего свободного порта для сервисов, которые слушают HTTP callback/API.
-- `dispatchToken.ts` - создание и проверка signed token для dispatch, callback и storage-access flows.
+- `dispatchToken.ts` - создание и проверка signed token для dispatch, callback и storage-access flows; payload содержит `tokenId` и `keyVersion`.
+- `tokenReplayGuard.ts` - простой TTL replay guard для одноразовых signed tokens на принимающей стороне.
 - `rateLimit.ts` - простой in-memory fixed-window rate limiter для HTTP endpoints.
 
 ## Что хранить в shared

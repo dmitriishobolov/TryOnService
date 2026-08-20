@@ -28,11 +28,11 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 
 1. Worker стартует и загружает config.
 2. Worker формирует `workerId`, `capacity` и список `capabilities`.
-3. Worker регистрируется в coordinator через API и registration key.
+3. Worker регистрируется в coordinator через API, registration key и свой per-worker service key.
 4. Worker регулярно отправляет heartbeat.
 5. Coordinator отправляет worker-у lightweight `POST /assignments` с `x-worker-service-key`, чтобы подготовить pending assignment под будущий client dispatch и передать callback token.
 6. Client получает assignment от coordinator и отправляет heavy request на worker endpoint `POST /jobs` с `x-job-dispatch-token`.
-7. Worker проверяет purpose/signature dispatch token, `workerId`, `jobId` и pending assignment, скачивает входные файлы по `StorageObjectRef`, запускает runner и вызывает нужные adapters из `models`.
+7. Worker проверяет purpose/signature dispatch token, `workerId`, `jobId`, текущий signing `keyVersion`, одноразовый `tokenId` и pending assignment, скачивает входные файлы по `StorageObjectRef`, запускает runner и вызывает нужные adapters из `models`.
 8. Worker использует storage-access из `workerRequest` или запрашивает новый через `POST /storage/access`, читает входные файлы и загружает generated files напрямую в storage-node, отправляет progress/final status в coordinator по `x-worker-service-key` и клиентский результат напрямую в callback клиента с `x-client-callback-token`.
 
 В текущем первом срезе runner использует mock model и возвращает текст `Ответ от сервера.`.
@@ -44,6 +44,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - Worker не должен хранить generated images как постоянное хранилище: после upload в storage-node локальные временные файлы очищаются.
 - Pending assignments должны учитываться в heartbeat load вместе с running jobs.
 - Pending assignment должен отменяться через `POST /jobs/:jobId/cancel`, если coordinator сообщает, что клиент пропал или assignment истек.
+- Dispatch token должен быть одноразовым: после принятия job повторный token replay отклоняется.
 - Временные файлы должны очищаться после обработки.
 - Конкретные AI providers изолируются в `models`.
 - Runner описывает бизнес-пайплайн, но не знает деталей HTTP API конкретного AI provider.

@@ -17,5 +17,5 @@ Storage слой описывает работу с файлами и изобр
 
 - В Postgres храним metadata и object keys, не сами изображения.
 - Локальные временные файлы worker/client очищаются после обработки.
-- Object keys должны быть job-scoped, например `jobs/<jobId>/input/person.jpg`.
+- Object keys должны быть owner-scoped: client uploads в `clients/<clientId>/...`, worker private files в `workers/<workerId>/...`, job artifacts в `jobs/<jobId>/...`.
 - Ссылки на скачивание должны иметь TTL, если они публичные или presigned.

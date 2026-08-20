@@ -22,6 +22,15 @@ import type {
 } from "../../shared/contracts/index.js";
 import type { JobStore } from "../jobs/store.js";
 import type { ClientRegistryStore } from "../registry/clientStore.js";
+import type {
+  SecurityAuditEvent,
+  SecurityAuditStore,
+} from "../security/auditStore.js";
+import type {
+  RegistrationBanRecord,
+  RegistrationBanScope,
+  RegistrationBanStore,
+} from "../security/registrationBanStore.js";
 import type { StorageRegistryStore } from "../registry/storageStore.js";
 import type { WorkerRegistryStore } from "../registry/store.js";
 
@@ -71,6 +80,24 @@ interface StorageNodeRow {
   capacity_bytes: string | number | null;
   registered_at: Date | string;
   last_heartbeat_at: Date | string;
+}
+
+interface SecurityEventRow {
+  event_type: string;
+  severity: string;
+  ip_address: string | null;
+  actor_type: string | null;
+  actor_id: string | null;
+  resource_type: string | null;
+  resource_id: string | null;
+  metadata: unknown | null;
+  created_at: Date | string;
+}
+
+interface RegistrationBanRow {
+  scope: string;
+  ip_address: string;
+  banned_at: Date | string;
 }
 
 export async function migrateCoordinatorPostgres(pool: Pool): Promise<void> {
@@ -178,6 +205,35 @@ export async function migrateCoordinatorPostgres(pool: Pool): Promise<void> {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_tryon_storage_nodes_status_heartbeat
       ON tryon_storage_nodes (status, last_heartbeat_at)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tryon_security_events (
+      id uuid PRIMARY KEY,
+      event_type text NOT NULL,
+      severity text NOT NULL,
+      ip_address text,
+      actor_type text,
+      actor_id text,
+      resource_type text,
+      resource_id text,
+      metadata jsonb,
+      created_at timestamptz NOT NULL
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tryon_security_events_created_at
+      ON tryon_security_events (created_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tryon_registration_bans (
+      scope text NOT NULL,
+      ip_address text NOT NULL,
+      banned_at timestamptz NOT NULL,
+      PRIMARY KEY (scope, ip_address)
+    )
   `);
 }
 
@@ -904,6 +960,90 @@ export class PostgresStorageRegistry implements StorageRegistryStore {
   }
 }
 
+export class PostgresSecurityAuditStore implements SecurityAuditStore {
+  constructor(private readonly pool: Pool) {}
+
+  async record(event: SecurityAuditEvent): Promise<void> {
+    await this.pool.query(
+      `
+        INSERT INTO tryon_security_events (
+          id,
+          event_type,
+          severity,
+          ip_address,
+          actor_type,
+          actor_id,
+          resource_type,
+          resource_id,
+          metadata,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `,
+      [
+        randomUUID(),
+        event.eventType,
+        event.severity,
+        event.ipAddress ?? null,
+        event.actorType ?? null,
+        event.actorId ?? null,
+        event.resourceType ?? null,
+        event.resourceId ?? null,
+        event.metadata ? JSON.stringify(event.metadata) : null,
+        event.createdAt ?? new Date().toISOString(),
+      ],
+    );
+  }
+
+  async list(limit = 100): Promise<SecurityAuditEvent[]> {
+    const result = await this.pool.query<SecurityEventRow>(
+      `
+        SELECT *
+        FROM tryon_security_events
+        ORDER BY created_at DESC
+        LIMIT $1
+      `,
+      [limit],
+    );
+
+    return result.rows.map(mapSecurityEventRow);
+  }
+}
+
+export class PostgresRegistrationBanStore implements RegistrationBanStore {
+  constructor(private readonly pool: Pool) {}
+
+  async ban(record: RegistrationBanRecord): Promise<void> {
+    await this.pool.query(
+      `
+        INSERT INTO tryon_registration_bans (
+          scope,
+          ip_address,
+          banned_at
+        )
+        VALUES ($1, $2, $3)
+        ON CONFLICT (scope, ip_address) DO UPDATE
+        SET banned_at = EXCLUDED.banned_at
+      `,
+      [record.scope, record.ipAddress, record.bannedAt],
+    );
+  }
+
+  async list(scope: RegistrationBanScope): Promise<RegistrationBanRecord[]> {
+    const result = await this.pool.query<RegistrationBanRow>(
+      `
+        SELECT *
+        FROM tryon_registration_bans
+        WHERE scope = $1
+        ORDER BY banned_at DESC
+      `,
+      [scope],
+    );
+
+    return result.rows.map(mapRegistrationBanRow);
+  }
+}
+
 function mapJobRow(row: JobRow): TryOnJob {
   return {
     id: row.id,
@@ -958,6 +1098,28 @@ function mapStorageNodeRow(row: StorageNodeRow): RegisteredStorageNode {
       row.capacity_bytes === null ? undefined : Number(row.capacity_bytes),
     registeredAt: toIsoString(row.registered_at),
     lastHeartbeatAt: toIsoString(row.last_heartbeat_at),
+  };
+}
+
+function mapSecurityEventRow(row: SecurityEventRow): SecurityAuditEvent {
+  return {
+    eventType: row.event_type,
+    severity: row.severity as SecurityAuditEvent["severity"],
+    ipAddress: row.ip_address ?? undefined,
+    actorType: (row.actor_type as SecurityAuditEvent["actorType"]) ?? undefined,
+    actorId: row.actor_id ?? undefined,
+    resourceType: row.resource_type ?? undefined,
+    resourceId: row.resource_id ?? undefined,
+    metadata: (row.metadata as SecurityAuditEvent["metadata"]) ?? undefined,
+    createdAt: toIsoString(row.created_at),
+  };
+}
+
+function mapRegistrationBanRow(row: RegistrationBanRow): RegistrationBanRecord {
+  return {
+    scope: row.scope as RegistrationBanRecord["scope"],
+    ipAddress: row.ip_address,
+    bannedAt: toIsoString(row.banned_at),
   };
 }
 

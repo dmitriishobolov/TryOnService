@@ -5,7 +5,12 @@ Persistence слой выбирает, где coordinator хранит сост�
 ## Backends
 
 - `memory` - dev backend по умолчанию. Быстрый локальный запуск, состояние теряется при рестарте.
-- `postgres` - production-направление. Coordinator сам создает таблицы `tryon_jobs`, `tryon_workers`, `tryon_clients`, `tryon_storage_nodes` и `tryon_storage_objects`, если их еще нет.
+- `postgres` - production-направление. Coordinator сам создает таблицы `tryon_jobs`, `tryon_workers`, `tryon_clients`, `tryon_storage_nodes`, `tryon_storage_objects`, `tryon_security_events` и `tryon_registration_bans`, если их еще нет.
+
+## Security State
+
+- `tryon_security_events` - централизованный audit log security-sensitive событий coordinator: неверные registration keys, IP bans, выдача assignment/storage-access, запреты чужих storage prefixes.
+- `tryon_registration_bans` - persistent IP bans для worker/client/storage registration. В memory backend bans живут только в процессе, в Postgres backend загружаются при старте coordinator.
 
 ## Важная граница
 

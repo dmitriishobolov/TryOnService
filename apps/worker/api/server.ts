@@ -16,6 +16,7 @@ import {
   writeJson,
 } from "../../shared/http.js";
 import { FixedWindowRateLimiter } from "../../shared/rateLimit.js";
+import { TokenReplayGuard } from "../../shared/tokenReplayGuard.js";
 import type { WorkerConfig } from "../config/index.js";
 import { runWorkerJob } from "../runner/index.js";
 import type { WorkerAssignmentStore } from "./assignmentStore.js";
@@ -45,6 +46,7 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
     config.apiRateLimitMaxRequests,
     config.apiRateLimitWindowMs,
   );
+  const dispatchReplayGuard = new TokenReplayGuard();
   setInterval(() => {
     rateLimiter.cleanup();
   }, config.apiRateLimitWindowMs).unref();
@@ -197,8 +199,20 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
           return;
         }
 
-        if (!hasWorkerJobAccess(request.headers, body.jobId, config)) {
+        const token = validateWorkerJobAccess(request.headers, body.jobId, config);
+
+        if (!token.valid) {
           writeError(response, 401, "unauthorized_worker_job", "Invalid job token");
+          return;
+        }
+
+        if (dispatchReplayGuard.hasSeen(token.tokenId)) {
+          writeError(
+            response,
+            409,
+            "worker_dispatch_token_replayed",
+            "Dispatch token has already been used",
+          );
           return;
         }
 
@@ -207,6 +221,7 @@ export function createWorkerServer(deps: WorkerServerDeps): Server {
           return;
         }
 
+        dispatchReplayGuard.remember(token.tokenId, token.expiresAt);
         assignments.consume(body.jobId);
         incrementRunningJobs();
 
@@ -247,20 +262,33 @@ function hasWorkerServiceKey(
   return value === config.serviceKey;
 }
 
-function hasWorkerJobAccess(
+function validateWorkerJobAccess(
   headers: Record<string, string | string[] | undefined>,
   jobId: string,
   config: WorkerConfig,
-): boolean {
+): { valid: true; tokenId: string; expiresAt: string } | { valid: false } {
   const token = firstHeaderValue(headers["x-job-dispatch-token"]);
   const verification = verifyDispatchToken(token, config.dispatchSigningKey);
+  const payload = verification.payload;
 
-  return (
+  if (
     verification.valid &&
-    verification.payload?.purpose === "worker-dispatch" &&
-    verification.payload?.jobId === jobId &&
-    verification.payload.workerId === config.workerId
-  );
+    payload?.purpose === "worker-dispatch" &&
+    payload.jobId === jobId &&
+    payload.workerId === config.workerId &&
+    payload.keyVersion === config.dispatchSigningKeyVersion &&
+    payload.tokenId
+  ) {
+    return {
+      valid: true,
+      tokenId: payload.tokenId,
+      expiresAt: payload.expiresAt,
+    };
+  }
+
+  return {
+    valid: false,
+  };
 }
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {

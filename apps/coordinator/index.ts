@@ -10,16 +10,19 @@ import { IpBanGuard } from "./utils/ipBanGuard.js";
 loadEnvFile();
 
 const config = loadCoordinatorConfig();
-const { jobs, workers, clients, storageNodes, close } =
+const { jobs, workers, clients, storageNodes, audit, registrationBans, close } =
   await createCoordinatorStores(config);
 const workerRegistrationGuard = new IpBanGuard(
   config.workerRegistrationMaxInvalidAttempts,
+  (await registrationBans.list("worker")).map((record) => record.ipAddress),
 );
 const storageRegistrationGuard = new IpBanGuard(
   config.storageRegistrationMaxInvalidAttempts,
+  (await registrationBans.list("storage")).map((record) => record.ipAddress),
 );
 const clientRegistrationGuard = new IpBanGuard(
   config.clientRegistrationMaxInvalidAttempts,
+  (await registrationBans.list("client")).map((record) => record.ipAddress),
 );
 const scheduler = new Scheduler(config, jobs, workers, cancelWorkerJobById);
 const server = createCoordinatorServer({
@@ -28,6 +31,8 @@ const server = createCoordinatorServer({
   workers,
   clients,
   storageNodes,
+  audit,
+  registrationBans,
   workerRegistrationGuard,
   storageRegistrationGuard,
   clientRegistrationGuard,
@@ -154,7 +159,8 @@ function cancelWorkerJob(worker: RegisteredWorker, jobId: string): Promise<unkno
     `${worker.baseUrl}/jobs/${jobId}/cancel`,
     {},
     {
-      "x-worker-service-key": config.workerServiceKey,
+      "x-worker-service-key":
+        config.workerKeys[worker.workerId] ?? config.workerServiceKey,
     },
     {
       retries: config.httpClientRetries,

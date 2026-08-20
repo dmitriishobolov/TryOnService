@@ -14,6 +14,7 @@
 - heartbeat worker;
 - назначение job;
 - assignment response для прямой связи client -> worker;
+- worker assignment prepare для security handshake coordinator -> worker;
 - обновление прогресса;
 - capabilities worker'а.
 

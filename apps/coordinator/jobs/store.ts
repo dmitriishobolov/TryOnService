@@ -15,6 +15,7 @@ export class InMemoryJobStore {
     const job: TryOnJob = {
       id: randomUUID(),
       status: "queued",
+      sourceClientId: request.sourceClientId,
       client: request.client,
       payload: request.payload,
       callbackUrl: request.callbackUrl,
@@ -36,6 +37,7 @@ export class InMemoryJobStore {
     const job: TryOnJob = {
       id: randomUUID(),
       status: "assigned",
+      sourceClientId: request.sourceClientId,
       client: request.client,
       payload: request.payload,
       callbackUrl: request.callbackUrl,
@@ -77,6 +79,26 @@ export class InMemoryJobStore {
     });
   }
 
+  findActiveByWorker(workerId: string): TryOnJob[] {
+    return this.list().filter(
+      (job) =>
+        job.assignedWorkerId === workerId &&
+        job.status !== "succeeded" &&
+        job.status !== "failed" &&
+        job.status !== "cancelled",
+    );
+  }
+
+  findActiveBySourceClient(clientId: string): TryOnJob[] {
+    return this.list().filter(
+      (job) =>
+        job.sourceClientId === clientId &&
+        job.status !== "succeeded" &&
+        job.status !== "failed" &&
+        job.status !== "cancelled",
+    );
+  }
+
   markAssigned(jobId: string, workerId: string): TryOnJob | undefined {
     const job = this.jobs.get(jobId);
 
@@ -110,6 +132,14 @@ export class InMemoryJobStore {
       return undefined;
     }
 
+    if (
+      job.status === "succeeded" ||
+      job.status === "failed" ||
+      job.status === "cancelled"
+    ) {
+      return job;
+    }
+
     return this.update(update.jobId, {
       status: update.status,
       result: update.result,
@@ -127,13 +157,28 @@ export class InMemoryJobStore {
   }
 
   markAssignmentExpired(jobId: string): TryOnJob | undefined {
+    return this.markFailed(jobId, {
+      code: "assignment_expired",
+      message: "Worker assignment expired before direct client dispatch",
+      retryable: true,
+    });
+  }
+
+  markFailed(jobId: string, error: TryOnJob["error"]): TryOnJob | undefined {
+    const job = this.jobs.get(jobId);
+
+    if (
+      !job ||
+      job.status === "succeeded" ||
+      job.status === "failed" ||
+      job.status === "cancelled"
+    ) {
+      return job;
+    }
+
     return this.update(jobId, {
       status: "failed",
-      error: {
-        code: "assignment_expired",
-        message: "Worker assignment expired before direct client dispatch",
-        retryable: true,
-      },
+      error,
     });
   }
 

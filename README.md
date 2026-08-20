@@ -2,14 +2,14 @@
 
 TryOnService - сервис примерки на базе AI API. Проект проектируется как расширяемая Node.js + TypeScript система, где coordinator подбирает подходящий worker для клиента, а тяжелую обработку выполняют независимые worker-серверы.
 
-Главная идея архитектуры: coordinator не должен становиться узким местом для клиентских результатов. Он ведет registry worker'ов и service clients, выбирает подходящий worker, создает job assignment и возвращает клиенту endpoint worker'а с подписанным dispatch token. После этого клиент отправляет job worker'у напрямую, а worker отправляет результат напрямую в callback клиента.
+Главная идея архитектуры: coordinator не должен становиться узким местом для клиентских результатов. Он ведет registry worker'ов и service clients, выбирает подходящий worker, заранее сообщает worker-у о будущем client connection для конкретной job, затем возвращает клиенту endpoint worker'а с подписанным dispatch token. После этого клиент отправляет heavy request worker'у напрямую, а worker отправляет результат напрямую в callback клиента.
 
 ## Статус проекта
 
 Сейчас реализован первый вертикальный срез на Node.js/TypeScript:
 
-- coordinator регистрирует worker'ы и service clients, получает heartbeat, создает job assignment и возвращает клиенту выбранный worker;
-- worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat и принимает jobs напрямую от клиентов по signed dispatch token;
+- coordinator регистрирует worker'ы и service clients, получает heartbeat, выбирает worker по capacity/capabilities, готовит assignment на worker-е и возвращает клиенту выбранный worker;
+- worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat с учетом running jobs и pending assignments, принимает jobs напрямую от клиентов только после prepare от coordinator;
 - Telegram client подбирает свободный callback-порт, регистрируется в coordinator, показывает команду `/request`, кнопку `Request`, получает assignment, отправляет job worker'у напрямую и выводит пользователю ответ worker'а.
 - coordinator защищает регистрацию worker'ов от перебора ключа: после превышения лимита неверных попыток IP блокируется до перезапуска coordinator.
 
@@ -21,6 +21,7 @@ flowchart LR
     CoordinatorAPI --> Jobs["Jobs"]
     CoordinatorAPI --> Registry["Worker/client registry"]
     CoordinatorAPI --> Security["Registration guard"]
+    CoordinatorAPI -->|"prepare assignment"| WorkerAPI
     CoordinatorAPI -->|"worker endpoint + dispatch token"| Client
     Client -->|"direct job dispatch"| WorkerAPI["Worker API"]
     WorkerAPI --> Runner["Runner"]
@@ -32,9 +33,12 @@ flowchart LR
 
 1. Client и worker при запуске регистрируются в coordinator и регулярно подтверждают доступность.
 2. Клиент отправляет запрос на assignment в coordinator.
-3. Coordinator валидирует запрос, находит callback URL клиента, выбирает доступный worker, резервирует capacity и возвращает assignment.
-4. Клиент отправляет `workerRequest` напрямую на worker endpoint с `x-job-dispatch-token`.
-5. Worker запускает runner, вызывает нужную реализацию AI API из `models`, отправляет status-only update в coordinator и результат на callback клиента.
+3. Coordinator валидирует запрос, находит callback URL клиента, выбирает доступный worker, резервирует capacity и создает job.
+4. Coordinator отправляет worker-у lightweight prepare-запрос: `jobId`, client/callback metadata, required capabilities и срок жизни token.
+5. Если worker подтвердил prepare, coordinator возвращает клиенту assignment с worker endpoint, `workerRequest` и signed dispatch token.
+6. Клиент отправляет heavy request напрямую на worker endpoint с `x-job-dispatch-token`.
+7. Worker принимает job только если token валиден и assignment заранее подготовлен coordinator-ом, затем запускает runner.
+8. Worker отправляет status-only update в coordinator и результат на callback клиента.
 
 ## Структура репозитория
 
@@ -52,7 +56,7 @@ Coordinator:
 - принимает внешние запросы от клиентов и внутренних сервисов;
 - хранит состояние jobs и историю переходов;
 - ведет реестр worker'ов и service clients, их heartbeat, capacity и capabilities;
-- подбирает worker и выдает клиенту signed assignment для прямой отправки job;
+- подбирает worker, готовит pending assignment на worker-е и выдает клиенту signed assignment для прямой отправки job;
 - чистит просроченные assignments и освобождает capacity worker'а;
 - блокирует IP, которые пытаются подобрать `WORKER_REGISTRATION_KEY` через регистрацию worker'а.
 
@@ -60,7 +64,7 @@ Worker:
 
 - при старте читает конфиг и регистрируется в coordinator по API key;
 - сообщает о готовности, capacity и поддерживаемых моделях/пайплайнах;
-- принимает jobs от клиентов по signed dispatch token, запускает runner и обновляет статус выполнения;
+- держит pending assignments, принимает jobs от клиентов по signed dispatch token, запускает runner и обновляет статус выполнения;
 - отправляет клиентский результат напрямую в callback URL из assignment;
 - изолирует конкретные AI API в `apps/worker/models`.
 
@@ -141,6 +145,8 @@ curl.exe -s -X POST $assignment.worker.jobUrl `
 ```
 
 После обработки job в `GET http://localhost:3000/jobs` статус станет `succeeded`. Сам клиентский ответ не проходит через coordinator: worker отправляет его только в callback URL клиента, если он был указан в assignment.
+
+Если worker перестал отправлять heartbeat во время обработки, coordinator помечает его offline и переводит активные jobs этого worker'а в `failed`. Если service client перестал отправлять heartbeat, coordinator помечает client offline, освобождает зарезервированные worker slots и переводит активные jobs этого client в `failed`.
 
 ## Сборка deploy-пакетов
 

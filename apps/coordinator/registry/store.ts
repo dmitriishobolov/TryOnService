@@ -36,11 +36,17 @@ export class WorkerRegistry {
       return undefined;
     }
 
+    const runningJobs = Math.max(worker.runningJobs, request.runningJobs);
     const updated: RegisteredWorker = {
       ...worker,
-      status: request.status,
+      status:
+        request.status === "offline"
+          ? "offline"
+          : runningJobs >= request.capacity
+            ? "busy"
+            : request.status,
       capacity: request.capacity,
-      runningJobs: request.runningJobs,
+      runningJobs,
       lastHeartbeatAt: new Date().toISOString(),
     };
 

@@ -25,13 +25,21 @@ API для worker'ов должен отвечать за:
 
 ## Assignment flow
 
-`POST /jobs` не отправляет job на worker. Coordinator выбирает доступный worker, резервирует его capacity, создает `assigned` job и возвращает клиенту:
+`POST /jobs` не отправляет heavy payload на worker. Coordinator выбирает доступный worker, резервирует его capacity, создает `assigned` job, отправляет worker-у lightweight prepare-запрос и только после подтверждения возвращает клиенту:
 
 - `job` - состояние job в coordinator.
 - `worker` - endpoint выбранного worker'а и signed dispatch token.
 - `workerRequest` - payload, который client отправляет в `POST /jobs` выбранного worker'а.
 
 Dispatch token подписан `WORKER_REGISTRATION_KEY`, но сам ключ клиенту не передается. Worker проверяет token локально и принимает только job, где token привязан к его `workerId` и `jobId`.
+
+Если prepare на worker-е не прошел, coordinator освобождает worker slot, помечает job как `failed` с `worker_prepare_failed` и не отдает этот worker клиенту.
+
+## Failure handling
+
+- Stale worker heartbeat: worker помечается offline, активные jobs этого worker'а переводятся в `failed`.
+- Stale client heartbeat: client помечается offline, активные jobs этого client переводятся в `failed`, зарезервированные worker slots освобождаются.
+- Expired assignment: job переводится в `failed`, worker slot освобождается.
 
 ## Защита worker registration
 

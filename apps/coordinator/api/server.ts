@@ -12,6 +12,9 @@ import {
   type ClientRegistrationRequest,
   type ClientRegistrationResponse,
   type CreateTryOnJobRequest,
+  type RegisteredWorker,
+  type WorkerAssignmentPrepareRequest,
+  type WorkerAssignmentPrepareResponse,
   type TryOnJobAssignmentResponse,
   type WorkerJobRequest,
   type WorkerRegistrationRequest,
@@ -20,6 +23,7 @@ import {
 import { createDispatchToken } from "../../shared/dispatchToken.js";
 import {
   readJsonBody,
+  postJson,
   requestUrl,
   writeError,
   writeJson,
@@ -106,14 +110,15 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
             response,
             409,
             "client_not_registered",
-            "Source client is not registered",
+            "Source client is not registered or ready",
           );
           return;
         }
 
+        const requiredCapabilities = resolveRequiredCapabilities(body);
         const worker = workers.findAvailable(
           config.workerHeartbeatTimeoutMs,
-          resolveRequiredCapabilities(body),
+          requiredCapabilities,
         );
 
         if (!worker) {
@@ -159,6 +164,43 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           },
           config.workerRegistrationKey,
         );
+
+        try {
+          const prepared = await prepareWorkerAssignment(
+            reservedWorker,
+            job.id,
+            requestWithCallback,
+            requiredCapabilities,
+            dispatchTokenExpiresAt,
+            config,
+          );
+
+          if (!prepared.accepted) {
+            throw new Error("Worker rejected assignment preparation");
+          }
+        } catch (error) {
+          workers.release(reservedWorker.workerId);
+          jobs.markFailed(job.id, {
+            code: "worker_prepare_failed",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Worker failed to prepare assignment",
+            retryable: true,
+          });
+          console.error(
+            `[coordinator] Failed to prepare job ${job.id} on worker ${reservedWorker.workerId}`,
+            error,
+          );
+          writeError(
+            response,
+            502,
+            "worker_prepare_failed",
+            "Worker failed to prepare assignment",
+          );
+          return;
+        }
+
         const assignment: TryOnJobAssignmentResponse = {
           job,
           worker: {
@@ -336,6 +378,11 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
+        if (worker.status === "offline") {
+          failActiveJobsForWorker(worker.workerId, jobs);
+          workers.markOffline(worker.workerId);
+        }
+
         void scheduler.schedule();
 
         writeJson(response, 200, {
@@ -454,7 +501,7 @@ function resolveJobCallback(
 
   const client = clients.get(request.sourceClientId);
 
-  if (!client) {
+  if (!client || client.status === "offline") {
     return undefined;
   }
 
@@ -481,12 +528,52 @@ function createWorkerJobRequest(
   };
 }
 
+function prepareWorkerAssignment(
+  worker: RegisteredWorker,
+  jobId: string,
+  request: CreateTryOnJobRequest,
+  requiredCapabilities: string[],
+  dispatchTokenExpiresAt: string,
+  config: CoordinatorConfig,
+): Promise<WorkerAssignmentPrepareResponse> {
+  const payload: WorkerAssignmentPrepareRequest = {
+    jobId,
+    workerId: worker.workerId,
+    sourceClientId: request.sourceClientId,
+    client: request.client,
+    callbackUrl: request.callbackUrl,
+    requiredCapabilities,
+    dispatchTokenExpiresAt,
+  };
+
+  return postJson<WorkerAssignmentPrepareResponse>(
+    `${worker.baseUrl}/assignments`,
+    payload,
+    {
+      "x-worker-key": config.workerRegistrationKey,
+    },
+  );
+}
+
 function resolveRequiredCapabilities(request: CreateTryOnJobRequest): string[] {
   if (request.payload.command === "request") {
     return ["try-on.mock"];
   }
 
   return [];
+}
+
+function failActiveJobsForWorker(
+  workerId: string,
+  jobs: InMemoryJobStore,
+): void {
+  for (const job of jobs.findActiveByWorker(workerId)) {
+    jobs.markFailed(job.id, {
+      code: "worker_offline",
+      message: "Assigned worker went offline",
+      retryable: true,
+    });
+  }
 }
 
 function resolveServiceBaseUrl(

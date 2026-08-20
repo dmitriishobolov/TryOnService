@@ -13,7 +13,7 @@ npm run dev:telegram
 
 Telegram client автоматически регистрируется в coordinator через `POST /clients/register`, передает свой фактический callback-порт и дальше отправляет heartbeat.
 
-Для обработки запроса Telegram client вызывает `POST /jobs` coordinator, получает выбранный worker, `workerRequest` и `dispatchToken`, затем отправляет `POST /jobs` напрямую на worker endpoint с header `x-job-dispatch-token`.
+Для обработки запроса Telegram client вызывает `POST /jobs` coordinator. Coordinator выбирает worker и заранее готовит assignment на worker-е. После этого Telegram client получает выбранный worker, `workerRequest` и `dispatchToken`, затем отправляет `POST /jobs` напрямую на worker endpoint с header `x-job-dispatch-token`.
 
 Deploy-пакет собирается командой `npm run build:dist` в `dist/packages/telegram-client`.
 
@@ -22,10 +22,11 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 1. Пользователь открывает `/start`, бот регистрирует меню команд и показывает кнопку `Request`.
 2. Пользователь отправляет `/request` или нажимает кнопку.
 3. Telegram client запрашивает assignment через coordinator API и передает `sourceClientId`.
-4. Coordinator находит callback URL Telegram client, выбирает worker и возвращает signed dispatch token.
-5. Telegram client отправляет `workerRequest` напрямую выбранному worker'у.
-6. Worker обрабатывает job и отправляет callback в `POST /callbacks/jobs`.
-7. Telegram client отправляет пользователю сообщение `Ответ от сервера.`.
+4. Coordinator находит callback URL Telegram client, выбирает worker и отправляет worker-у prepare по этой job.
+5. Coordinator возвращает signed dispatch token только после подтверждения worker prepare.
+6. Telegram client отправляет `workerRequest` напрямую выбранному worker'у.
+7. Worker обрабатывает job и отправляет callback в `POST /callbacks/jobs`.
+8. Telegram client отправляет пользователю сообщение `Ответ от сервера.`.
 
 ## Реализовано сейчас
 

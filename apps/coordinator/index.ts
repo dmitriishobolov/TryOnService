@@ -39,8 +39,18 @@ setInterval(() => {
     console.warn(
       `[coordinator] Worker ${worker.workerId} marked offline after missed heartbeat`,
     );
-  }
 
+    for (const job of jobs.findActiveByWorker(worker.workerId)) {
+      jobs.markFailed(job.id, {
+        code: "worker_offline",
+        message: "Assigned worker went offline during processing",
+        retryable: true,
+      });
+      console.warn(
+        `[coordinator] Job ${job.id} failed because worker ${worker.workerId} is offline`,
+      );
+    }
+  }
 }, config.workerHeartbeatIntervalMs);
 
 setInterval(() => {
@@ -52,6 +62,21 @@ setInterval(() => {
     console.warn(
       `[coordinator] Client ${client.clientId} marked offline after missed heartbeat`,
     );
+
+    for (const job of jobs.findActiveBySourceClient(client.clientId)) {
+      if (job.assignedWorkerId) {
+        workers.release(job.assignedWorkerId);
+      }
+
+      jobs.markFailed(job.id, {
+        code: "client_offline",
+        message: "Source client went offline before job completion",
+        retryable: true,
+      });
+      console.warn(
+        `[coordinator] Job ${job.id} failed because client ${client.clientId} is offline`,
+      );
+    }
   }
 }, config.clientHeartbeatIntervalMs);
 

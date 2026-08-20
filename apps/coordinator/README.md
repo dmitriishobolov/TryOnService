@@ -2,7 +2,7 @@
 
 Coordinator - центральный сервис TryOnService. Он принимает запросы клиентов на assignment, создает jobs, хранит их состояние, знает о доступных worker'ах и возвращает клиенту подходящий worker endpoint.
 
-Coordinator не выполняет AI-обработку сам и не проксирует клиентские результаты. Его задача - matchmaking между client и worker, учет состояния, защита регистрации и управление масштабированием через worker/client registry.
+Coordinator не выполняет AI-обработку сам и не проксирует клиентские результаты. Его задача - matchmaking между client и worker, легкое security prepare на выбранном worker-е, учет состояния, защита регистрации и управление масштабированием через worker/client registry.
 
 ## Запуск
 
@@ -29,8 +29,9 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 2. Request валидируется через контракты из `apps/shared`.
 3. Coordinator находит callback URL зарегистрированного service client, если запрос пришел с `sourceClientId`.
 4. Coordinator выбирает доступный worker из `registry`, резервирует его capacity и создает job со статусом `assigned`.
-5. API возвращает клиенту `job`, `worker` и готовый `workerRequest` с signed dispatch token.
-6. Client отправляет `workerRequest` напрямую worker'у, worker затем сообщает progress/result status обратно в coordinator.
+5. Coordinator вызывает `POST /assignments` выбранного worker'а, чтобы подготовить будущий client dispatch.
+6. API возвращает клиенту `job`, `worker` и готовый `workerRequest` с signed dispatch token.
+7. Client отправляет `workerRequest` напрямую worker'у, worker затем сообщает progress/result status обратно в coordinator.
 
 ## Реализованные endpoints
 
@@ -49,8 +50,10 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 
 - Coordinator является источником правды по состоянию jobs.
 - Coordinator не должен быть data-plane для клиентских результатов: результат идет worker -> client callback.
+- Перед выдачей worker клиенту coordinator должен подготовить pending assignment на worker-е.
 - Регистрация worker'ов должна быть защищена ключом.
 - Неверные попытки регистрации worker'а считаются по IP и после лимита переводят IP в ban до перезапуска coordinator.
 - Регистрация service clients должна быть защищена отдельным ключом.
 - Недоступный worker должен автоматически выпадать из активного пула после пропущенных heartbeat.
+- Активные jobs упавшего worker'а или service client должны переводиться в `failed`, чтобы capacity сети не зависала.
 - Повторные запросы worker'а на обновление статуса должны обрабатываться идемпотентно.

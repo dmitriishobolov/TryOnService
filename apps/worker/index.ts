@@ -3,6 +3,7 @@ import type { Server } from "node:http";
 import { loadEnvFile } from "../shared/env.js";
 import { findAvailablePort } from "../shared/net.js";
 import { CoordinatorClient } from "./api/coordinatorClient.js";
+import { WorkerAssignmentStore } from "./api/assignmentStore.js";
 import { createWorkerServer } from "./api/server.js";
 import { loadWorkerConfig } from "./config/index.js";
 
@@ -20,13 +21,17 @@ if (selectedPort !== config.port) {
 }
 
 const coordinator = new CoordinatorClient(config);
+const assignments = new WorkerAssignmentStore();
 let runningJobs = 0;
 let isRegistered = false;
+const getCurrentLoad = () => runningJobs + assignments.countPending();
 
 const server = createWorkerServer({
   config,
   coordinator,
+  assignments,
   getRunningJobs: () => runningJobs,
+  getCurrentLoad,
   incrementRunningJobs: () => {
     runningJobs += 1;
   },
@@ -61,12 +66,14 @@ async function registerWorker(): Promise<void> {
 }
 
 setInterval(() => {
+  assignments.cleanupExpired();
+
   if (!isRegistered) {
     void registerWorker();
     return;
   }
 
-  void coordinator.heartbeat(runningJobs).catch((error) => {
+  void coordinator.heartbeat(getCurrentLoad()).catch((error) => {
     isRegistered = false;
     console.error("[worker] Failed to send heartbeat", error);
   });

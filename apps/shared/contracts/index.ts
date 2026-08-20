@@ -47,6 +47,7 @@ export interface TryOnJobError {
 export interface TryOnJob {
   id: string;
   status: JobStatus;
+  sourceClientId?: string;
   client: ClientRef;
   payload: CreateTryOnJobRequest["payload"];
   callbackUrl?: string;
@@ -136,6 +137,22 @@ export interface WorkerJobRequest {
     progressUrl: string;
     resultUrl: string;
   };
+}
+
+export interface WorkerAssignmentPrepareRequest {
+  jobId: string;
+  workerId: string;
+  sourceClientId?: string;
+  client: ClientRef;
+  callbackUrl?: string;
+  requiredCapabilities: string[];
+  dispatchTokenExpiresAt: string;
+}
+
+export interface WorkerAssignmentPrepareResponse {
+  jobId: string;
+  accepted: boolean;
+  expiresAt: string;
 }
 
 export interface WorkerDispatchAssignment {
@@ -294,6 +311,27 @@ export function isWorkerJobRequest(value: unknown): value is WorkerJobRequest {
     value.client.type === "telegram" &&
     typeof value.client.chatId === "string" &&
     value.payload.command === "request"
+  );
+}
+
+export function isWorkerAssignmentPrepareRequest(
+  value: unknown,
+): value is WorkerAssignmentPrepareRequest {
+  if (!isObject(value) || !isObject(value.client)) {
+    return false;
+  }
+
+  return (
+    typeof value.jobId === "string" &&
+    typeof value.workerId === "string" &&
+    (value.sourceClientId === undefined ||
+      typeof value.sourceClientId === "string") &&
+    value.client.type === "telegram" &&
+    typeof value.client.chatId === "string" &&
+    (value.callbackUrl === undefined || typeof value.callbackUrl === "string") &&
+    Array.isArray(value.requiredCapabilities) &&
+    value.requiredCapabilities.every((capability) => typeof capability === "string") &&
+    typeof value.dispatchTokenExpiresAt === "string"
   );
 }
 

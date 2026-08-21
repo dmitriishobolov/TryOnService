@@ -6,6 +6,9 @@ import { createLogger } from "../../shared/logger.js";
 import type {
   StorageObjectRef,
   StorageAccessAssignment,
+  MarketProductRef,
+  MarketProvider,
+  MarketSearchSelection,
   TelegramJobCallbackRequest,
   TryOnJobCreateResponse,
   TryOnJobQueuedResponse,
@@ -97,6 +100,16 @@ type ChatSession =
       username?: string;
     };
 
+interface IdealMarketSearchState {
+  chatId: string;
+  outfit: IdealOutfit;
+  inputFiles: StorageObjectRef[];
+  totalJobs: number;
+  completedJobs: number;
+  candidates: IdealProduct[];
+  missingItems: IdealMissingItem[];
+}
+
 type PendingJob =
   | {
       flow: "appearance";
@@ -117,6 +130,9 @@ type PendingJob =
       chatId: string;
       outfit: IdealOutfit;
       inputFiles: StorageObjectRef[];
+      item: IdealOutfitItem;
+      marketProvider: MarketProvider;
+      searchState: IdealMarketSearchState;
     }
   | {
       flow: "ideal-products-validation";
@@ -186,14 +202,6 @@ interface IdealMissingItem {
   reason: string;
 }
 
-interface IdealProductsResponse {
-  ok: boolean;
-  errorMessage?: string;
-  lookTitle?: string;
-  products?: IdealProduct[];
-  missingItems?: IdealMissingItem[];
-}
-
 interface IdealProductValidationResponse {
   ok: boolean;
   errorMessage?: string;
@@ -218,32 +226,10 @@ const legacyAppearanceAnalysisButtonText = "Разбор внешности";
 const idealOutfitButtonText = "Идеальный образ";
 const cancelButtonText = "Отмена";
 const idealCandidatesPerOutfitItem = 10;
-const idealProductSearchPriorityDomains = [
-  "ozon.ru",
-  "wildberries.ru",
-  "aliexpress.ru",
-  "market.yandex.ru",
-  "lamoda.ru",
-  "rendez-vous.ru",
-  "sportmaster.ru",
-  "henderson.ru",
-  "kanzler-style.ru",
-  "lime-shop.com",
-  "befree.ru",
-  "gloria-jeans.ru",
-  "sela.ru",
-  "zarina.ru",
-  "stockmann.ru",
-  "brandshop.ru",
-  "ostin.com",
-  "finn-flare.com",
-  "baon.ru",
-  "snowqueen.ru",
-  "12storeez.com",
-  "2moodstore.com",
-  "tsum.ru",
-  "ladygentleman.ru",
-];
+const idealMarketProviders = ["ozon", "wildberries"] as const;
+const idealCandidatesPerMarketProvider = Math.ceil(
+  idealCandidatesPerOutfitItem / idealMarketProviders.length,
+);
 
 const appearanceAnalysisPrompt = `
 Ты выполняешь разбор внешности только по фотографии реального человека.
@@ -1317,7 +1303,16 @@ export class TelegramBot {
     session: Extract<ChatSession, { mode: "awaiting-ideal-outfit-choice" }>,
     outfit: IdealOutfit,
   ): Promise<void> {
-    let pendingJobId: string | undefined;
+    const searchState: IdealMarketSearchState = {
+      chatId,
+      outfit,
+      inputFiles: session.inputFiles,
+      totalJobs: outfit.items.length * idealMarketProviders.length,
+      completedJobs: 0,
+      candidates: [],
+      missingItems: [],
+    };
+    const pendingJobIds: string[] = [];
 
     try {
       await this.updateIdealProgressMessage(
@@ -1339,61 +1334,103 @@ export class TelegramBot {
           searchQuery: item.searchQuery,
         })),
       });
-      const assignment = await this.coordinator.createRequestJob({
-        chatId,
-        username: session.username,
-        text: createIdealProductSearchPrompt(outfit),
-        model: createIdealProductSearchModelSelection(outfit),
-        inputFiles: session.inputFiles,
-      });
-      const jobId = getResponseJobId(assignment);
-      pendingJobId = jobId;
-
-      this.pendingJobs.set(jobId, {
-        flow: "ideal-products",
-        chatId,
-        outfit,
-        inputFiles: session.inputFiles,
-      });
       this.sessions.delete(chatId);
 
-      if (isQueuedJobResponse(assignment)) {
-        await this.updateIdealProgressMessage(
-          chatId,
-          formatIdealProductProgress({
-            lookTitle: outfit.title,
-            search: `в очереди, запрос ${assignment.job.id}`,
-            validation: "ожидает",
-            generation: "ожидает",
-          }),
-        );
-        void this.waitForAssignmentAndDispatch(
-          chatId,
-          assignment.job.id,
-          assignment.retryAfterMs,
-        );
+      let launchedJobs = 0;
+
+      for (const [index, item] of outfit.items.entries()) {
+        for (const marketProvider of idealMarketProviders) {
+          try {
+            const assignment = await this.coordinator.createRequestJob({
+              chatId,
+              username: session.username,
+              text: createIdealMarketSearchText(outfit, item, marketProvider),
+              model: createIdealMarketSearchModelSelection(),
+              market: createIdealMarketSearchSelection(item, marketProvider),
+            });
+            const jobId = getResponseJobId(assignment);
+            pendingJobIds.push(jobId);
+            launchedJobs += 1;
+
+            this.pendingJobs.set(jobId, {
+              flow: "ideal-products",
+              chatId,
+              outfit,
+              inputFiles: session.inputFiles,
+              item,
+              marketProvider,
+              searchState,
+            });
+
+            if (isQueuedJobResponse(assignment)) {
+              await this.updateIdealProgressMessage(
+                chatId,
+                formatIdealProductProgress({
+                  lookTitle: outfit.title,
+                  search: `в очереди ${launchedJobs}/${searchState.totalJobs}: ${marketplaceName(marketProvider)}, ${item.category}`,
+                  validation: "ожидает",
+                  generation: "ожидает",
+                }),
+              );
+              void this.waitForAssignmentAndDispatch(
+                chatId,
+                assignment.job.id,
+                assignment.retryAfterMs,
+              );
+              continue;
+            }
+
+            await this.worker.dispatchJob(assignment);
+            logger.info("Ideal outfit market products job dispatched", {
+              chatId,
+              jobId: assignment.job.id,
+              workerId: assignment.worker.workerId,
+              outfitId: outfit.id,
+              marketProvider,
+              slot: item.slot,
+              category: item.category,
+            });
+          } catch (error) {
+            searchState.completedJobs += 1;
+            logger.error("Failed to create ideal market product search job", {
+              chatId,
+              outfitId: outfit.id,
+              marketProvider,
+              slot: item.slot,
+              category: item.category,
+              error,
+            });
+          }
+
+          await this.updateIdealProgressMessage(
+            chatId,
+            formatIdealProductProgress({
+              lookTitle: outfit.title,
+              search: `запущено ${Math.min(launchedJobs, searchState.totalJobs)}/${searchState.totalJobs}`,
+              validation: "ожидает",
+              generation: "ожидает",
+            }),
+          );
+        }
+      }
+
+      if (pendingJobIds.length === 0 || searchState.completedJobs >= searchState.totalJobs) {
+        await this.finishIdealMarketProductSearch(searchState);
         return;
       }
 
-      await this.worker.dispatchJob(assignment);
-      logger.info("Ideal outfit products job dispatched", {
-        chatId,
-        jobId: assignment.job.id,
-        workerId: assignment.worker.workerId,
-        outfitId: outfit.id,
-      });
       await this.updateIdealProgressMessage(
         chatId,
         formatIdealProductProgress({
           lookTitle: outfit.title,
-          search: "выполняется на сервере",
+          search: `выполняется через API Ozon/Wildberries: 0/${searchState.totalJobs}`,
           validation: "ожидает",
           generation: "ожидает",
         }),
       );
     } catch (error) {
-      if (pendingJobId) {
-        this.pendingJobs.delete(pendingJobId);
+      for (const jobId of pendingJobIds) {
+        this.pendingJobs.delete(jobId);
       }
       logger.error("Failed to create ideal product search job", {
         chatId,
@@ -1413,108 +1450,87 @@ export class TelegramBot {
     pending: Extract<PendingJob, { flow: "ideal-products" }>,
     callback: TelegramJobCallbackRequest,
   ): Promise<void> {
-    const message = callback.result.message;
-    const parsed = parseJsonFromOpenAiMessage<IdealProductsResponse>(message);
+    const products = marketProductsToIdealProducts(
+      callback.result.marketProducts ?? [],
+      pending.item,
+    );
+    const searchState = pending.searchState;
 
-    if (!parsed) {
-      if (isWorkerFailureMessage(message)) {
-        logger.warn("Ideal outfit product search failed in worker", {
-          chatId: pending.chatId,
-          outfitId: pending.outfit.id,
-          jobId: callback.jobId,
-          responseStart: message.slice(0, 300),
-        });
-        await this.updateIdealProgressMessage(
-          pending.chatId,
-          formatIdealProductProgress({
-            lookTitle: pending.outfit.title,
-            search: "сервер временно не выполнил запрос",
-            validation: "не запускалась",
-            generation: "не запускалась",
-          }),
-        );
-        this.clearIdealProgressMessage(pending.chatId);
-        await this.sendMessage(pending.chatId, message, mainMenuMarkup());
-        return;
-      }
-
-      logger.warn("Ideal outfit product search returned non-json response", {
-        chatId: pending.chatId,
-        outfitId: pending.outfit.id,
-        jobId: callback.jobId,
-        responseStart: message.slice(0, 300),
-      });
-      await this.updateIdealProgressMessage(
-        pending.chatId,
-        formatIdealProductProgress({
-          lookTitle: pending.outfit.title,
-          search: "ошибка обработки ответа",
-          validation: "не запускалась",
-          generation: "не запускалась",
-        }),
-      );
-      this.clearIdealProgressMessage(pending.chatId);
-      await this.sendMessage(
-        pending.chatId,
-        "Поиск товаров временно не выполнился из-за ошибки обработки. Попробуйте выбрать образ еще раз через минуту.",
-        mainMenuMarkup(),
-      );
-      return;
+    if (products.length > 0) {
+      searchState.candidates.push(...products);
     }
 
-    if (parsed.ok !== true) {
-      await this.updateIdealProgressMessage(
-        pending.chatId,
-        formatIdealProductProgress({
-          lookTitle: pending.outfit.title,
-          search: parsed?.errorMessage ?? "товары не найдены",
-          validation: "не запускалась",
-          generation: "не запускалась",
-        }),
-      );
-      this.clearIdealProgressMessage(pending.chatId);
-      await this.sendMessage(
-        pending.chatId,
-        parsed?.errorMessage ??
-          "Не получилось найти надежные товарные карточки с подходящими фото. Попробуйте другой образ.",
-        mainMenuMarkup(),
-      );
-      return;
-    }
-
-    const candidates = sanitizeIdealProducts(parsed.products, {
-      allowedItems: pending.outfit.items,
-      requireCleanCardReady: false,
-      allowMultiplePerCategory: true,
-      maxProducts: maxIdealProductCandidates(pending.outfit),
-    });
-    const missingItems = sanitizeIdealMissingItems(parsed.missingItems);
-    logger.info("Ideal outfit product search parsed", {
+    searchState.completedJobs += 1;
+    logger.info("Ideal outfit market product search parsed", {
       chatId: pending.chatId,
       outfitId: pending.outfit.id,
-      rawProducts: Array.isArray(parsed.products) ? parsed.products.length : 0,
+      jobId: callback.jobId,
+      marketProvider: pending.marketProvider,
+      slot: pending.item.slot,
+      category: pending.item.category,
+      rawProducts: callback.result.marketProducts?.length ?? 0,
+      convertedProducts: products.length,
+      completedJobs: searchState.completedJobs,
+      totalJobs: searchState.totalJobs,
+    });
+
+    await this.updateIdealProgressMessage(
+      pending.chatId,
+      formatIdealProductProgress({
+        lookTitle: pending.outfit.title,
+        search: `выполняется через API Ozon/Wildberries: ${Math.min(searchState.completedJobs, searchState.totalJobs)}/${searchState.totalJobs}, найдено ${formatCandidateCount(searchState.candidates.length)}`,
+        validation: "ожидает",
+        generation: "ожидает",
+      }),
+    );
+
+    if (searchState.completedJobs < searchState.totalJobs) {
+      return;
+    }
+
+    await this.finishIdealMarketProductSearch(searchState);
+  }
+
+  private async finishIdealMarketProductSearch(
+    searchState: IdealMarketSearchState,
+  ): Promise<void> {
+    const candidates = sanitizeIdealProducts(searchState.candidates, {
+      allowedItems: searchState.outfit.items,
+      requireCleanCardReady: false,
+      allowMultiplePerCategory: true,
+      maxProducts: maxIdealProductCandidates(searchState.outfit),
+    });
+    const missingItems = mergeMissingItems(
+      searchState.missingItems,
+      buildMissingItemsFromOutfit(searchState.outfit, candidates),
+    );
+
+    logger.info("Ideal outfit market product search completed", {
+      chatId: searchState.chatId,
+      outfitId: searchState.outfit.id,
+      rawCandidates: searchState.candidates.length,
       filteredCandidates: candidates.length,
       missingItems: missingItems.length,
     });
 
     if (candidates.length === 0) {
       await this.updateIdealProgressMessage(
-        pending.chatId,
+        searchState.chatId,
         formatIdealProductProgress({
-          lookTitle: pending.outfit.title,
-          search: "готово, подходящих кандидатов после фильтра нет",
+          lookTitle: searchState.outfit.title,
+          search: "готово, API Ozon/Wildberries не дали подходящих кандидатов",
           validation: "не запускалась",
           generation: "не запускалась",
         }),
       );
-      this.clearIdealProgressMessage(pending.chatId);
+      this.clearIdealProgressMessage(searchState.chatId);
       await this.sendMessage(
-        pending.chatId,
+        searchState.chatId,
         formatMissingProductsMessage(
-          pending.outfit,
+          searchState.outfit,
           [],
           missingItems,
-          "Не нашел даже кандидаты товаров для этого образа.",
+          "Не нашел кандидаты товаров через API Ozon/Wildberries для этого образа.",
         ),
         mainMenuMarkup(),
       );
@@ -1522,23 +1538,27 @@ export class TelegramBot {
     }
 
     await this.updateIdealProgressMessage(
-      pending.chatId,
+      searchState.chatId,
       formatIdealProductProgress({
-        lookTitle: pending.outfit.title,
-        search: `готово, найдено ${formatCandidateCount(candidates.length)}`,
+        lookTitle: searchState.outfit.title,
+        search: `готово, найдено ${formatCandidateCount(candidates.length)} через API Ozon/Wildberries`,
         validation: "создаю запрос проверки",
         generation: "ожидает",
       }),
     );
     await this.createIdealProductValidationRequest(
-      pending,
+      searchState,
       candidates,
       missingItems,
     );
   }
 
   private async createIdealProductValidationRequest(
-    pending: Extract<PendingJob, { flow: "ideal-products" }>,
+    pending: {
+      chatId: string;
+      outfit: IdealOutfit;
+      inputFiles: StorageObjectRef[];
+    },
     candidates: IdealProduct[],
     missingItems: IdealMissingItem[],
   ): Promise<void> {
@@ -2216,8 +2236,10 @@ export class TelegramBot {
     initialRetryAfterMs: number,
   ): Promise<void> {
     let retryAfterMs = initialRetryAfterMs;
+    const maxAttempts =
+      this.pendingJobs.get(jobId)?.flow === "ideal-products" ? 12 : 120;
 
-    for (let attempt = 0; attempt < 120; attempt += 1) {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       await sleep(retryAfterMs);
 
       try {
@@ -2277,8 +2299,35 @@ export class TelegramBot {
     }
 
     const pending = this.pendingJobs.get(jobId);
+    if (pending?.flow === "ideal-products") {
+      this.pendingJobs.delete(jobId);
+      pending.searchState.completedJobs += 1;
+      await this.updateIdealProgressMessage(
+        chatId,
+        formatIdealProductProgress({
+          lookTitle: pending.outfit.title,
+          search: `очередь API-поиска не освободилась: ${Math.min(pending.searchState.completedJobs, pending.searchState.totalJobs)}/${pending.searchState.totalJobs}`,
+          validation: "ожидает",
+          generation: "ожидает",
+        }),
+      );
+
+      if (pending.searchState.completedJobs >= pending.searchState.totalJobs) {
+        await this.finishIdealMarketProductSearch(pending.searchState);
+      }
+
+      logger.warn("Queued ideal market job polling exhausted", {
+        chatId,
+        jobId,
+        outfitId: pending.outfit.id,
+        marketProvider: pending.marketProvider,
+        slot: pending.item.slot,
+        category: pending.item.category,
+      });
+      return;
+    }
+
     if (
-      pending?.flow === "ideal-products" ||
       pending?.flow === "ideal-products-validation" ||
       pending?.flow === "ideal-product-card-generation"
     ) {
@@ -2316,7 +2365,7 @@ export class TelegramBot {
         chatId,
         formatIdealProductProgress({
           lookTitle: pending.outfit.title,
-          search: "выполняется на сервере",
+          search: `выполняется через ${marketplaceName(pending.marketProvider)}: ${pending.searchState.completedJobs}/${pending.searchState.totalJobs}, товар: ${pending.item.category}`,
           validation: "ожидает",
           generation: "ожидает",
         }),
@@ -2382,11 +2431,14 @@ export class TelegramBot {
     }
 
     if (pending?.flow === "ideal-products") {
-      logger.info("Ideal outfit products job dispatched", {
+      logger.info("Ideal outfit market products job dispatched", {
         chatId,
         jobId,
         workerId,
         outfitId: pending.outfit.id,
+        marketProvider: pending.marketProvider,
+        slot: pending.item.slot,
+        category: pending.item.category,
       });
       return;
     }
@@ -2740,28 +2792,6 @@ function createIdealOutfitPlanModelSelection(): TryOnModelSelection {
   };
 }
 
-function createIdealProductSearchModelSelection(
-  outfit: IdealOutfit,
-): TryOnModelSelection {
-  const maxCandidates = maxIdealProductCandidates(outfit);
-
-  return {
-    provider: "openai",
-    task: "wardrobe-recommendation",
-    options: {
-      imageDetail: "low",
-      textVerbosity: "low",
-      reasoningEffort: "low",
-      reasoningMode: "standard",
-      maxOutputTokens: Math.min(1_400 + maxCandidates * 90, 4_200),
-      store: false,
-      webSearch: {
-        searchContextSize: "low",
-      },
-    },
-  };
-}
-
 function maxIdealProductCandidates(outfit: IdealOutfit): number {
   return Math.min(
     Math.max(1, outfit.items.length * idealCandidatesPerOutfitItem),
@@ -2780,6 +2810,89 @@ function compactOutfitForPrompt(outfit: IdealOutfit): Record<string, unknown> {
       searchQuery: item.searchQuery,
     })),
   };
+}
+
+function createIdealMarketSearchModelSelection(): TryOnModelSelection {
+  return {
+    provider: "mock",
+    task: "wardrobe-recommendation",
+  };
+}
+
+function createIdealMarketSearchSelection(
+  item: IdealOutfitItem,
+  provider: MarketProvider,
+): MarketSearchSelection {
+  return {
+    providers: [provider],
+    query: createIdealMarketSearchQuery(item),
+    category: createIdealMarketCategory(item),
+    limit: idealCandidatesPerMarketProvider,
+    currency: "RUB",
+    locale: "ru-RU",
+    country: "RU",
+    required: true,
+  };
+}
+
+function createIdealMarketSearchText(
+  outfit: IdealOutfit,
+  item: IdealOutfitItem,
+  provider: MarketProvider,
+): string {
+  return [
+    `Market search for outfit: ${outfit.title}`,
+    `Provider: ${provider}`,
+    `Slot: ${item.slot}`,
+    `Category: ${item.category}`,
+    `Description: ${item.description}`,
+    `Search query: ${item.searchQuery}`,
+  ].join("\n");
+}
+
+function createIdealMarketSearchQuery(item: IdealOutfitItem): string {
+  return createIdealMarketCategory(item);
+}
+
+function createIdealMarketCategory(item: IdealOutfitItem): string {
+  return (
+    [
+      idealMarketSearchTerm(item),
+      item.category.trim(),
+      item.searchQuery.trim(),
+      item.description.trim(),
+    ].find((value): value is string => Boolean(value)) ?? item.category
+  );
+}
+
+function idealMarketSearchTerm(item: IdealOutfitItem): string | undefined {
+  const key = normalizeCategoryKey(
+    [item.category, item.slot, item.searchQuery, item.description].join(" "),
+  );
+  const terms: Record<string, string> = {
+    top: "футболка",
+    bottom: "брюки",
+    layer: "кардиган",
+    outerwear: "куртка",
+    vest: "жилет",
+    polo: "поло",
+    cardigan: "кардиган",
+    sweater: "джемпер",
+    hoodie: "худи",
+    jacket: "куртка",
+    shirt: "рубашка",
+    tshirt: "футболка",
+    coat: "пальто",
+    pants: "брюки",
+    shorts: "шорты",
+    skirt: "юбка",
+    dress: "платье",
+    shoes: "обувь",
+    bag: "сумка",
+    accessory: "аксессуар",
+  };
+
+  return terms[key];
 }
 
 function createIdealProductValidationModelSelection(
@@ -2828,76 +2941,6 @@ function createIdealProductCardGenerationModelSelection(
       },
     },
   };
-}
-
-function createIdealProductSearchPrompt(outfit: IdealOutfit): string {
-  const maxCandidates = maxIdealProductCandidates(outfit);
-  const priorityDomains = idealProductSearchPriorityDomains.join(", ");
-
-  return `
-Найди кандидаты товарных карточек для образа в российских или доставляющих в РФ интернет-магазинах.
-
-Приоритетные источники, но НЕ жесткое ограничение:
-${priorityDomains}
-
-Образ compact JSON:
-${JSON.stringify(compactOutfitForPrompt(outfit))}
-
-Правила:
-- используй широкий web search, не ограничивайся маркетплейсами;
-- приоритет: цена в рублях, российская страница товара, доставка по России, Москва или Московский регион если это видно;
-- Ozon, Wildberries, AliExpress Russia и Яндекс Маркет хороши, но можно брать любой интернет-магазин, если товар реально продается онлайн;
-- до ${idealCandidatesPerOutfitItem} кандидатов на каждый item, всего не больше ${maxCandidates};
-- для каждого item сделай несколько разных поисковых формулировок: исходный searchQuery, "купить", "руб", "Москва", "доставка по России" и 2-3 приоритетных магазина;
-- для жакета/пиджака/верхнего слоя обязательно пробуй синонимы: "жакет", "пиджак", "блейзер", "рубашка-жакет", "overshirt", "легкая куртка"; для цветов пробуй близкие "серый", "серо-бежевый", "бежевый", "тауп", "графит", "темно-серый";
-- стремись вернуть минимум 3-5 кандидатов на каждый item, если рынок вообще что-то дает;
-- не останавливайся после 1-2 товаров: сначала ищи альтернативные магазины и близкие формулировки;
-- missingItems можно добавлять только после расширенного поиска по синонимам категории, близким цветам и нескольким магазинам; не пиши, что в Москве/России нет жакета, если есть близкие пиджаки, блейзеры или рубашки-жакеты;
-- точный цвет лучше, но если точных вариантов мало, можно брать близкий оттенок или нейтральный вариант, который подходит описанию;
-- slot в product должен совпадать с item.slot; category лучше копировать из item.category, даже если title содержит более подробное название;
-- productUrl должен быть карточкой товара, не категорией, поиском или рекламной страницей;
-- imageUrl должен быть прямой или доступной картинкой товара, не HTML-страницей;
-- в search query можно добавлять "купить", "руб", "Москва", "доставка по России";
-- не добавляй категории, которых нет в outfit.items;
-- не выдумывай url, цену, магазин;
-- если фото уже на белом/однотонном фоне и с одним товаром, такой кандидат лучше;
-- если товар на человеке/манекене/в lookbook, кандидат можно брать только когда сам предмет хорошо виден и его реально изолировать в отдельную чистую карточку;
-- если в фото много одинаковых товаров, товар закрыт телом/руками, видна только малая часть вещи или непонятно, какой предмет относится к item, не бери;
-- если сомневаешься в фото, кандидат можно оставить: следующий шаг проверит изображение vision-моделью и затем сгенерирует clean card;
-- если по item нет кандидатов, добавь missingItems.
-
-Верни только строгий JSON без Markdown:
-{
-  "ok": true,
-  "lookTitle": "${escapeJsonString(outfit.title)}",
-  "products": [
-    {
-      "slot": "top",
-      "category": "рубашка",
-      "title": "Название товара",
-      "shortDescription": "до 80 символов",
-      "productUrl": "https://...",
-      "imageUrl": "https://...",
-      "price": "если найдено",
-      "source": "магазин или marketplace",
-      "whyFits": "до 60 символов"
-    }
-  ],
-  "missingItems": [
-    {
-      "slot": "outerwear",
-      "category": "куртка",
-      "reason": "Не нашлось надежной карточки с фото товара отдельно"
-    }
-  ]
-}
-
-Если надежных товаров нет, верни:
-{
-  "ok": false,
-  "errorMessage": "Не удалось найти кандидаты товарных карточек в российских интернет-магазинах."
-}
-`.trim();
 }
 
 function createIdealProductValidationPrompt(
@@ -3176,6 +3219,52 @@ function selectFallbackIdealProducts(
   return products.slice(0, 6);
 }
 
+function marketProductsToIdealProducts(
+  products: MarketProductRef[],
+  item: IdealOutfitItem,
+): IdealProduct[] {
+  return products
+    .map((product) => marketProductToIdealProduct(product, item))
+    .filter((product): product is IdealProduct => Boolean(product))
+    .slice(0, idealCandidatesPerOutfitItem);
+}
+
+function marketProductToIdealProduct(
+  product: MarketProductRef,
+  item: IdealOutfitItem,
+): IdealProduct | undefined {
+  if (!product.productUrl || !product.imageUrl) {
+    return undefined;
+  }
+
+  if (!isHttpUrl(product.productUrl) || !isHttpUrl(product.imageUrl)) {
+    return undefined;
+  }
+
+  const source = marketplaceName(product.provider);
+  const brandPrefix = product.brand ? `${product.brand}: ` : "";
+  const title = truncateText(`${brandPrefix}${product.title}`, 120);
+  const descriptionParts = [
+    item.color ? `${item.color} ${item.category}` : item.category,
+    product.category,
+  ].filter(Boolean);
+
+  return {
+    slot: item.slot,
+    category: item.category,
+    title,
+    shortDescription: truncateText(
+      descriptionParts.join(", ") || item.description,
+      80,
+    ),
+    productUrl: product.productUrl,
+    imageUrl: product.imageUrl,
+    price: product.price ? formatMarketPrice(product.price) : undefined,
+    source,
+    whyFits: truncateText(item.description, 60),
+  };
+}
+
 function sanitizeAcceptedCandidates(value: unknown): IdealAcceptedCandidate[] {
   if (!Array.isArray(value)) {
     return [];
@@ -3402,6 +3491,34 @@ function formatProductCaption(product: IdealProduct): string {
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
+}
+
+function marketplaceName(provider: MarketProductRef["provider"]): string {
+  if (provider === "ozon") {
+    return "Ozon";
+  }
+
+  if (provider === "wildberries") {
+    return "Wildberries";
+  }
+
+  return "AliExpress";
+}
+
+function formatMarketPrice(price: NonNullable<MarketProductRef["price"]>): string {
+  if (!price.currency) {
+    return String(price.amount);
+  }
+
+  try {
+    return new Intl.NumberFormat("ru-RU", {
+      style: "currency",
+      currency: price.currency,
+      maximumFractionDigits: 2,
+    }).format(price.amount);
+  } catch {
+    return `${price.amount} ${price.currency}`;
+  }
 }
 
 function formatCandidateCount(count: number): string {

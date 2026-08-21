@@ -3,6 +3,7 @@ import type {
   ClientRegistrationRequest,
   ClientRegistrationResponse,
   CreateTryOnJobRequest,
+  MarketSearchSelection,
   StorageAccessResponse,
   StorageObjectRef,
   TryOnJobCreateResponse,
@@ -51,6 +52,7 @@ export class TelegramCoordinatorClient {
     username?: string;
     text?: string;
     model?: TryOnModelSelection;
+    market?: MarketSearchSelection;
     inputFiles?: StorageObjectRef[];
   }): Promise<TryOnJobCreateResponse> {
     const payload: CreateTryOnJobRequest = {
@@ -64,6 +66,7 @@ export class TelegramCoordinatorClient {
         command: "request",
         text: params.text,
         model: params.model,
+        market: params.market,
         inputFiles: params.inputFiles,
       },
     };

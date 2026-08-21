@@ -230,11 +230,15 @@ export function matchesSearchQuery(product: MarketProductRef, query: string): bo
       .filter(Boolean)
       .join(" "),
   );
+  const directTerms = normalizedQuery.split(" ").filter(Boolean);
 
-  return normalizedQuery
-    .split(" ")
-    .filter(Boolean)
-    .every((term) => haystack.includes(term));
+  if (directTerms.every((term) => haystack.includes(term))) {
+    return true;
+  }
+
+  return expandMarketQueryTerms(directTerms).some((term) =>
+    haystack.includes(term),
+  );
 }
 
 export function formatProductUrl(
@@ -292,6 +296,52 @@ function collectNestedStrings(
 
 function normalizeSearchText(value: string): string {
   return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+function expandMarketQueryTerms(terms: string[]): string[] {
+  const query = terms.join(" ");
+  const groups: Array<[RegExp, string[]]> = [
+    [/(куртк|жакет|пиджак|блейзер|бомбер|ветровк|верхн)/, [
+      "куртк",
+      "жакет",
+      "пиджак",
+      "блейзер",
+      "бомбер",
+      "ветровк",
+    ]],
+    [/(брюк|чинос|джинс|штаны|карго)/, [
+      "брюк",
+      "чинос",
+      "джинс",
+      "штаны",
+      "карго",
+    ]],
+    [/(рубаш|сорочк|овер?шерт)/, ["рубаш", "сорочк", "овершерт"]],
+    [/(футболк|лонгслив|поло)/, ["футболк", "лонгслив", "поло"]],
+    [/(джемпер|свитер|кардиган|пуловер)/, [
+      "джемпер",
+      "свитер",
+      "кардиган",
+      "пуловер",
+    ]],
+    [/(худи|толстовк|свитшот)/, ["худи", "толстовк", "свитшот"]],
+    [/(обув|кроссов|кеды|ботин|лофер|туфл)/, [
+      "обув",
+      "кроссов",
+      "кеды",
+      "ботин",
+      "лофер",
+      "туфл",
+    ]],
+  ];
+
+  for (const [pattern, expanded] of groups) {
+    if (pattern.test(query)) {
+      return expanded;
+    }
+  }
+
+  return terms;
 }
 
 function parseJson(raw: string): unknown {

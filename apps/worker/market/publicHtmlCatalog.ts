@@ -23,6 +23,7 @@ import {
   MarketplaceError,
   matchesSearchQuery,
   numberFromUnknown,
+  summarizeMarketplaceError,
 } from "./utils.js";
 
 const logger = createLogger("worker");
@@ -166,10 +167,10 @@ async function fetchPublicHtmlCatalogProducts(
         input.signal,
       ).catch((error: unknown) => {
         firstSearchError ??= error;
-        logger.warn("Public HTML catalog search page parse failed", {
+        logger.debug("Public HTML catalog search page parse failed", {
           provider: options.provider,
           searchUrl,
-          error,
+          error: summarizeMarketplaceError(error),
         });
 
         return undefined;
@@ -227,10 +228,10 @@ async function fetchPublicHtmlCatalogProducts(
       options,
       input.signal,
     ).catch((error: unknown) => {
-      logger.warn("Public HTML catalog product page parse failed", {
+      logger.debug("Public HTML catalog product page parse failed", {
         provider: options.provider,
         productUrl: candidate.productUrl,
-        error,
+        error: summarizeMarketplaceError(error),
       });
       return normalizePublicHtmlCandidate(candidate, marketConfig, options);
     });

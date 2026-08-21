@@ -228,6 +228,10 @@ const legacyAppearanceAnalysisButtonText = "Разбор внешности";
 const idealOutfitButtonText = "Идеальный образ";
 const cancelButtonText = "Отмена";
 const idealCandidatesPerOutfitItem = 10;
+const idealSearchQueueMaxAttempts = 12;
+const queuedAssignmentMaxAttempts = 120;
+const queuedAssignmentMinRetryAfterMs = 1_000;
+const queuedAssignmentMaxRetryAfterMs = 10_000;
 const idealMarketProviders: MarketProvider[] = [
   "ozon",
   "wildberries",
@@ -1902,7 +1906,7 @@ export class TelegramBot {
           lookTitle: outfit.title,
           search: "готово",
           validation: "использую fallback-кандидаты",
-          generation: "готовлю генерацию",
+          generation: "готовлю выбранные товары",
           note: fallbackMessage,
         }),
       );
@@ -1930,7 +1934,7 @@ export class TelegramBot {
         lookTitle: outfit.title,
         search: "готово",
         validation: "готово",
-        generation: `готовлю товар 1/${products.length}: ${firstProduct.category}`,
+        generation: `готовлю выбранный товар 1/${products.length}: ${firstProduct.category}`,
       }),
     );
     await this.createIdealProductCardGenerationRequest(
@@ -1977,7 +1981,7 @@ export class TelegramBot {
           lookTitle: outfit.title,
           search: "готово",
           validation: "готово",
-          generation: `готово ${generatedProducts.length + 1}/${totalProducts}, взято из кэша: ${product.category}`,
+          generation: `готово ${generatedProducts.length + 1}/${totalProducts}, выбранный товар из кэша: ${product.category}`,
         }),
       );
       await this.continueOrDeliverGeneratedProducts({
@@ -2025,7 +2029,7 @@ export class TelegramBot {
             lookTitle: outfit.title,
             search: "готово",
             validation: "готово",
-            generation: `в очереди, товар ${currentProductIndex}/${totalProducts}: ${product.category}, запрос ${assignment.job.id}`,
+            generation: `в очереди, выбранный товар ${currentProductIndex}/${totalProducts}: ${product.category}, запрос ${assignment.job.id}`,
           }),
         );
         void this.waitForAssignmentAndDispatch(
@@ -2049,7 +2053,7 @@ export class TelegramBot {
           lookTitle: outfit.title,
           search: "готово",
           validation: "готово",
-          generation: `выполняется, товар ${currentProductIndex}/${totalProducts}: ${product.category}`,
+          generation: `выполняется, выбранный товар ${currentProductIndex}/${totalProducts}: ${product.category}`,
         }),
       );
     } catch (error) {
@@ -2067,7 +2071,7 @@ export class TelegramBot {
           lookTitle: outfit.title,
           search: "готово",
           validation: "готово",
-          generation: `ошибка запуска для товара ${currentProductIndex}/${totalProducts}: ${product.category}`,
+          generation: `ошибка запуска для выбранного товара ${currentProductIndex}/${totalProducts}: ${product.category}`,
         }),
       );
       await this.continueOrDeliverGeneratedProducts({
@@ -2370,29 +2374,48 @@ export class TelegramBot {
     jobId: string,
     initialRetryAfterMs: number,
   ): Promise<void> {
-    let retryAfterMs = initialRetryAfterMs;
+    let retryAfterMs = normalizeQueuedRetryAfterMs(initialRetryAfterMs);
+    const pendingFlow = this.pendingJobs.get(jobId)?.flow;
     const maxAttempts =
-      this.pendingJobs.get(jobId)?.flow === "ideal-products" ? 12 : 120;
+      pendingFlow === "ideal-products"
+        ? idealSearchQueueMaxAttempts
+        : queuedAssignmentMaxAttempts;
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       await sleep(retryAfterMs);
+      const attemptNumber = attempt + 1;
+      const shouldLogAttempt = shouldLogQueuedAssignmentAttempt(
+        attemptNumber,
+        maxAttempts,
+      );
 
       try {
-        logger.info("Polling queued job assignment", {
+        logger.debug("Polling queued job assignment", {
           chatId,
           jobId,
-          attempt: attempt + 1,
+          flow: pendingFlow,
+          attempt: attemptNumber,
+          maxAttempts,
         });
         const assignment = await this.coordinator.getJobAssignment(jobId);
 
         if (isQueuedJobResponse(assignment)) {
-          logger.info("Job still queued", {
+          retryAfterMs = normalizeQueuedRetryAfterMs(assignment.retryAfterMs);
+          const context = {
             chatId,
             jobId,
+            flow: pendingFlow,
+            attempt: attemptNumber,
+            maxAttempts,
             reason: assignment.reason,
-            retryAfterMs: assignment.retryAfterMs,
-          });
-          retryAfterMs = assignment.retryAfterMs;
+            retryAfterMs,
+          };
+
+          if (shouldLogAttempt) {
+            logger.info("Queued job still waiting", context);
+          } else {
+            logger.debug("Job still queued", context);
+          }
           continue;
         }
 
@@ -2423,18 +2446,35 @@ export class TelegramBot {
         );
         return;
       } catch (error) {
-        logger.error("Failed to poll assignment", {
-          chatId,
-          jobId,
-          attempt: attempt + 1,
-          error,
-        });
+        if (shouldLogAttempt) {
+          logger.warn("Failed to poll assignment", {
+            chatId,
+            jobId,
+            flow: pendingFlow,
+            attempt: attemptNumber,
+            maxAttempts,
+            error,
+          });
+        } else {
+          logger.debug("Failed to poll assignment", {
+            chatId,
+            jobId,
+            flow: pendingFlow,
+            attempt: attemptNumber,
+            maxAttempts,
+            error,
+          });
+        }
         retryAfterMs = Math.min(retryAfterMs * 2, 10_000);
       }
     }
 
     const pending = this.pendingJobs.get(jobId);
     if (pending?.flow === "ideal-products") {
+      await this.cancelQueuedCoordinatorJob(
+        jobId,
+        "Telegram client stopped waiting for marketplace search assignment",
+      );
       this.pendingJobs.delete(jobId);
       pending.searchState.completedJobs += 1;
       await this.updateIdealProgressMessage(
@@ -2462,21 +2502,20 @@ export class TelegramBot {
       return;
     }
 
-    if (
-      pending?.flow === "ideal-products-validation" ||
-      pending?.flow === "ideal-product-card-generation"
-    ) {
-      await this.updateIdealProgressMessage(
-        chatId,
-        formatIdealProductProgress({
-          lookTitle: pending.outfit.title,
-          search: "очередь не освободилась",
-          validation: "проверьте позже",
-          generation: "проверьте позже",
-        }),
-      );
-      this.clearIdealProgressMessage(chatId);
+    if (pending?.flow === "ideal-products-validation") {
+      await this.handleQueuedIdealProductValidationExhausted(pending, jobId);
+      return;
     }
+
+    if (pending?.flow === "ideal-product-card-generation") {
+      await this.handleQueuedIdealProductCardGenerationExhausted(pending, jobId);
+      return;
+    }
+
+    await this.cancelQueuedCoordinatorJob(
+      jobId,
+      "Telegram client stopped waiting for queued assignment",
+    );
     await this.sendMessage(
       chatId,
       `Запрос ${jobId} все еще в очереди. Попробуйте проверить позже.`,
@@ -2486,7 +2525,114 @@ export class TelegramBot {
     logger.warn("Queued job polling exhausted", {
       chatId,
       jobId,
+      flow: pending?.flow,
     });
+  }
+
+  private async handleQueuedIdealProductValidationExhausted(
+    pending: Extract<PendingJob, { flow: "ideal-products-validation" }>,
+    jobId: string,
+  ): Promise<void> {
+    await this.cancelQueuedCoordinatorJob(
+      jobId,
+      "Telegram client stopped waiting for ideal product validation assignment",
+    );
+    this.pendingJobs.delete(jobId);
+    logger.warn("Queued ideal product validation polling exhausted, using fallback candidates", {
+      chatId: pending.chatId,
+      jobId,
+      outfitId: pending.outfit.id,
+      candidates: pending.candidates.length,
+    });
+
+    await this.updateIdealProgressMessage(
+      pending.chatId,
+      formatIdealProductProgress({
+        lookTitle: pending.outfit.title,
+        search: `готово, найдено ${formatCandidateCount(pending.candidates.length)}`,
+        validation: "очередь не освободилась, беру лучшие кандидаты",
+        generation: "готовлю выбранные товары",
+        note:
+          "Проверка фото не дождалась свободного сервера, поэтому продолжаю с лучшими найденными товарами.",
+      }),
+    );
+
+    await this.startIdealProductCardGeneration(
+      pending.chatId,
+      pending.outfit,
+      selectFallbackIdealProducts(pending.candidates, pending.outfit.items),
+      pending.missingItems,
+      pending.inputFiles,
+      "Проверка фото не дождалась свободного сервера, поэтому пробую собрать карточки только по выбранным элементам образа.",
+    );
+  }
+
+  private async handleQueuedIdealProductCardGenerationExhausted(
+    pending: Extract<PendingJob, { flow: "ideal-product-card-generation" }>,
+    jobId: string,
+  ): Promise<void> {
+    await this.cancelQueuedCoordinatorJob(
+      jobId,
+      "Telegram client stopped waiting for clean product card assignment",
+    );
+    this.pendingJobs.delete(jobId);
+
+    const totalProducts =
+      pending.generatedProducts.length + pending.remainingProducts.length + 1;
+    const currentProductIndex = pending.generatedProducts.length + 1;
+
+    logger.warn("Queued clean product card generation polling exhausted, skipping product", {
+      chatId: pending.chatId,
+      jobId,
+      outfitId: pending.outfit.id,
+      category: pending.product.category,
+      currentProductIndex,
+      totalProducts,
+    });
+
+    await this.updateIdealProgressMessage(
+      pending.chatId,
+      formatIdealProductProgress({
+        lookTitle: pending.outfit.title,
+        search: "готово",
+        validation: "готово",
+        generation: `очередь не освободилась для выбранного товара ${currentProductIndex}/${totalProducts}: ${pending.product.category}, продолжаю`,
+      }),
+    );
+
+    await this.continueOrDeliverGeneratedProducts({
+      chatId: pending.chatId,
+      outfit: pending.outfit,
+      remainingProducts: pending.remainingProducts,
+      generatedProducts: pending.generatedProducts,
+      missingItems: mergeMissingItems(pending.missingItems, [
+        {
+          slot: pending.product.slot,
+          category: pending.product.category,
+          reason: "Очередь генерации чистой карточки не освободилась",
+        },
+      ]),
+      inputFiles: pending.inputFiles,
+    });
+  }
+
+  private async cancelQueuedCoordinatorJob(
+    jobId: string,
+    reason: string,
+  ): Promise<void> {
+    try {
+      const response = await this.coordinator.cancelQueuedJob(jobId, reason);
+      logger.info("Queued coordinator job cancel requested", {
+        jobId,
+        cancelled: response.cancelled,
+      });
+    } catch (error) {
+      logger.warn("Failed to cancel queued coordinator job", {
+        jobId,
+        reason,
+        error,
+      });
+    }
   }
 
   private async updateQueuedIdealProgress(
@@ -2531,7 +2677,7 @@ export class TelegramBot {
           lookTitle: pending.outfit.title,
           search: "готово",
           validation: "готово",
-          generation: `выполняется, товар ${currentProductIndex}/${totalProducts}: ${pending.product.category}`,
+          generation: `выполняется, выбранный товар ${currentProductIndex}/${totalProducts}: ${pending.product.category}`,
         }),
       );
       return true;
@@ -2769,6 +2915,25 @@ function isQueuedJobResponse(
   response: TryOnJobCreateResponse,
 ): response is TryOnJobQueuedResponse {
   return "queued" in response;
+}
+
+function normalizeQueuedRetryAfterMs(value: number): number {
+  const retryAfterMs =
+    Number.isFinite(value) && value > 0
+      ? value
+      : queuedAssignmentMinRetryAfterMs;
+
+  return Math.min(
+    Math.max(retryAfterMs, queuedAssignmentMinRetryAfterMs),
+    queuedAssignmentMaxRetryAfterMs,
+  );
+}
+
+function shouldLogQueuedAssignmentAttempt(
+  attempt: number,
+  maxAttempts: number,
+): boolean {
+  return attempt === 1 || attempt === maxAttempts || attempt % 10 === 0;
 }
 
 function getResponseJobId(response: TryOnJobCreateResponse): string {

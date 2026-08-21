@@ -17,7 +17,10 @@ import type {
 import { tsumMarketplaceAdapter } from "./tsum/index.js";
 import { tsumOutletMarketplaceAdapter } from "./tsumOutlet/index.js";
 import { twoMoodMarketplaceAdapter } from "./twoMood/index.js";
-import { MarketplaceError } from "./utils.js";
+import {
+  MarketplaceError,
+  summarizeMarketplaceError,
+} from "./utils.js";
 import { wildberriesMarketplaceAdapter } from "./wildberries/index.js";
 
 const logger = createLogger("worker");
@@ -81,7 +84,7 @@ export async function searchMarketplaceProducts(params: {
   );
   const products: MarketProductRef[] = [];
 
-  for (const result of settled) {
+  for (const [index, result] of settled.entries()) {
     if (result.status === "fulfilled") {
       products.push(...result.value.products);
       continue;
@@ -89,6 +92,12 @@ export async function searchMarketplaceProducts(params: {
 
     logger.warn("Marketplace provider search failed", {
       query,
+      provider: providers[index],
+      error: summarizeMarketplaceError(result.reason),
+    });
+    logger.debug("Marketplace provider search failure details", {
+      query,
+      provider: providers[index],
       error: result.reason,
     });
   }

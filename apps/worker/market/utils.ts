@@ -13,6 +13,28 @@ export class MarketplaceError extends Error {
   }
 }
 
+export function summarizeMarketplaceError(error: unknown): Record<string, unknown> {
+  if (error instanceof MarketplaceError) {
+    return {
+      name: error.name,
+      code: error.code,
+      message: error.message,
+      retryable: error.retryable,
+    };
+  }
+
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+    };
+  }
+
+  return {
+    message: String(error),
+  };
+}
+
 export function requireMarketCredential(
   provider: string,
   envName: string,

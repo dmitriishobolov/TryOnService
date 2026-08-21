@@ -19,6 +19,8 @@ API для клиентов и интеграций должен отвечат�
 
 `GET /jobs/:jobId/assignment?sourceClientId=<clientId>` позволяет клиенту polling-ом дождаться assignment-а для своей queued job. Endpoint требует `x-client-key` и не выдает assignment для чужого `sourceClientId`.
 
+`POST /jobs/:jobId/cancel` позволяет зарегистрированному client отменить только свою job в статусе `queued`. Клиент вызывает эту ручку, если перестал ждать assignment, чтобы старая queued job не осталась головой очереди и не блокировала следующие запросы.
+
 `POST /storage/access` выдает клиенту или worker'у подходящий storage-node и scoped signed token. Если `storageId` не указан, coordinator выбирает свежий узел по минимальной доле `usedBytes/capacityBytes`, а при равной загрузке распределяет запросы между узлами. После этого файлы загружаются и читаются напрямую через storage-node, а coordinator получает только `StorageObjectRef` в payload/result.
 
 `POST /storage/catalog/lookup` принимает `requesterId`, `requesterType`, `cacheKeys` и optional `kinds`. Endpoint требует `x-client-key` или `x-worker-service-key`, опрашивает все свежие storage-node через `STORAGE_SERVICE_KEY` и возвращает `locations`: storageId, baseUrl, найденный catalog entry, read-only `StorageAccessAssignment` и signed `objectUrl` на referenced object. Если разные storage-node хранят дополняющие entries по одному cacheKey, coordinator вернет все locations.
@@ -69,6 +71,7 @@ Dispatch token подписан `WORKER_DISPATCH_SIGNING_KEY`, но сам се�
 - Stale worker heartbeat: worker помечается offline, активные jobs этого worker'а переводятся в `failed`.
 - Stale client heartbeat: client помечается offline, coordinator пытается отменить pending/running job на worker-е; при подтвержденной отмене job становится `cancelled`, иначе capacity не освобождается до финального отчета worker-а.
 - Expired assignment: coordinator отправляет worker-у cancel; если cancel подтвержден, job возвращается в `queued`, worker slot освобождается.
+- Client queue timeout: client вызывает `POST /jobs/:jobId/cancel` для своей queued job; coordinator переводит ее в `cancelled`, и следующий queued job может стать новой головой очереди.
 
 ## Registration Security
 
@@ -92,6 +95,7 @@ Security events пишутся в audit store; в Postgres это `tryon_securit
 - `x-storage-registration-key` - registration gate storage-node.
 - `x-storage-service-key` - heartbeat/health storage-node после регистрации.
 - `POST /storage/catalog/lookup` - lookup cached product/search locations; требует client или worker service key и не проксирует объект.
+- `POST /jobs/:jobId/cancel` - отмена собственной queued job клиентом; требует `x-client-key`.
 - `x-storage-access-token` - не используется coordinator-ом; с ним client/worker ходят напрямую в storage-node.
 - `x-admin-key` - debug/admin ручки `GET /health`, `GET /jobs`, `GET /jobs/:id`.
 - `GET /security/events?limit=100` - admin endpoint для просмотра audit events; требует `x-admin-key`.

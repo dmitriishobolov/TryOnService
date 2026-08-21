@@ -5,6 +5,7 @@ import {
   isClientHeartbeatRequest,
   isClientRegistrationRequest,
   isCreateTryOnJobRequest,
+  isJobCancelRequest,
   isJobProgressUpdateRequest,
   isJobResultUpdateRequest,
   isStorageAccessRequest,
@@ -17,6 +18,7 @@ import {
   type ClientRegistrationRequest,
   type ClientRegistrationResponse,
   type CreateTryOnJobRequest,
+  type JobCancelResponse,
   type RegisteredWorker,
   type RegisteredStorageNode,
   type StorageAccessAssignment,
@@ -195,7 +197,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           return;
         }
 
-        logger.info("Job assignment poll received", {
+        logger.debug("Job assignment poll received", {
           jobId: job.id,
           sourceClientId,
           status: job.status,
@@ -264,7 +266,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
         });
 
         if (isQueuedJobResponse(assignment)) {
-          logger.info("Job still queued after assignment poll", {
+          logger.debug("Job still queued after assignment poll", {
             jobId: job.id,
             sourceClientId: job.sourceClientId,
             reason: assignment.reason,
@@ -288,6 +290,110 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
       }
 
       const getJobMatch = /^\/jobs\/([^/]+)$/.exec(url.pathname);
+
+      const cancelJobMatch = /^\/jobs\/([^/]+)\/cancel$/.exec(url.pathname);
+
+      if (request.method === "POST" && cancelJobMatch) {
+        if (!hasClientKey(request.headers["x-client-key"], config)) {
+          writeError(response, 401, "unauthorized_client", "Invalid client key");
+          return;
+        }
+
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
+
+        if (!isJobCancelRequest(body)) {
+          writeError(response, 400, "invalid_job_cancel", "Invalid job cancel payload");
+          return;
+        }
+
+        const job = await jobs.get(cancelJobMatch[1]);
+
+        if (!job) {
+          writeError(response, 404, "job_not_found", "Job not found");
+          return;
+        }
+
+        if (job.sourceClientId !== body.sourceClientId) {
+          recordSecurityEvent(audit, {
+            eventType: "job_cancel_forbidden",
+            severity: "warning",
+            ipAddress: requesterIp,
+            actorType: "client",
+            actorId: body.sourceClientId,
+            resourceType: "job",
+            resourceId: job.id,
+          });
+          writeError(
+            response,
+            403,
+            "job_cancel_forbidden",
+            "Job does not belong to this client",
+          );
+          return;
+        }
+
+        if (job.status === "cancelled") {
+          const payload: JobCancelResponse = {
+            ok: true,
+            job,
+            cancelled: false,
+          };
+          writeJson(response, 200, payload);
+          return;
+        }
+
+        if (job.status !== "queued") {
+          writeError(
+            response,
+            409,
+            "job_not_waiting_for_assignment",
+            `Job is ${job.status}`,
+          );
+          return;
+        }
+
+        const cancelledJob = await jobs.markResult({
+          jobId: job.id,
+          status: "cancelled",
+          error: {
+            code: "client_stopped_waiting",
+            message:
+              body.reason?.trim() ||
+              "Client stopped waiting for queued assignment",
+            retryable: true,
+          },
+        });
+
+        if (!cancelledJob) {
+          writeError(response, 404, "job_not_found", "Job not found");
+          return;
+        }
+
+        logger.info("Queued job cancelled by client", {
+          jobId: cancelledJob.id,
+          sourceClientId: cancelledJob.sourceClientId,
+          reason: body.reason,
+        });
+        recordSecurityEvent(audit, {
+          eventType: "job_cancelled_by_client",
+          severity: "info",
+          ipAddress: requesterIp,
+          actorType: "client",
+          actorId: cancelledJob.sourceClientId,
+          resourceType: "job",
+          resourceId: cancelledJob.id,
+        });
+
+        const payload: JobCancelResponse = {
+          ok: true,
+          job: cancelledJob,
+          cancelled: true,
+        };
+        writeJson(response, 200, payload);
+        return;
+      }
 
       if (request.method === "GET" && getJobMatch) {
         if (!hasAdminKey(request.headers["x-admin-key"], config)) {
@@ -1288,7 +1394,7 @@ async function assignJobIfPossible({
   const firstQueued = (await jobs.findQueued())[0];
 
   if (firstQueued?.id !== job.id) {
-    logger.info("Job assignment skipped: waiting for queue turn", {
+    logger.debug("Job assignment skipped: waiting for queue turn", {
       jobId: job.id,
       firstQueuedJobId: firstQueued?.id,
     });

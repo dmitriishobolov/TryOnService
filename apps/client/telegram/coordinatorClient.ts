@@ -3,6 +3,7 @@ import type {
   ClientRegistrationRequest,
   ClientRegistrationResponse,
   CreateTryOnJobRequest,
+  JobCancelResponse,
   MarketSearchSelection,
   StorageAccessResponse,
   StorageCatalogEntryKind,
@@ -89,6 +90,18 @@ export class TelegramCoordinatorClient {
 
     return getJson<TryOnJobCreateResponse>(
       url.toString(),
+      this.headers(),
+      this.postOptions(),
+    );
+  }
+
+  cancelQueuedJob(jobId: string, reason: string): Promise<JobCancelResponse> {
+    return postJson<JobCancelResponse>(
+      `${this.config.coordinatorUrl}/jobs/${encodeURIComponent(jobId)}/cancel`,
+      {
+        sourceClientId: this.config.clientId,
+        reason,
+      },
       this.headers(),
       this.postOptions(),
     );

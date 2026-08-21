@@ -19,6 +19,7 @@
 - heartbeat worker;
 - назначение job;
 - assignment/queued response для прямой связи client -> worker или ожидания capacity;
+- client cancel request/response для отмены собственной queued job;
 - worker assignment prepare для security handshake coordinator -> worker;
 - worker cancel response для pending/running отмены;
 - callback token metadata для прямого ответа worker -> client;

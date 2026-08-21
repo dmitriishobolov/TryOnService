@@ -227,6 +227,11 @@ export interface CreateTryOnJobRequest {
   callbackUrl?: string;
 }
 
+export interface JobCancelRequest {
+  sourceClientId: string;
+  reason?: string;
+}
+
 export interface TryOnJobResult {
   message: string;
   files?: StorageObjectRef[];
@@ -375,6 +380,12 @@ export interface TryOnJobQueuedResponse {
   reason?: string;
 }
 
+export interface JobCancelResponse {
+  ok: true;
+  job: TryOnJob;
+  cancelled: boolean;
+}
+
 export type TryOnJobCreateResponse =
   | TryOnJobAssignmentResponse
   | TryOnJobQueuedResponse;
@@ -444,6 +455,15 @@ export function isCreateTryOnJobRequest(
       (Array.isArray(payload.inputFiles) &&
         payload.inputFiles.every(isStorageObjectRef))) &&
     (value.callbackUrl === undefined || typeof value.callbackUrl === "string")
+  );
+}
+
+export function isJobCancelRequest(value: unknown): value is JobCancelRequest {
+  return (
+    isObject(value) &&
+    typeof value.sourceClientId === "string" &&
+    value.sourceClientId.length > 0 &&
+    (value.reason === undefined || typeof value.reason === "string")
   );
 }
 

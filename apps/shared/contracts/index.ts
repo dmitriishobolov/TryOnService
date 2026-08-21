@@ -38,7 +38,9 @@ export type MarketProvider =
   | "wildberries"
   | "tsum"
   | "tsum-outlet"
-  | "ostin";
+  | "ostin"
+  | "2mood"
+  | "lime";
 
 export interface TelegramClientRef {
   type: "telegram";
@@ -452,7 +454,9 @@ export function isMarketProvider(value: unknown): value is MarketProvider {
     value === "wildberries" ||
     value === "tsum" ||
     value === "tsum-outlet" ||
-    value === "ostin"
+    value === "ostin" ||
+    value === "2mood" ||
+    value === "lime"
   );
 }
 

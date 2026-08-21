@@ -29,17 +29,19 @@ WILDBERRIES_PUBLIC_DEST=-1257786
 
 Parser получает JSON выдачу, нормализует `id`, `name`, `brand`, `sizes[0].price.product`, `rating`, `feedbacks`, строит ссылку на товар и image URL через WB basket CDN. Ключ WB seller кабинета для этого сценария не нужен.
 
-## TSUM, TSUM Outlet и O'STIN
+## TSUM, TSUM Outlet, O'STIN, 2MOOD и LIMÉ
 
-Текущие adapter-ы `tsum`, `tsum-outlet` и `ostin` не используют API keys. Они работают как public HTML catalog parsers:
+Текущие adapter-ы `tsum`, `tsum-outlet`, `ostin`, `2mood` и `lime` не используют API keys. Они работают как public HTML catalog parsers:
 
 ```env
 TSUM_PUBLIC_SEARCH_BASE_URL=https://www.tsum.ru/catalog/search/
 TSUM_OUTLET_PUBLIC_SEARCH_BASE_URL=https://outlet.tsum.ru/catalog/search/
 OSTIN_PUBLIC_SEARCH_BASE_URL=https://ostin.com/search
+TWOMOOD_PUBLIC_SEARCH_BASE_URL=https://www.2moodstore.com/collection/katalog/
+LIME_PUBLIC_SEARCH_BASE_URL=https://limestore.com/ru_ru/catalog
 ```
 
-Parser открывает search/catalog HTML, извлекает JSON-LD `ItemList/Product`, ссылки `/product/...`, meta-теги, изображения и ограниченно читает карточки товаров. Если сайт возвращает QRator/captcha/anti-bot challenge вместо HTML, worker не обходит защиту, а включает cooldown и использует stale-cache, если он уже есть.
+Parser открывает search/catalog/category HTML, извлекает JSON-LD `ItemList/Product`, provider-specific ссылки на товары, meta-теги, изображения и ограниченно читает карточки товаров. Если сайт возвращает QRator/captcha/anti-bot challenge вместо HTML, worker не обходит защиту, а включает cooldown и использует stale-cache, если он уже есть.
 
 ## AliExpress Open Platform / Affiliate API
 
@@ -90,6 +92,8 @@ ALIEXPRESS_TRACKING_ID=
    - `market.tsum` (ключи не нужны)
    - `market.tsum-outlet` (ключи не нужны)
    - `market.ostin` (ключи не нужны)
+   - `market.2mood` (ключи не нужны)
+   - `market.lime` (ключи не нужны)
 4. Если собираете deploy-пакет, запустите:
 
 ```bash
@@ -101,7 +105,7 @@ npm run build:dist
 ## Безопасность
 
 - Не передавайте marketplace keys клиентам. Если provider требует keys, они должны жить только в worker env.
-- Для Ozon/Wildberries/TSUM/TSUM Outlet/O'STIN текущие public parsers не используют seller keys.
+- Для Ozon/Wildberries/TSUM/TSUM Outlet/O'STIN/2MOOD/LIMÉ текущие public parsers не используют seller keys.
 - Храните ключи в secret manager или защищенном `.env` на сервере.
 - Сразу ротируйте ключ при подозрении на утечку.
 - Не отправляйте реальные ключи в чат, issue tracker или git.
@@ -113,6 +117,8 @@ npm run build:dist
 - TSUM catalog: https://www.tsum.ru/
 - TSUM Outlet catalog: https://outlet.tsum.ru/
 - O'STIN catalog: https://ostin.com/
+- 2MOOD catalog: https://www.2moodstore.com/
+- LIMÉ catalog: https://limestore.com/ru_ru
 - AliExpress Open Platform getting started: https://developer.alibaba.com/docs/doc.htm?articleId=120672&docType=1&treeId=727
 - AliExpress register application: https://developer.alibaba.com/docs/doc.htm?articleId=120674&docType=1&treeId=727
 - AliExpress retrieve App Key and App Secret: https://developer.alibaba.com/docs/doc.htm?articleId=120675&docType=1&treeId=727

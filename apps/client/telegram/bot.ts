@@ -234,6 +234,8 @@ const idealMarketProviders: MarketProvider[] = [
   "tsum",
   "tsum-outlet",
   "ostin",
+  "2mood",
+  "lime",
 ];
 
 const appearanceAnalysisPrompt = `
@@ -3664,6 +3666,14 @@ function marketplaceName(provider: MarketProductRef["provider"]): string {
 
   if (provider === "ostin") {
     return "O'STIN";
+  }
+
+  if (provider === "2mood") {
+    return "2MOOD";
+  }
+
+  if (provider === "lime") {
+    return "LIMÉ";
   }
 
   return "AliExpress";

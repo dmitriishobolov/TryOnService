@@ -323,7 +323,15 @@ function marketplaceName(provider: MarketProductRef["provider"]): string {
     return "TSUM Outlet";
   }
 
-  return "O'STIN";
+  if (provider === "ostin") {
+    return "O'STIN";
+  }
+
+  if (provider === "2mood") {
+    return "2MOOD";
+  }
+
+  return "LIMÉ";
 }
 
 async function deliverFailureCallback(

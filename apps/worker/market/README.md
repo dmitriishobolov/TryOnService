@@ -13,7 +13,7 @@
     "text": "черная кожаная куртка прямого кроя",
     "market": {
       "query": "черная кожаная куртка прямого кроя",
-      "providers": ["aliexpress", "ozon", "wildberries", "tsum", "tsum-outlet", "ostin"],
+      "providers": ["aliexpress", "ozon", "wildberries", "tsum", "tsum-outlet", "ostin", "2mood", "lime"],
       "limit": 6,
       "required": false
     }
@@ -36,6 +36,8 @@ Worker выполнит поиск перед AI-моделью, добавит 
 - `tsum` - public HTML catalog parser для `www.tsum.ru`. Adapter открывает search/catalog HTML, извлекает JSON-LD `ItemList/Product`, ссылки `/product/...`, затем читает карточки товара и фото.
 - `tsum-outlet` - public HTML catalog parser для `outlet.tsum.ru` с тем же контрактом, но отдельным кешем, cooldown и env-настройками.
 - `ostin` - public HTML catalog parser для `ostin.com`. Adapter поддерживает URL товаров вида `/product/<slug>/<id>`, читает JSON-LD/meta и умеет корректно уйти в cooldown, если сайт вернул QRator/captcha/challenge.
+- `2mood` - public HTML catalog parser для `2moodstore.com`. Adapter ходит по category routes вроде `/collection/rubashki/`, `/collection/bruki/`, `/collection/zhakety/` и поддерживает URL товаров `/collection/katalog/<slug>/`.
+- `lime` - public HTML catalog parser для `limestore.com/ru_ru`. Adapter ходит по category routes `/ru_ru/catalog/...` и поддерживает URL товаров `/ru_ru/product/<id-slug>`.
 
 Важно: public parsers не используют stealth, proxy rotation или captcha bypass. Если сайт возвращает redirect-loop/anti-bot/challenge вместо HTML, adapter включает cooldown и stale-cache fallback, если такой cache уже есть.
 
@@ -47,10 +49,12 @@ Worker выполнит поиск перед AI-моделью, добавит 
 - `utils.ts` - HTTP, нормализация цен, ссылок и поиск по тексту.
 - `aliexpress/` - реализация AliExpress Affiliate API.
 - `ozon/` - реализация Ozon public page parser.
-- `publicHtmlCatalog.ts` - общий HTML/JSON-LD parser для каталогов с `/product/...` ссылками, кешем, in-flight склейкой и cooldown.
+- `publicHtmlCatalog.ts` - общий HTML/JSON-LD parser для каталогов с настраиваемыми product URL patterns, кешем, in-flight склейкой и cooldown.
 - `tsum/` - реализация TSUM public catalog parser.
 - `tsumOutlet/` - реализация TSUM Outlet public catalog parser.
 - `ostin/` - реализация O'STIN public catalog parser.
+- `twoMood/` - реализация 2MOOD public catalog parser.
+- `lime/` - реализация LIMÉ public catalog parser.
 - `wildberries/` - реализация Wildberries public catalog parser.
 
 ## Контракт
@@ -58,7 +62,7 @@ Worker выполнит поиск перед AI-моделью, добавит 
 `payload.market` поддерживает:
 
 - `query` - описание одежды для поиска. Если пусто, worker использует `payload.text`.
-- `providers` - список `aliexpress`, `ozon`, `wildberries`, `tsum`, `tsum-outlet`, `ostin`; если не передан, используется `MARKET_PROVIDERS`.
+- `providers` - список `aliexpress`, `ozon`, `wildberries`, `tsum`, `tsum-outlet`, `ostin`, `2mood`, `lime`; если не передан, используется `MARKET_PROVIDERS`.
 - `limit` - общий лимит товаров в результате, максимум 100.
 - `category`, `categoryIds`, `minPrice`, `maxPrice`, `currency`, `locale`, `country`, `sort` - дополнительные фильтры, если provider поддерживает их напрямую или через локальную фильтрацию.
 - `required` - если `true`, ошибка marketplace-поиска фейлит job; если `false`, worker логирует ошибку и продолжает AI-обработку.
@@ -73,6 +77,8 @@ Worker автоматически объявляет:
 - `market.tsum`, если `MARKET_PROVIDERS` включает `tsum`;
 - `market.tsum-outlet`, если `MARKET_PROVIDERS` включает `tsum-outlet`;
 - `market.ostin`, если `MARKET_PROVIDERS` включает `ostin`;
+- `market.2mood`, если `MARKET_PROVIDERS` включает `2mood`;
+- `market.lime`, если `MARKET_PROVIDERS` включает `lime`;
 - `market`, если доступен хотя бы один marketplace provider.
 
 ## Public parsing
@@ -81,7 +87,7 @@ Public parsers сделаны как обычный lookup по публичны
 
 - Wildberries делает один JSON GET к `search.wb.ru/exactmatch/.../search` с `query`, `dest`, `curr=rub`, `sort` и `page=1`;
 - Ozon делает HTML GET к странице поиска, извлекает ссылки на товары и читает ограниченное число карточек;
-- TSUM, TSUM Outlet и O'STIN используют общий HTML catalog parser: открывают search/catalog страницу, извлекают JSON-LD `ItemList/Product`, ссылки `/product/...`, meta-теги и изображения, затем ограниченно открывают карточки товаров;
+- TSUM, TSUM Outlet, O'STIN, 2MOOD и LIMÉ используют общий HTML catalog parser: открывают search/catalog/category страницу, извлекают JSON-LD `ItemList/Product`, provider-specific product links, meta-теги и изображения, затем ограниченно открывают карточки товаров;
 - использует обычные browser-like `Accept`, `Accept-Language`, `Referer` и `User-Agent`;
 - не использует captcha bypass, proxy rotation, stealth browser automation или авторизацию пользователя;
 - не ходит бесконечно по страницам: WB берёт первую страницу, HTML parsers ограничены `*_PUBLIC_SEARCH_PAGES` и `*_MAX_SCAN_PRODUCTS`;
@@ -136,4 +142,4 @@ export const myMarketplaceAdapter: MarketplaceAdapter = {
 };
 ```
 
-Если новый источник похож на TSUM/O'STIN и отдает обычные HTML-каталоги с `application/ld+json`, meta-тегами или ссылками `/product/...`, используйте общий helper `createPublicHtmlCatalogAdapter` из [publicHtmlCatalog.ts](publicHtmlCatalog.ts). В этом случае provider-specific папка обычно содержит только `provider`, `displayName`, `readConfig`, `productLinkPattern`, `extractProductId` и `referer`, а кеш, throttle, cooldown, JSON-LD/meta parsing и нормализация товара остаются общими.
+Если новый источник похож на TSUM/O'STIN/2MOOD/LIMÉ и отдает обычные HTML-каталоги с `application/ld+json`, meta-тегами или ссылками на товары, используйте общий helper `createPublicHtmlCatalogAdapter` из [publicHtmlCatalog.ts](publicHtmlCatalog.ts). В этом случае provider-specific папка обычно содержит только `provider`, `displayName`, `readConfig`, `productLinkPattern`, при необходимости `productPathSegment`, `buildSearchUrls`, `extractProductId` и `referer`, а кеш, throttle, cooldown, JSON-LD/meta parsing и нормализация товара остаются общими.

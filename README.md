@@ -11,7 +11,7 @@ TryOnService - сервис примерки на базе AI API. Проект 
 - coordinator регистрирует worker'ы и service clients, получает heartbeat, ведет очередь jobs, выбирает worker по capacity/capabilities, готовит assignment на worker-е и возвращает клиенту выбранный worker;
 - object storage node регистрируется в coordinator по отдельному ключу, отправляет heartbeat, принимает streaming upload/download от клиентов и worker'ов по короткоживущему signed storage token и ведет catalog index cache entries;
 - worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat с учетом running jobs и pending assignments, принимает jobs напрямую от клиентов только после prepare от coordinator, выбирает AI provider из `payload.model.provider` конкретной job и при наличии `payload.market` подтягивает товары/фото из marketplace adapters с shared storage-cache;
-- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, по `/start` показывает меню `Анализ внешности` и `Идеальный образ`, умеет отменять сценарии, получает assignment или `queued`-ответ, polling-ом дожидается свободного worker'а, отправляет job worker'у напрямую и продолжает сценарий после callback; `Идеальный образ` получает товарные кандидаты через marketplace adapters Ozon/Wildberries/TSUM/TSUM Outlet/O'STIN, затем отдает OpenAI только vision-проверку изображений и генерацию clean-card на белом фоне; длинные ответы режутся на несколько сообщений и Markdown отображается форматированно; фото с подписью `/request openai:gpt-5.6-luna` также отправляется на OpenAI/ChatGPT vision adapter с выбранной моделью из запроса;
+- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, по `/start` показывает меню `Анализ внешности` и `Идеальный образ`, умеет отменять сценарии, получает assignment или `queued`-ответ, polling-ом дожидается свободного worker'а, отправляет job worker'у напрямую и продолжает сценарий после callback; `Идеальный образ` получает товарные кандидаты через marketplace adapters Ozon/Wildberries/TSUM/TSUM Outlet/O'STIN/2MOOD/LIMÉ, затем отдает OpenAI только vision-проверку изображений и генерацию clean-card на белом фоне; длинные ответы режутся на несколько сообщений и Markdown отображается форматированно; фото с подписью `/request openai:gpt-5.6-luna` также отправляется на OpenAI/ChatGPT vision adapter с выбранной моделью из запроса;
 - coordinator защищает регистрацию worker'ов, service clients и storage-node от перебора ключа: после достижения лимита неверных попыток IP блокируется; при `COORDINATOR_PERSISTENCE=postgres` ban сохраняется в БД и переживает restart;
 - registration, service-to-service, dispatch token, client callback, storage access и admin/debug доступ используют разные ключи;
 - clients, worker и storage-node регистрируются по общим registration keys для быстрого горизонтального масштабирования;
@@ -41,7 +41,7 @@ flowchart LR
     Client -->|"direct job dispatch"| WorkerAPI["Worker API"]
     WorkerAPI --> Runner["Runner"]
     Runner --> Market["Marketplace adapters"]
-    Market --> Marketplaces["AliExpress / Ozon / Wildberries / TSUM / TSUM Outlet / O'STIN"]
+    Market --> Marketplaces["AliExpress / Ozon / Wildberries / TSUM / TSUM Outlet / O'STIN / 2MOOD / LIMÉ"]
     Runner --> Models["AI API models"]
     Models --> AI["External AI APIs"]
     Runner -->|"status only"| CoordinatorAPI
@@ -120,7 +120,7 @@ Worker:
 - сообщает о готовности, capacity и поддерживаемых моделях/пайплайнах;
 - держит pending assignments, принимает jobs от клиентов по signed dispatch token, запускает runner и обновляет статус выполнения;
 - выбирает adapter из `apps/worker/models` через `payload.model.provider`: доступны `mock`, `pruna`, `pixelcut`, `tryoncloud`, `genlook`, `wearfits`, `openai`;
-- выбирает marketplace adapters через `payload.market.providers`: доступны `aliexpress`, `ozon`, `wildberries`, `tsum`, `tsum-outlet`, `ostin`; Ozon/Wildberries/TSUM/TSUM Outlet/O'STIN поддерживают public parsing без seller-token, найденные товары возвращаются в `TryOnJobResult.marketProducts`, а результаты поиска кешируются в storage catalog;
+- выбирает marketplace adapters через `payload.market.providers`: доступны `aliexpress`, `ozon`, `wildberries`, `tsum`, `tsum-outlet`, `ostin`, `2mood`, `lime`; Ozon/Wildberries/TSUM/TSUM Outlet/O'STIN/2MOOD/LIMÉ поддерживают public parsing без seller-token, найденные товары возвращаются в `TryOnJobResult.marketProducts`, а результаты поиска кешируются в storage catalog;
 - объявляет provider-specific capabilities по доступным provider settings, чтобы coordinator не выдавал job на неподходящий worker;
 - для virtual try-on provider-ов ожидает в `payload.inputFiles` фото пользователя и фото одежды/товара, индексы задаются `TRYON_PERSON_IMAGE_INDEX` и `TRYON_GARMENT_IMAGE_INDEX`; OpenAI adapter использует фото пользователя для анализа внешности и wardrobe-рекомендаций, принимает `providerModel`/`options` из job, поддерживает `webSearch`, `inputImageUrls`, `imageGeneration` и `toolChoice`, а generated files сохраняет в storage и возвращает в `result.files`;
 - отправляет клиентский результат напрямую в callback URL из assignment;

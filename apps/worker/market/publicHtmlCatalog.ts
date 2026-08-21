@@ -27,11 +27,20 @@ import {
 
 const logger = createLogger("worker");
 
+export interface PublicHtmlCatalogSearchUrlParams {
+  query: string;
+  page: number;
+  selection: MarketSearchSelection;
+  marketConfig: PublicHtmlCatalogMarketConfig;
+}
+
 export interface PublicHtmlCatalogAdapterOptions {
   provider: MarketProvider;
   displayName: string;
   readConfig(config: WorkerConfig): PublicHtmlCatalogMarketConfig;
+  buildSearchUrls?(params: PublicHtmlCatalogSearchUrlParams): string[];
   productLinkPattern?: RegExp;
+  productPathSegment?: string;
   extractProductId?(productUrl: string): string | undefined;
   blockedPagePatterns?: RegExp[];
   referer?: string;
@@ -137,34 +146,72 @@ async function fetchPublicHtmlCatalogProducts(
   const candidates = new Map<string, PublicHtmlCatalogCandidate>();
 
   for (let page = 1; page <= marketConfig.publicSearchPages; page += 1) {
-    const html = await fetchPublicHtmlSearchPage(
+    const searchUrls = buildPublicHtmlSearchUrls(
       input.query,
+      input.selection,
       page,
-      input.config,
-      marketConfig,
-      options,
-      input.signal,
-    );
-    const pageCandidates = extractPublicHtmlCatalogCandidates(
-      html,
       marketConfig,
       options,
     );
+    let fetchedSearchPages = 0;
+    let pageCandidateCount = 0;
+    let firstSearchError: unknown;
 
-    for (const candidate of pageCandidates) {
-      candidates.set(candidate.productUrl, mergeCandidates(
-        candidates.get(candidate.productUrl),
-        candidate,
-      ));
+    for (const searchUrl of searchUrls) {
+      const html = await fetchPublicHtml(
+        searchUrl,
+        input.config,
+        marketConfig,
+        options,
+        input.signal,
+      ).catch((error: unknown) => {
+        firstSearchError ??= error;
+        logger.warn("Public HTML catalog search page parse failed", {
+          provider: options.provider,
+          searchUrl,
+          error,
+        });
+
+        return undefined;
+      });
+
+      if (!html) {
+        continue;
+      }
+
+      fetchedSearchPages += 1;
+
+      const pageCandidates = extractPublicHtmlCatalogCandidates(
+        html,
+        marketConfig,
+        options,
+      );
+
+      pageCandidateCount += pageCandidates.length;
+
+      for (const candidate of pageCandidates) {
+        candidates.set(candidate.productUrl, mergeCandidates(
+          candidates.get(candidate.productUrl),
+          candidate,
+        ));
+
+        if (candidates.size >= marketConfig.maxScanProducts) {
+          break;
+        }
+      }
 
       if (candidates.size >= marketConfig.maxScanProducts) {
         break;
       }
     }
 
+    if (fetchedSearchPages === 0 && firstSearchError) {
+      throw firstSearchError;
+    }
+
     if (
       candidates.size >= marketConfig.maxScanProducts ||
-      pageCandidates.length === 0
+      pageCandidateCount === 0
     ) {
       break;
     }
@@ -200,14 +247,24 @@ async function fetchPublicHtmlCatalogProducts(
   return products;
 }
 
-async function fetchPublicHtmlSearchPage(
+function buildPublicHtmlSearchUrls(
   query: string,
+  selection: MarketSearchSelection,
   page: number,
-  config: WorkerConfig,
   marketConfig: PublicHtmlCatalogMarketConfig,
   options: PublicHtmlCatalogAdapterOptions,
-  signal?: AbortSignal,
-): Promise<string> {
+): string[] {
+  const customUrls = options.buildSearchUrls?.({
+    query,
+    page,
+    selection,
+    marketConfig,
+  });
+
+  if (customUrls?.length) {
+    return uniqueStrings(customUrls);
+  }
+
   const url = new URL(marketConfig.publicSearchBaseUrl);
 
   url.searchParams.set(marketConfig.publicSearchParamName, query);
@@ -216,7 +273,7 @@ async function fetchPublicHtmlSearchPage(
     url.searchParams.set("page", String(page));
   }
 
-  return fetchPublicHtml(url.toString(), config, marketConfig, options, signal);
+  return [url.toString()];
 }
 
 async function fetchPublicHtmlProduct(
@@ -442,7 +499,7 @@ function extractPublicHtmlCatalogCandidates(
     const images = uniqueStrings(extractImageUrls(chunk));
     const candidate: PublicHtmlCatalogCandidate = {
       productUrl,
-      title: extractCandidateTitle(chunk) ?? titleFromProductUrl(productUrl),
+      title: extractCandidateTitle(chunk) ?? titleFromProductUrl(productUrl, options),
       images: images.length ? images : undefined,
     };
 
@@ -658,9 +715,9 @@ function normalizePublicHtmlCandidate(
 ): MarketProductRef | undefined {
   const productId =
     options.extractProductId?.(candidate.productUrl) ??
-    extractGenericProductId(candidate.productUrl);
-  const productSlug = extractProductSlug(candidate.productUrl);
-  const title = candidate.title ?? titleFromProductUrl(candidate.productUrl);
+    extractGenericProductId(candidate.productUrl, options);
+  const productSlug = extractProductSlug(candidate.productUrl, options);
+  const title = candidate.title ?? titleFromProductUrl(candidate.productUrl, options);
   const images = uniqueStrings(candidate.images ?? []);
 
   if (!productId || !title) {
@@ -726,7 +783,7 @@ function normalizeProductUrl(
     const baseHost = new URL(productBaseUrl).hostname.replace(/^www\./i, "");
     const currentHost = url.hostname.replace(/^www\./i, "");
 
-    if (!currentHost.endsWith(baseHost) || !url.pathname.includes("/product/")) {
+    if (!currentHost.endsWith(baseHost)) {
       return undefined;
     }
 
@@ -924,8 +981,14 @@ function isBlockedPublicHtmlPage(
   html: string,
   options: PublicHtmlCatalogAdapterOptions,
 ): boolean {
+  const productPattern = options.productLinkPattern
+    ? new RegExp(
+        options.productLinkPattern.source,
+        options.productLinkPattern.flags.replace("g", ""),
+      )
+    : /\/product\//i;
   const hasProductSignal =
-    /\/product\//i.test(html) ||
+    productPattern.test(html) ||
     /application\/ld\+json/i.test(html) ||
     /"@type"\s*:\s*"Product"/i.test(html) ||
     /"@type"\s*:\s*"ItemList"/i.test(html);
@@ -953,6 +1016,8 @@ function buildPublicHtmlCatalogCacheKey(
     normalizeCacheValue(selection.locale ?? "ru"),
     normalizeCacheValue(selection.country ?? "ru"),
     normalizeCacheValue(selection.sort ?? ""),
+    normalizeCacheValue(selection.category ?? ""),
+    normalizeCacheValue((selection.categoryIds ?? []).join(",")),
     String(marketConfig.publicSearchPages),
   ].join("|");
 }
@@ -1139,8 +1204,11 @@ function matchesPrice(
   );
 }
 
-function titleFromProductUrl(productUrl: string): string | undefined {
-  const slug = extractProductSlug(productUrl);
+function titleFromProductUrl(
+  productUrl: string,
+  options: PublicHtmlCatalogAdapterOptions,
+): string | undefined {
+  const slug = extractProductSlug(productUrl, options);
 
   return slug
     ?.replace(/^\w{4,}\d*-/i, "")
@@ -1148,10 +1216,13 @@ function titleFromProductUrl(productUrl: string): string | undefined {
     .trim();
 }
 
-function extractProductSlug(productUrl: string): string | undefined {
+function extractProductSlug(
+  productUrl: string,
+  options: PublicHtmlCatalogAdapterOptions,
+): string | undefined {
   try {
     const url = new URL(productUrl);
-    const segments = productPathSegments(url);
+    const segments = productPathSegments(url, options);
 
     return segments[0];
   } catch {
@@ -1159,10 +1230,13 @@ function extractProductSlug(productUrl: string): string | undefined {
   }
 }
 
-function extractGenericProductId(productUrl: string): string | undefined {
+function extractGenericProductId(
+  productUrl: string,
+  options: PublicHtmlCatalogAdapterOptions,
+): string | undefined {
   try {
     const url = new URL(productUrl);
-    const segments = productPathSegments(url);
+    const segments = productPathSegments(url, options);
 
     if (segments.length >= 2 && /^\d+$/.test(segments.at(-1) ?? "")) {
       return segments.at(-1);
@@ -1174,9 +1248,15 @@ function extractGenericProductId(productUrl: string): string | undefined {
   }
 }
 
-function productPathSegments(url: URL): string[] {
+function productPathSegments(
+  url: URL,
+  options: PublicHtmlCatalogAdapterOptions,
+): string[] {
   const segments = url.pathname.split("/").filter(Boolean);
-  const productIndex = segments.findIndex((segment) => segment === "product");
+  const productPathSegment = options.productPathSegment ?? "product";
+  const productIndex = segments.findIndex(
+    (segment) => segment === productPathSegment,
+  );
 
   return productIndex >= 0 ? segments.slice(productIndex + 1) : [];
 }

@@ -138,6 +138,10 @@ export interface TsumOutletMarketConfig extends PublicHtmlCatalogMarketConfig {}
 
 export interface OstinMarketConfig extends PublicHtmlCatalogMarketConfig {}
 
+export interface TwoMoodMarketConfig extends PublicHtmlCatalogMarketConfig {}
+
+export interface LimeMarketConfig extends PublicHtmlCatalogMarketConfig {}
+
 export interface WildberriesMarketConfig {
   locale: string;
   productUrlTemplate: string;
@@ -165,6 +169,8 @@ export interface WorkerMarketConfig {
   tsum: TsumMarketConfig;
   tsumOutlet: TsumOutletMarketConfig;
   ostin: OstinMarketConfig;
+  twoMood: TwoMoodMarketConfig;
+  lime: LimeMarketConfig;
 }
 
 export interface WorkerConfig {
@@ -368,7 +374,7 @@ function readAliExpressSignMethod(): AliExpressSignMethod {
 function readMarketProviders(): MarketProvider[] {
   const raw = readString(
     "MARKET_PROVIDERS",
-    "aliexpress,ozon,wildberries,tsum,tsum-outlet,ostin",
+    "aliexpress,ozon,wildberries,tsum,tsum-outlet,ostin,2mood,lime",
   );
   const providers = raw
     .split(",")
@@ -386,13 +392,15 @@ function readMarketProviders(): MarketProvider[] {
       provider === "wildberries" ||
       provider === "tsum" ||
       provider === "tsum-outlet" ||
-      provider === "ostin"
+      provider === "ostin" ||
+      provider === "2mood" ||
+      provider === "lime"
     ) {
       return provider;
     }
 
     throw new Error(
-      "MARKET_PROVIDERS must include only aliexpress, ozon, wildberries, tsum, tsum-outlet or ostin",
+      "MARKET_PROVIDERS must include only aliexpress, ozon, wildberries, tsum, tsum-outlet, ostin, 2mood or lime",
     );
   });
 }
@@ -423,6 +431,8 @@ function readCapabilities(): WorkerCapability[] {
   syncPublicMarketCapability(names, "tsum");
   syncPublicMarketCapability(names, "tsum-outlet");
   syncPublicMarketCapability(names, "ostin");
+  syncPublicMarketCapability(names, "2mood");
+  syncPublicMarketCapability(names, "lime");
 
   return [...names].map((name) => ({ name }));
 }
@@ -840,6 +850,94 @@ export function loadWorkerConfig(): WorkerConfig {
         productUrlTemplate: readString(
           "OSTIN_PRODUCT_URL_TEMPLATE",
           "https://ostin.com/product/{productSlug}/{productId}",
+        ),
+      },
+      twoMood: {
+        publicSearchBaseUrl: readString(
+          "TWOMOOD_PUBLIC_SEARCH_BASE_URL",
+          "https://www.2moodstore.com/collection/katalog/",
+        ),
+        publicProductBaseUrl: readString(
+          "TWOMOOD_PUBLIC_PRODUCT_BASE_URL",
+          "https://www.2moodstore.com",
+        ),
+        publicSearchParamName: readString(
+          "TWOMOOD_PUBLIC_SEARCH_PARAM_NAME",
+          "q",
+        ),
+        publicSearchPages: readNumber("TWOMOOD_PUBLIC_SEARCH_PAGES", 1),
+        publicUserAgent: readString(
+          "TWOMOOD_PUBLIC_USER_AGENT",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        ),
+        publicCacheTtlMs: readNonNegativeInteger(
+          "TWOMOOD_PUBLIC_CACHE_TTL_MS",
+          30 * 60 * 1_000,
+        ),
+        publicCacheStaleTtlMs: readNonNegativeInteger(
+          "TWOMOOD_PUBLIC_CACHE_STALE_TTL_MS",
+          24 * 60 * 60 * 1_000,
+        ),
+        publicCacheMaxEntries: readNonNegativeInteger(
+          "TWOMOOD_PUBLIC_CACHE_MAX_ENTRIES",
+          500,
+        ),
+        publicErrorCooldownMs: readNonNegativeInteger(
+          "TWOMOOD_PUBLIC_ERROR_COOLDOWN_MS",
+          60_000,
+        ),
+        publicRequestIntervalMs: readNonNegativeInteger(
+          "TWOMOOD_PUBLIC_REQUEST_INTERVAL_MS",
+          1_200,
+        ),
+        maxScanProducts: readNumber("TWOMOOD_MAX_SCAN_PRODUCTS", 12),
+        productUrlTemplate: readString(
+          "TWOMOOD_PRODUCT_URL_TEMPLATE",
+          "https://www.2moodstore.com/collection/katalog/{productSlug}",
+        ),
+      },
+      lime: {
+        publicSearchBaseUrl: readString(
+          "LIME_PUBLIC_SEARCH_BASE_URL",
+          "https://limestore.com/ru_ru/catalog",
+        ),
+        publicProductBaseUrl: readString(
+          "LIME_PUBLIC_PRODUCT_BASE_URL",
+          "https://limestore.com",
+        ),
+        publicSearchParamName: readString(
+          "LIME_PUBLIC_SEARCH_PARAM_NAME",
+          "q",
+        ),
+        publicSearchPages: readNumber("LIME_PUBLIC_SEARCH_PAGES", 1),
+        publicUserAgent: readString(
+          "LIME_PUBLIC_USER_AGENT",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        ),
+        publicCacheTtlMs: readNonNegativeInteger(
+          "LIME_PUBLIC_CACHE_TTL_MS",
+          30 * 60 * 1_000,
+        ),
+        publicCacheStaleTtlMs: readNonNegativeInteger(
+          "LIME_PUBLIC_CACHE_STALE_TTL_MS",
+          24 * 60 * 60 * 1_000,
+        ),
+        publicCacheMaxEntries: readNonNegativeInteger(
+          "LIME_PUBLIC_CACHE_MAX_ENTRIES",
+          500,
+        ),
+        publicErrorCooldownMs: readNonNegativeInteger(
+          "LIME_PUBLIC_ERROR_COOLDOWN_MS",
+          60_000,
+        ),
+        publicRequestIntervalMs: readNonNegativeInteger(
+          "LIME_PUBLIC_REQUEST_INTERVAL_MS",
+          1_200,
+        ),
+        maxScanProducts: readNumber("LIME_MAX_SCAN_PRODUCTS", 12),
+        productUrlTemplate: readString(
+          "LIME_PRODUCT_URL_TEMPLATE",
+          "https://limestore.com/ru_ru/product/{productId}",
         ),
       },
     },

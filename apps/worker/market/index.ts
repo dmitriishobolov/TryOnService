@@ -6,6 +6,7 @@ import type {
 import { createLogger } from "../../shared/logger.js";
 import type { WorkerConfig } from "../config/index.js";
 import { aliexpressMarketplaceAdapter } from "./aliexpress/index.js";
+import { limeMarketplaceAdapter } from "./lime/index.js";
 import { ostinMarketplaceAdapter } from "./ostin/index.js";
 import { ozonMarketplaceAdapter } from "./ozon/index.js";
 import type {
@@ -15,6 +16,7 @@ import type {
 } from "./types.js";
 import { tsumMarketplaceAdapter } from "./tsum/index.js";
 import { tsumOutletMarketplaceAdapter } from "./tsumOutlet/index.js";
+import { twoMoodMarketplaceAdapter } from "./twoMood/index.js";
 import { MarketplaceError } from "./utils.js";
 import { wildberriesMarketplaceAdapter } from "./wildberries/index.js";
 
@@ -28,6 +30,8 @@ const adapters = new Map<MarketProvider, MarketplaceAdapter>(
     tsumMarketplaceAdapter,
     tsumOutletMarketplaceAdapter,
     ostinMarketplaceAdapter,
+    twoMoodMarketplaceAdapter,
+    limeMarketplaceAdapter,
   ].map((adapter) => [adapter.provider, adapter]),
 );
 

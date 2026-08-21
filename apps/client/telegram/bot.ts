@@ -201,7 +201,7 @@ const idealCandidatesPerOutfitItem = 10;
 const idealMarketplaceSearchDomains = [
   "ozon.ru",
   "wildberries.ru",
-  "best.aliexpress.com",
+  "aliexpress.ru",
 ];
 
 const appearanceAnalysisPrompt = `
@@ -1818,7 +1818,7 @@ function createIdealProductSearchPrompt(outfit: IdealOutfit): string {
 Сайты только:
 - ozon.ru
 - wildberries.ru
-- best.aliexpress.com
+- aliexpress.ru
 
 Образ compact JSON:
 ${JSON.stringify(compactOutfitForPrompt(outfit))}

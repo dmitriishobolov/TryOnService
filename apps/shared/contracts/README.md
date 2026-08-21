@@ -6,8 +6,9 @@
 
 - создание job;
 - выбор AI provider-а, provider model и provider-specific options в `CreateTryOnJobRequest.payload.model`;
+- выбор marketplace provider-ов и параметров поиска одежды в `CreateTryOnJobRequest.payload.market`;
 - получение статуса job;
-- результат обработки;
+- результат обработки, включая `TryOnJobResult.marketProducts` для найденных marketplace-товаров;
 - storage object refs для входных и выходных файлов, включая `storageId` узла, где лежит объект;
 - регистрацию storage-node, heartbeat storage-node и выдачу storage-access;
 - ошибки API;

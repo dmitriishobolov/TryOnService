@@ -1,23 +1,26 @@
 # Worker Runner
 
-Runner - место, где живут процессы обработки данных клиента. Он получает job по контракту, готовит входные данные, вызывает нужную модель из `apps/worker/models`, сохраняет или передает результат и сообщает статус coordinator.
+Runner - место, где живут процессы обработки данных клиента. Он получает job по контракту, при необходимости запрашивает товары через `apps/worker/market`, готовит входные данные, вызывает нужную модель из `apps/worker/models`, сохраняет или передает результат и сообщает статус coordinator.
 
-Текущий runner запускает mock model, сообщает progress/final status в coordinator и, если в job есть `callbackUrl`, отправляет результат клиентскому callback endpoint. Payload ответа клиента не обязан храниться в coordinator, но coordinator сохраняет `result`, чтобы отличать успешную обработку от ошибки доставки. Если AI обработка завершилась, а callback клиенту не дошел, runner отправляет статус `delivery_failed`, а не повторяет генерацию как обычный `failed`. В сценариях с изображениями runner должен читать входные `StorageObjectRef` из job payload через storage-access из `workerRequest` или отдельный `POST /storage/access`, а generated files возвращать как `result.files`.
+Текущий runner запускает выбранную model, сообщает progress/final status в coordinator и, если в job есть `callbackUrl`, отправляет результат клиентскому callback endpoint. Payload ответа клиента не обязан храниться в coordinator, но coordinator сохраняет `result`, чтобы отличать успешную обработку от ошибки доставки. Если AI обработка завершилась, а callback клиенту не дошел, runner отправляет статус `delivery_failed`, а не повторяет генерацию как обычный `failed`. В сценариях с изображениями runner должен читать входные `StorageObjectRef` из job payload через storage-access из `workerRequest` или отдельный `POST /storage/access`, а generated files возвращать как `result.files`. Если клиент передал `payload.market`, найденные товары добавляются в `result.marketProducts`.
 
 ## Типовой пайплайн
 
 1. Принять job и проверить payload.
-2. Загрузить или подготовить исходные изображения из storage-node.
-3. Привести данные к формату выбранной AI-модели.
-4. Вызвать adapter из `models`.
-5. Проверить и нормализовать результат.
-6. Сохранить артефакты в storage-node и вернуть ссылки на них.
-7. Отправить финальный статус в coordinator.
-8. Очистить временные файлы.
+2. Если есть `payload.market`, запросить товары через `market`.
+3. Загрузить или подготовить исходные изображения из storage-node.
+4. Привести данные к формату выбранной AI-модели.
+5. Вызвать adapter из `models`.
+6. Проверить и нормализовать результат.
+7. Сохранить артефакты в storage-node и вернуть ссылки на них.
+8. Добавить marketplace-товары в `TryOnJobResult`, если они были найдены.
+9. Отправить финальный статус в coordinator.
+10. Очистить временные файлы.
 
 ## Правила
 
 - Runner не должен знать детали HTTP API конкретного AI provider.
+- Runner не должен знать детали HTTP API marketplace provider-ов; это зона `market`.
 - Каждый шаг пайплайна должен быть наблюдаемым через логи и метрики.
 - Ошибки должны разделяться на retryable и non-retryable.
 - Временные файлы и персональные данные клиента нужно хранить минимально необходимое время.

@@ -315,6 +315,21 @@ Coordinator сам подставит trusted callback URL из registry по `s
 
 `payload.model` выбирает provider для конкретной job. Например, `openai` подходит для анализа фото пользователя и wardrobe-рекомендаций, а virtual try-on provider-ы вроде `pixelcut`, `tryoncloud`, `wearfits`, `pruna` и `genlook` ожидают фото пользователя и фото одежды. Coordinator использует `payload.model.provider`, чтобы найти worker с capability `try-on.<provider>`. `payload.model.providerModel` передает конкретную модель provider-а, а `payload.model.options` - provider-specific настройки вроде `imageDetail`, `textVerbosity`, `reasoningEffort`, `reasoningMode`, `maxOutputTokens` и `store` для OpenAI.
 
+`payload.market` опционально просит worker подобрать товары одежды в marketplace перед AI-обработкой. Например:
+
+```json
+{
+  "market": {
+    "query": "черная кожаная куртка прямого кроя",
+    "providers": ["aliexpress", "ozon", "wildberries"],
+    "limit": 6,
+    "required": false
+  }
+}
+```
+
+Worker вернет найденные карточки в `TryOnJobResult.marketProducts` и добавит краткий список в текст ответа. Если `required: true`, ошибка marketplace-поиска фейлит job; если `false`, worker продолжает AI-обработку без товаров.
+
 Если coordinator вернул `202`, job поставлена в очередь:
 
 ```json

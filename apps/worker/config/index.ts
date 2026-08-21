@@ -2,6 +2,7 @@ import { hostname } from "node:os";
 
 import {
   WORKER_HEARTBEAT_INTERVAL_MS,
+  type MarketProvider,
   type PublicProtocol,
   type TryOnModelProvider,
   type WorkerCapability,
@@ -84,6 +85,54 @@ export interface OpenAiTryOnConfig {
   wardrobePrompt: string;
 }
 
+export type AliExpressSignMethod = "md5" | "hmac" | "hmac-sha256";
+
+export interface AliExpressMarketConfig {
+  apiKey?: string;
+  apiSecret?: string;
+  appSignature?: string;
+  trackingId?: string;
+  baseUrl: string;
+  signMethod: AliExpressSignMethod;
+  targetLanguage: string;
+  targetCurrency: string;
+  shipToCountry: string;
+  fields: string;
+  sort?: string;
+  deliveryDays?: string;
+  platformProductType?: string;
+}
+
+export interface OzonMarketConfig {
+  clientId?: string;
+  apiKey?: string;
+  baseUrl: string;
+  productListPath: string;
+  productInfoListPath: string;
+  visibility: string;
+  maxScanProducts: number;
+  productUrlTemplate: string;
+}
+
+export interface WildberriesMarketConfig {
+  apiKey?: string;
+  baseUrl: string;
+  cardsListPath: string;
+  maxScanCards: number;
+  locale: string;
+  withPhoto: boolean;
+  productUrlTemplate: string;
+}
+
+export interface WorkerMarketConfig {
+  enabled: boolean;
+  providers: MarketProvider[];
+  searchLimit: number;
+  aliexpress: AliExpressMarketConfig;
+  ozon: OzonMarketConfig;
+  wildberries: WildberriesMarketConfig;
+}
+
 export interface WorkerConfig {
   port: number;
   workerId: string;
@@ -110,6 +159,7 @@ export interface WorkerConfig {
   genlook: GenlookTryOnConfig;
   wearfits: WearfitsTryOnConfig;
   openai: OpenAiTryOnConfig;
+  market: WorkerMarketConfig;
   apiRateLimitWindowMs: number;
   apiRateLimitMaxRequests: number;
   httpClientTimeoutMs: number;
@@ -270,6 +320,42 @@ function readOpenAiReasoningEffort(): OpenAiReasoningEffort {
   return value;
 }
 
+function readAliExpressSignMethod(): AliExpressSignMethod {
+  const value = readString("ALIEXPRESS_SIGN_METHOD", "hmac").toLowerCase();
+
+  if (value !== "md5" && value !== "hmac" && value !== "hmac-sha256") {
+    throw new Error("ALIEXPRESS_SIGN_METHOD must be md5, hmac or hmac-sha256");
+  }
+
+  return value;
+}
+
+function readMarketProviders(): MarketProvider[] {
+  const raw = readString("MARKET_PROVIDERS", "aliexpress,ozon,wildberries");
+  const providers = raw
+    .split(",")
+    .map((provider) => provider.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (providers.length === 0) {
+    throw new Error("MARKET_PROVIDERS must include at least one provider");
+  }
+
+  return providers.map((provider) => {
+    if (
+      provider === "aliexpress" ||
+      provider === "ozon" ||
+      provider === "wildberries"
+    ) {
+      return provider;
+    }
+
+    throw new Error(
+      "MARKET_PROVIDERS must include only aliexpress, ozon or wildberries",
+    );
+  });
+}
+
 function readCapabilities(): WorkerCapability[] {
   const raw = readOptionalString("WORKER_CAPABILITIES");
   const names = new Set(
@@ -287,6 +373,12 @@ function readCapabilities(): WorkerCapability[] {
   syncProviderCapability(names, "genlook", "GENLOOK_API_KEY");
   syncProviderCapability(names, "wearfits", "WEARFITS_API_KEY");
   syncProviderCapability(names, "openai", "OPENAI_API_KEY");
+  syncMarketCapability(names, "aliexpress", [
+    "ALIEXPRESS_APP_KEY",
+    "ALIEXPRESS_APP_SECRET",
+  ]);
+  syncMarketCapability(names, "ozon", ["OZON_CLIENT_ID", "OZON_API_KEY"]);
+  syncMarketCapability(names, "wildberries", ["WILDBERRIES_API_KEY"]);
 
   return [...names].map((name) => ({ name }));
 }
@@ -299,6 +391,26 @@ function syncProviderCapability(
   const capability = `try-on.${provider}`;
 
   if (readOptionalString(apiKeyName)) {
+    names.add(capability);
+    return;
+  }
+
+  names.delete(capability);
+}
+
+function syncMarketCapability(
+  names: Set<string>,
+  provider: MarketProvider,
+  requiredEnvNames: string[],
+): void {
+  const capability = `market.${provider}`;
+
+  if (
+    readBoolean("MARKET_ENABLED", true) &&
+    readMarketProviders().includes(provider) &&
+    requiredEnvNames.every((name) => readOptionalString(name))
+  ) {
+    names.add("market");
     names.add(capability);
     return;
   }
@@ -417,6 +529,83 @@ export function loadWorkerConfig(): WorkerConfig {
         "OPENAI_WARDROBE_PROMPT",
         "Кратко проанализируй внешность человека на фотографии. Сначала дай 2-3 живые фразы общего вывода: что считывается во внешности, что стоит подчеркнуть и какая подача будет смотреться естественно. Затем дай блок параметров: форма лица, визуальный контраст, видимые пропорции, подходящие цвета, чего избегать, фасоны одежды, аксессуары, прическа и 3 стилевых направления. Не более 1300 символов. Не используй длинное тире, символ U+2014 и похожие длинные тире; вместо них ставь запятую, двоеточие, точку с запятой или обычный дефис. Не пытайся устанавливать личность человека. Если освещение мешает точно определить цветотип, явно скажи об этом.",
       ),
+    },
+    market: {
+      enabled: readBoolean("MARKET_ENABLED", true),
+      providers: readMarketProviders(),
+      searchLimit: readNumber("MARKET_SEARCH_LIMIT", 6),
+      aliexpress: {
+        apiKey: readOptionalString("ALIEXPRESS_APP_KEY"),
+        apiSecret: readOptionalString("ALIEXPRESS_APP_SECRET"),
+        appSignature: readOptionalString("ALIEXPRESS_APP_SIGNATURE"),
+        trackingId: readOptionalString("ALIEXPRESS_TRACKING_ID"),
+        baseUrl: readString(
+          "ALIEXPRESS_API_BASE_URL",
+          "https://api.taobao.com/router/rest",
+        ),
+        signMethod: readAliExpressSignMethod(),
+        targetLanguage: readString("ALIEXPRESS_TARGET_LANGUAGE", "RU"),
+        targetCurrency: readString("ALIEXPRESS_TARGET_CURRENCY", "RUB"),
+        shipToCountry: readString("ALIEXPRESS_SHIP_TO_COUNTRY", "RU"),
+        fields: readString(
+          "ALIEXPRESS_FIELDS",
+          [
+            "product_id",
+            "product_title",
+            "product_main_image_url",
+            "product_detail_url",
+            "product_small_image_urls",
+            "app_sale_price",
+            "target_app_sale_price",
+            "sale_price",
+            "target_sale_price",
+            "sale_price_currency",
+            "target_sale_price_currency",
+            "discount",
+            "evaluate_rate",
+            "shop_id",
+            "first_level_category_name",
+            "second_level_category_name",
+          ].join(","),
+        ),
+        sort: readOptionalString("ALIEXPRESS_SORT"),
+        deliveryDays: readOptionalString("ALIEXPRESS_DELIVERY_DAYS"),
+        platformProductType: readOptionalString("ALIEXPRESS_PLATFORM_PRODUCT_TYPE"),
+      },
+      ozon: {
+        clientId: readOptionalString("OZON_CLIENT_ID"),
+        apiKey: readOptionalString("OZON_API_KEY"),
+        baseUrl: readString("OZON_API_BASE_URL", "https://api-seller.ozon.ru"),
+        productListPath: readString("OZON_PRODUCT_LIST_PATH", "/v3/product/list"),
+        productInfoListPath: readString(
+          "OZON_PRODUCT_INFO_LIST_PATH",
+          "/v3/product/info/list",
+        ),
+        visibility: readString("OZON_VISIBILITY", "VISIBLE"),
+        maxScanProducts: readNumber("OZON_MAX_SCAN_PRODUCTS", 100),
+        productUrlTemplate: readString(
+          "OZON_PRODUCT_URL_TEMPLATE",
+          "https://www.ozon.ru/product/{sku}",
+        ),
+      },
+      wildberries: {
+        apiKey: readOptionalString("WILDBERRIES_API_KEY"),
+        baseUrl: readString(
+          "WILDBERRIES_API_BASE_URL",
+          "https://content-api.wildberries.ru",
+        ),
+        cardsListPath: readString(
+          "WILDBERRIES_CARDS_LIST_PATH",
+          "/content/v2/get/cards/list",
+        ),
+        maxScanCards: readNumber("WILDBERRIES_MAX_SCAN_CARDS", 100),
+        locale: readString("WILDBERRIES_LOCALE", "ru"),
+        withPhoto: readBoolean("WILDBERRIES_WITH_PHOTO", true),
+        productUrlTemplate: readString(
+          "WILDBERRIES_PRODUCT_URL_TEMPLATE",
+          "https://www.wildberries.ru/catalog/{nmId}/detail.aspx",
+        ),
+      },
     },
     apiRateLimitWindowMs: readNumber("API_RATE_LIMIT_WINDOW_MS", 60_000),
     apiRateLimitMaxRequests: readNumber("API_RATE_LIMIT_MAX_REQUESTS", 120),

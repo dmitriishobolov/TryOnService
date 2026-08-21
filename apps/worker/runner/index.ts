@@ -1,5 +1,6 @@
 import type {
   JobResultUpdateRequest,
+  MarketProductRef,
   TelegramJobCallbackRequest,
   WorkerJobRequest,
 } from "../../shared/contracts/index.js";
@@ -7,6 +8,8 @@ import { postJson } from "../../shared/http.js";
 import { createLogger } from "../../shared/logger.js";
 import type { CoordinatorClient } from "../api/coordinatorClient.js";
 import type { WorkerConfig } from "../config/index.js";
+import { searchMarketplaceProducts } from "../market/index.js";
+import { MarketplaceError } from "../market/utils.js";
 import { runSelectedTryOnModel } from "../models/index.js";
 import { TryOnModelError } from "../models/providerUtils.js";
 
@@ -41,6 +44,11 @@ export async function runWorkerJob(
   });
 
   try {
+    const marketProducts = await searchRequestedMarketProducts(
+      job,
+      config,
+      signal,
+    );
     logger.info("Model execution started", {
       jobId: job.jobId,
       provider,
@@ -52,11 +60,13 @@ export async function runWorkerJob(
       coordinator,
       signal,
     });
+    const enrichedResult = attachMarketplaceProducts(result, marketProducts);
     logger.info("Model execution finished", {
       jobId: job.jobId,
       provider,
-      messageLength: result.message.length,
-      files: result.files?.length ?? 0,
+      messageLength: enrichedResult.message.length,
+      files: enrichedResult.files?.length ?? 0,
+      marketProducts: enrichedResult.marketProducts?.length ?? 0,
     });
     let deliveryError: unknown;
 
@@ -64,7 +74,7 @@ export async function runWorkerJob(
       const callback: TelegramJobCallbackRequest = {
         jobId: job.jobId,
         client: job.client,
-        result,
+        result: enrichedResult,
       };
 
       try {
@@ -105,7 +115,7 @@ export async function runWorkerJob(
       ? {
           jobId: job.jobId,
           status: "delivery_failed",
-          result,
+          result: enrichedResult,
           error: {
             code: "client_callback_failed",
             message:
@@ -118,7 +128,7 @@ export async function runWorkerJob(
       : {
           jobId: job.jobId,
           status: "succeeded",
-          result,
+          result: enrichedResult,
         };
 
     await coordinator.reportResult(update);
@@ -132,6 +142,8 @@ export async function runWorkerJob(
       error instanceof Error &&
       (error.name === "AbortError" || signal?.aborted === true);
     const modelError = error instanceof TryOnModelError ? error : undefined;
+    const marketplaceError =
+      error instanceof MarketplaceError ? error : undefined;
     const update: JobResultUpdateRequest = {
       jobId: job.jobId,
       status: wasCancelled ? "cancelled" : "failed",
@@ -139,9 +151,14 @@ export async function runWorkerJob(
         code:
           wasCancelled
             ? "worker_job_cancelled"
-            : modelError?.code ?? "worker_processing_failed",
+            : modelError?.code ??
+              marketplaceError?.code ??
+              "worker_processing_failed",
         message: error instanceof Error ? error.message : "Worker processing failed",
-        retryable: wasCancelled ? false : modelError?.retryable ?? true,
+        retryable:
+          wasCancelled
+            ? false
+            : modelError?.retryable ?? marketplaceError?.retryable ?? true,
       },
     };
 
@@ -161,6 +178,112 @@ export async function runWorkerJob(
       errorCode: update.error?.code,
     });
   }
+}
+
+async function searchRequestedMarketProducts(
+  job: WorkerJobRequest,
+  config: WorkerConfig,
+  signal?: AbortSignal,
+): Promise<MarketProductRef[]> {
+  const market = job.payload.market;
+
+  if (!market) {
+    return [];
+  }
+
+  try {
+    logger.info("Marketplace product search requested", {
+      jobId: job.jobId,
+      providers: market.providers,
+      query: market.query,
+      limit: market.limit,
+      required: market.required ?? false,
+    });
+    const products = await searchMarketplaceProducts({
+      selection: market,
+      config,
+      fallbackQuery: job.payload.text,
+      signal,
+    });
+
+    logger.info("Marketplace product search succeeded", {
+      jobId: job.jobId,
+      products: products.length,
+      providers: [...new Set(products.map((product) => product.provider))],
+    });
+
+    return products;
+  } catch (error) {
+    logger.warn("Marketplace product search failed", {
+      jobId: job.jobId,
+      required: market.required ?? false,
+      error,
+    });
+
+    if (market.required) {
+      throw error;
+    }
+
+    return [];
+  }
+}
+
+function attachMarketplaceProducts(
+  result: TelegramJobCallbackRequest["result"],
+  products: MarketProductRef[],
+): TelegramJobCallbackRequest["result"] {
+  if (products.length === 0) {
+    return result;
+  }
+
+  return {
+    ...result,
+    message: `${result.message}\n\n${formatMarketplaceProducts(products)}`,
+    marketProducts: products,
+  };
+}
+
+function formatMarketplaceProducts(products: MarketProductRef[]): string {
+  const lines = products.map((product, index) => {
+    const price = product.price ? `, ${formatPrice(product.price)}` : "";
+    const productLink = product.productUrl
+      ? `, [товар](${product.productUrl})`
+      : "";
+    const imageLink = product.imageUrl ? `, [фото](${product.imageUrl})` : "";
+    const brand = product.brand ? `${product.brand}: ` : "";
+
+    return `${index + 1}. **${marketplaceName(product.provider)}:** ${brand}${product.title}${price}${productLink}${imageLink}`;
+  });
+
+  return `**Подборка товаров**\n${lines.join("\n")}`;
+}
+
+function formatPrice(price: NonNullable<MarketProductRef["price"]>): string {
+  if (!price.currency) {
+    return String(price.amount);
+  }
+
+  try {
+    return new Intl.NumberFormat("ru-RU", {
+      style: "currency",
+      currency: price.currency,
+      maximumFractionDigits: 2,
+    }).format(price.amount);
+  } catch {
+    return `${price.amount} ${price.currency}`;
+  }
+}
+
+function marketplaceName(provider: MarketProductRef["provider"]): string {
+  if (provider === "aliexpress") {
+    return "AliExpress";
+  }
+
+  if (provider === "ozon") {
+    return "Ozon";
+  }
+
+  return "Wildberries";
 }
 
 async function deliverFailureCallback(
@@ -225,6 +348,10 @@ function failureMessage(update: JobResultUpdateRequest): string {
 
   if (update.error?.code === "openai_image_content_type_unsupported") {
     return "Не удалось обработать изображение: файл не распознан как фото. Отправьте четкую фотографию в формате JPG, PNG или WEBP.";
+  }
+
+  if (update.error?.code.startsWith("market_")) {
+    return "Не удалось подобрать товары в маркетплейсах. Попробуйте изменить описание одежды или повторить запрос позже.";
   }
 
   return "Не удалось выполнить разбор внешности. Попробуйте отправить другое четкое фото с видимым лицом чуть позже.";

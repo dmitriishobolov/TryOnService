@@ -90,6 +90,10 @@ type PendingJob =
       chatId: string;
     }
   | {
+      flow: "legacy";
+      chatId: string;
+    }
+  | {
       flow: "ideal-plan";
       chatId: string;
       inputFiles: StorageObjectRef[];
@@ -328,6 +332,11 @@ export class TelegramBot {
       return;
     }
 
+    if (pending.flow === "legacy") {
+      await this.sendMessage(pending.chatId, callback.result.message, mainMenuMarkup());
+      return;
+    }
+
     if (pending.flow === "ideal-plan") {
       await this.handleIdealPlanCallback(pending, callback.result.message);
       return;
@@ -399,13 +408,64 @@ export class TelegramBot {
     }
 
     const chatId = String(message.chat.id);
+    const pendingJob = this.findPendingJobForChat(chatId);
+
+    if (pendingJob) {
+      logger.info("Telegram update blocked while job is in progress", {
+        chatId,
+        flow: pendingJob.flow,
+        text,
+        hasPhoto: Boolean(message.photo?.length),
+      });
+      await this.sendProcessBusyMessage(chatId, pendingJob);
+      return;
+    }
+
+    const session = this.sessions.get(chatId);
+
+    if (session) {
+      if (text && isCancelCommand(text)) {
+        logger.info("Telegram flow cancelled", {
+          chatId,
+        });
+        this.sessions.delete(chatId);
+        await this.sendMessage(
+          chatId,
+          "Ок, остановились. Выберите, что сделать дальше.",
+          mainMenuMarkup(),
+        );
+        return;
+      }
+
+      if (text && isInterruptingCommand(text)) {
+        logger.info("Telegram command blocked while session is active", {
+          chatId,
+          mode: session.mode,
+          text,
+        });
+        await this.sendActiveSessionMessage(chatId, session);
+        return;
+      }
+
+      if (session.mode === "awaiting-appearance-photo") {
+        await this.handleAppearancePhotoStep(message);
+        return;
+      }
+
+      if (session.mode === "awaiting-ideal-full-body-photo") {
+        await this.handleIdealFullBodyPhotoStep(message);
+        return;
+      }
+
+      await this.handleIdealOutfitChoiceStep(message, session);
+      return;
+    }
 
     if (text === "/start") {
       logger.info("Start command received", {
         chatId,
       });
       await this.setupCommands();
-      this.sessions.delete(chatId);
       await this.sendStartMessage(chatId);
       return;
     }
@@ -414,7 +474,6 @@ export class TelegramBot {
       logger.info("Telegram flow cancelled", {
         chatId,
       });
-      this.sessions.delete(chatId);
       await this.sendMessage(
         chatId,
         "Ок, остановились. Выберите, что сделать дальше.",
@@ -436,23 +495,6 @@ export class TelegramBot {
         chatId,
       });
       await this.startIdealOutfit(chatId);
-      return;
-    }
-
-    const session = this.sessions.get(chatId);
-
-    if (session?.mode === "awaiting-appearance-photo") {
-      await this.handleAppearancePhotoStep(message);
-      return;
-    }
-
-    if (session?.mode === "awaiting-ideal-full-body-photo") {
-      await this.handleIdealFullBodyPhotoStep(message);
-      return;
-    }
-
-    if (session?.mode === "awaiting-ideal-outfit-choice") {
-      await this.handleIdealOutfitChoiceStep(message, session);
       return;
     }
 
@@ -488,6 +530,54 @@ export class TelegramBot {
         "**Идеальный образ**: пришлите фото почти в полный рост, я предложу до 3 образов, а после выбора найду похожие товары с подходящими фото. Если обувь не видна, искать обувь не буду.",
       ].join("\n"),
       mainMenuMarkup(),
+    );
+  }
+
+  private findPendingJobForChat(chatId: string): PendingJob | undefined {
+    for (const pending of this.pendingJobs.values()) {
+      if (pending.chatId === chatId) {
+        return pending;
+      }
+    }
+
+    return undefined;
+  }
+
+  private sendProcessBusyMessage(
+    chatId: string,
+    pending: PendingJob,
+  ): Promise<unknown> {
+    return this.sendMessage(
+      chatId,
+      `Сейчас уже выполняю процесс: **${describePendingJob(pending)}**. Дождитесь результата, чтобы не сбить шаги бота.`,
+      processingMarkup(),
+    );
+  }
+
+  private sendActiveSessionMessage(
+    chatId: string,
+    session: ChatSession,
+  ): Promise<unknown> {
+    if (session.mode === "awaiting-appearance-photo") {
+      return this.sendMessage(
+        chatId,
+        "Сейчас открыт анализ внешности. Пришлите фото с лицом или нажмите «Отмена».",
+        cancelMarkup(),
+      );
+    }
+
+    if (session.mode === "awaiting-ideal-full-body-photo") {
+      return this.sendMessage(
+        chatId,
+        "Сейчас открыт подбор идеального образа. Пришлите фото почти в полный рост или нажмите «Отмена».",
+        cancelMarkup(),
+      );
+    }
+
+    return this.sendMessage(
+      chatId,
+      "Сначала выберите один из предложенных образов или нажмите «Отмена».",
+      idealOutfitChoiceMarkup(session.outfits),
     );
   }
 
@@ -589,6 +679,7 @@ export class TelegramBot {
     message: TelegramMessage,
   ): Promise<void> {
     const chatId = String(message.chat.id);
+    let pendingJobId: string | undefined;
 
     try {
       logger.info("Appearance analysis photo received", {
@@ -621,6 +712,7 @@ export class TelegramBot {
         inputFiles,
       });
       const jobId = getResponseJobId(assignment);
+      pendingJobId = jobId;
 
       this.pendingJobs.set(jobId, {
         flow: "appearance",
@@ -638,7 +730,7 @@ export class TelegramBot {
         await this.sendMessage(
           chatId,
           `Фото принято. Запрос ${assignment.job.id} поставлен в очередь, подберу свободный сервер автоматически.`,
-          mainMenuMarkup(),
+          processingMarkup(),
         );
         void this.waitForAssignmentAndDispatch(
           chatId,
@@ -664,9 +756,12 @@ export class TelegramBot {
       await this.sendMessage(
         chatId,
         `Фото принято. Запрос ${assignment.job.id} отправлен на сервер. Ожидаю ответ.`,
-        mainMenuMarkup(),
+        processingMarkup(),
       );
     } catch (error) {
+      if (pendingJobId) {
+        this.pendingJobs.delete(pendingJobId);
+      }
       logger.error("Failed to create appearance analysis job", {
         chatId,
         error,
@@ -683,6 +778,7 @@ export class TelegramBot {
     message: TelegramMessage,
   ): Promise<void> {
     const chatId = String(message.chat.id);
+    let pendingJobId: string | undefined;
 
     try {
       logger.info("Ideal outfit full-body photo received", {
@@ -707,6 +803,7 @@ export class TelegramBot {
         inputFiles,
       });
       const jobId = getResponseJobId(assignment);
+      pendingJobId = jobId;
 
       this.pendingJobs.set(jobId, {
         flow: "ideal-plan",
@@ -720,7 +817,7 @@ export class TelegramBot {
         await this.sendMessage(
           chatId,
           `Фото принято. Запрос ${assignment.job.id} поставлен в очередь, скоро соберу варианты образов.`,
-          mainMenuMarkup(),
+          processingMarkup(),
         );
         void this.waitForAssignmentAndDispatch(
           chatId,
@@ -739,9 +836,12 @@ export class TelegramBot {
       await this.sendMessage(
         chatId,
         `Фото принято. Запрос ${assignment.job.id} отправлен на сервер. Собираю варианты образов.`,
-        mainMenuMarkup(),
+        processingMarkup(),
       );
     } catch (error) {
+      if (pendingJobId) {
+        this.pendingJobs.delete(pendingJobId);
+      }
       logger.error("Failed to create ideal outfit plan job", {
         chatId,
         error,
@@ -810,6 +910,8 @@ export class TelegramBot {
     session: Extract<ChatSession, { mode: "awaiting-ideal-outfit-choice" }>,
     outfit: IdealOutfit,
   ): Promise<void> {
+    let pendingJobId: string | undefined;
+
     try {
       logger.info("Ideal outfit product search requested", {
         chatId,
@@ -829,6 +931,7 @@ export class TelegramBot {
         inputFiles: session.inputFiles,
       });
       const jobId = getResponseJobId(assignment);
+      pendingJobId = jobId;
 
       this.pendingJobs.set(jobId, {
         flow: "ideal-products",
@@ -842,7 +945,7 @@ export class TelegramBot {
         await this.sendMessage(
           chatId,
           `Образ выбран. Запрос ${assignment.job.id} поставлен в очередь, ищу подходящие товары.`,
-          mainMenuMarkup(),
+          processingMarkup(),
         );
         void this.waitForAssignmentAndDispatch(
           chatId,
@@ -862,9 +965,12 @@ export class TelegramBot {
       await this.sendMessage(
         chatId,
         `Образ выбран: **${outfit.title}**. Ищу товары с подходящими фото.`,
-        mainMenuMarkup(),
+        processingMarkup(),
       );
     } catch (error) {
+      if (pendingJobId) {
+        this.pendingJobs.delete(pendingJobId);
+      }
       logger.error("Failed to create ideal product search job", {
         chatId,
         outfitId: outfit.id,
@@ -928,6 +1034,8 @@ export class TelegramBot {
     candidates: IdealProduct[],
     missingItems: IdealMissingItem[],
   ): Promise<void> {
+    let pendingJobId: string | undefined;
+
     try {
       logger.info("Ideal outfit product image validation requested", {
         chatId: pending.chatId,
@@ -941,6 +1049,7 @@ export class TelegramBot {
         inputFiles: pending.inputFiles,
       });
       const jobId = getResponseJobId(assignment);
+      pendingJobId = jobId;
 
       this.pendingJobs.set(jobId, {
         flow: "ideal-products-validation",
@@ -954,7 +1063,7 @@ export class TelegramBot {
         await this.sendMessage(
           pending.chatId,
           `Нашёл ${candidates.length} кандидатов. Запрос ${assignment.job.id} поставлен в очередь, проверяю фото товаров.`,
-          mainMenuMarkup(),
+          processingMarkup(),
         );
         void this.waitForAssignmentAndDispatch(
           pending.chatId,
@@ -974,9 +1083,12 @@ export class TelegramBot {
       await this.sendMessage(
         pending.chatId,
         `Нашёл ${candidates.length} кандидатов. Проверяю, что на фото только товар без человека и лишней одежды.`,
-        mainMenuMarkup(),
+        processingMarkup(),
       );
     } catch (error) {
+      if (pendingJobId) {
+        this.pendingJobs.delete(pendingJobId);
+      }
       logger.error("Failed to create ideal product validation job", {
         chatId: pending.chatId,
         outfitId: pending.outfit.id,
@@ -1086,6 +1198,7 @@ export class TelegramBot {
     request: ParsedRequestCommand,
   ): Promise<void> {
     const chatId = String(message.chat.id);
+    let pendingJobId: string | undefined;
 
     if (request.model?.provider === "openai" && !message.photo?.length) {
       logger.info("OpenAI request rejected before job creation because photo is missing", {
@@ -1113,6 +1226,13 @@ export class TelegramBot {
         model: request.model,
         inputFiles,
       });
+      const jobId = getResponseJobId(assignment);
+      pendingJobId = jobId;
+
+      this.pendingJobs.set(jobId, {
+        flow: "legacy",
+        chatId,
+      });
 
       if (isQueuedJobResponse(assignment)) {
         logger.info("Job queued", {
@@ -1124,6 +1244,7 @@ export class TelegramBot {
         await this.sendMessage(
           chatId,
           `Запрос ${assignment.job.id} поставлен в очередь. Подберу свободный сервер автоматически.`,
+          processingMarkup(),
         );
         void this.waitForAssignmentAndDispatch(
           chatId,
@@ -1149,8 +1270,12 @@ export class TelegramBot {
       await this.sendMessage(
         chatId,
         `Запрос ${assignment.job.id} отправлен на сервер. Ожидаю ответ.`,
+        processingMarkup(),
       );
     } catch (error) {
+      if (pendingJobId) {
+        this.pendingJobs.delete(pendingJobId);
+      }
       logger.error("Failed to create or dispatch job", {
         chatId,
         provider: request.model?.provider ?? "mock",
@@ -1212,6 +1337,7 @@ export class TelegramBot {
         await this.sendMessage(
           chatId,
           `Запрос ${assignment.job.id} отправлен на сервер. Ожидаю ответ.`,
+          processingMarkup(),
         );
         return;
       } catch (error) {
@@ -1228,7 +1354,9 @@ export class TelegramBot {
     await this.sendMessage(
       chatId,
       `Запрос ${jobId} все еще в очереди. Попробуйте проверить позже.`,
+      mainMenuMarkup(),
     );
+    this.pendingJobs.delete(jobId);
     logger.warn("Queued job polling exhausted", {
       chatId,
       jobId,
@@ -1473,6 +1601,12 @@ function cancelMarkup(): TelegramReplyMarkup {
   };
 }
 
+function processingMarkup(): TelegramReplyMarkup {
+  return {
+    remove_keyboard: true,
+  };
+}
+
 function idealOutfitChoiceMarkup(outfits: IdealOutfit[]): TelegramReplyMarkup {
   return {
     keyboard: [
@@ -1526,8 +1660,40 @@ function isCancelCommand(text: string): boolean {
   );
 }
 
+function isInterruptingCommand(text: string): boolean {
+  const normalized = normalizeCommandText(text);
+
+  return (
+    normalized.startsWith("/") ||
+    normalized === "request" ||
+    isAppearanceAnalysisCommand(text) ||
+    isIdealOutfitCommand(text) ||
+    parseRequestCommand(text) !== undefined
+  );
+}
+
 function normalizeCommandText(text: string): string {
   return text.trim().toLowerCase();
+}
+
+function describePendingJob(pending: PendingJob): string {
+  if (pending.flow === "appearance") {
+    return "анализ внешности";
+  }
+
+  if (pending.flow === "legacy") {
+    return "обработка запроса";
+  }
+
+  if (pending.flow === "ideal-plan") {
+    return "подбор вариантов образа";
+  }
+
+  if (pending.flow === "ideal-products") {
+    return "поиск товаров для образа";
+  }
+
+  return "проверка фото товаров";
 }
 
 function createAppearanceAnalysisModelSelection(): TryOnModelSelection {

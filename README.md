@@ -9,8 +9,8 @@ TryOnService - сервис примерки на базе AI API. Проект 
 Сейчас реализован первый вертикальный срез на Node.js/TypeScript:
 
 - coordinator регистрирует worker'ы и service clients, получает heartbeat, ведет очередь jobs, выбирает worker по capacity/capabilities, готовит assignment на worker-е и возвращает клиенту выбранный worker;
-- object storage node регистрируется в coordinator по отдельному ключу, отправляет heartbeat и принимает streaming upload/download от клиентов и worker'ов по короткоживущему signed storage token;
-- worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat с учетом running jobs и pending assignments, принимает jobs напрямую от клиентов только после prepare от coordinator, выбирает AI provider из `payload.model.provider` конкретной job и при наличии `payload.market` подтягивает товары/фото из marketplace adapters;
+- object storage node регистрируется в coordinator по отдельному ключу, отправляет heartbeat, принимает streaming upload/download от клиентов и worker'ов по короткоживущему signed storage token и ведет catalog index cache entries;
+- worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat с учетом running jobs и pending assignments, принимает jobs напрямую от клиентов только после prepare от coordinator, выбирает AI provider из `payload.model.provider` конкретной job и при наличии `payload.market` подтягивает товары/фото из marketplace adapters с shared storage-cache;
 - Telegram client подбирает свободный callback-порт, регистрируется в coordinator, по `/start` показывает меню `Анализ внешности` и `Идеальный образ`, умеет отменять сценарии, получает assignment или `queued`-ответ, polling-ом дожидается свободного worker'а, отправляет job worker'у напрямую и продолжает сценарий после callback; `Идеальный образ` получает товарные кандидаты через marketplace adapters Ozon/Wildberries, затем отдает OpenAI только vision-проверку изображений и генерацию clean-card на белом фоне; длинные ответы режутся на несколько сообщений и Markdown отображается форматированно; фото с подписью `/request openai:gpt-5.6-luna` также отправляется на OpenAI/ChatGPT vision adapter с выбранной моделью из запроса;
 - coordinator защищает регистрацию worker'ов, service clients и storage-node от перебора ключа: после достижения лимита неверных попыток IP блокируется; при `COORDINATOR_PERSISTENCE=postgres` ban сохраняется в БД и переживает restart;
 - registration, service-to-service, dispatch token, client callback, storage access и admin/debug доступ используют разные ключи;
@@ -70,9 +70,11 @@ Postgres принадлежит coordinator. Worker и client не получа�
 - ссылки на storage-объекты внутри payload/result jobs; инкрементальная metadata объектов и `usedBytes` ведутся самим storage-node.
 - security audit events и persistent registration bans, если включен Postgres backend.
 
-Файлы и изображения хранятся в отдельном object storage node. Есть dev backend `STORAGE_DRIVER=local`, который пишет файлы в `STORAGE_LOCAL_ROOT`, и S3-compatible backend `STORAGE_DRIVER=s3`. Storage-node ведет metadata index (`STORAGE_METADATA_PATH` или файл рядом с local root), поэтому `usedBytes` обновляется инкрементально при PUT/DELETE и heartbeat не обходит всю папку. В jobs можно передавать `payload.inputFiles`, а worker result может вернуть `result.files`. Ref, который вернул storage-node, содержит `storageId`, чтобы coordinator выдал worker'у доступ к правильному узлу.
+Файлы и изображения хранятся в отдельных object storage node. Есть dev backend `STORAGE_DRIVER=local`, который пишет файлы в `STORAGE_LOCAL_ROOT`, и S3-compatible backend `STORAGE_DRIVER=s3`. Storage-node ведет metadata index (`STORAGE_METADATA_PATH` или файл рядом с local root), поэтому `usedBytes` обновляется инкрементально при PUT/DELETE и heartbeat не обходит всю папку. Дополнительно storage-node ведет catalog index (`STORAGE_CATALOG_PATH` или файл рядом с root), где cache keys указывают на объекты, например clean product card по URL товара или JSON marketplace search. В jobs можно передавать `payload.inputFiles`, а worker result может вернуть `result.files`. Ref, который вернул storage-node, содержит `storageId`, чтобы coordinator выдал worker'у доступ к правильному узлу.
 
 Coordinator не принимает и не отдает бинарные файлы. Он выдает `POST /storage/access`: клиент или worker получает `StorageAccessAssignment` с `objectBaseUrl`, scoped `accessToken`, TTL и, при необходимости, `keyPrefix`. После этого upload/download идет напрямую в storage-node через `PUT /objects/<key>` и `GET /objects/<key>`. Для внешних preview/download URL, например Telegram `sendPhoto`, worker может вернуть `StorageObjectRef.url` с тем же storage token в query `accessToken`.
+
+Для distributed cache используется `POST /storage/catalog/lookup`: client/worker передает cacheKeys и kinds, coordinator опрашивает все свежие storage-node через `STORAGE_SERVICE_KEY` и возвращает все locations с read-token на конкретный object prefix. Так несколько storage-node могут хранить дополняющую информацию по одному товару: например один хранит `market-product`, другой - `product-card-image`.
 
 Если job содержит несколько входных файлов, они должны лежать на одном storage-node и под общим prefix, например `clients/<clientId>/input/<requestId>/...`. Coordinator не выдает клиенту доступ за пределы `clients/<clientId>`; worker может получить доступ к `workers/<workerId>` или `jobs/<jobId>`/общему job prefix, который выдал coordinator.
 
@@ -106,6 +108,8 @@ Object storage node:
 - при старте выбирает свободный порт, регистрируется в coordinator по `STORAGE_REGISTRATION_KEY` и сообщает публичный endpoint;
 - отправляет heartbeat coordinator-у по `STORAGE_SERVICE_KEY`;
 - принимает `PUT /objects/<key>` и `GET /objects/<key>` только с signed token purpose `storage-access`;
+- принимает `POST /catalog/entries` для регистрации cache entry на уже загруженный objectKey;
+- отвечает coordinator-у на `POST /catalog/lookup`, если на узле есть нужный `cacheKey`;
 - хранит файлы локально или в S3-compatible backend за единым `ObjectStorage` интерфейсом;
 - пишет и читает объекты streaming-ом, без полной загрузки файла в память процесса;
 - ведет metadata index и `usedBytes` инкрементально, без рекурсивного обхода storage на heartbeat.
@@ -116,7 +120,7 @@ Worker:
 - сообщает о готовности, capacity и поддерживаемых моделях/пайплайнах;
 - держит pending assignments, принимает jobs от клиентов по signed dispatch token, запускает runner и обновляет статус выполнения;
 - выбирает adapter из `apps/worker/models` через `payload.model.provider`: доступны `mock`, `pruna`, `pixelcut`, `tryoncloud`, `genlook`, `wearfits`, `openai`;
-- выбирает marketplace adapters через `payload.market.providers`: доступны `aliexpress`, `ozon`, `wildberries`; Ozon/Wildberries поддерживают public parsing без seller-token, найденные товары возвращаются в `TryOnJobResult.marketProducts`;
+- выбирает marketplace adapters через `payload.market.providers`: доступны `aliexpress`, `ozon`, `wildberries`; Ozon/Wildberries поддерживают public parsing без seller-token, найденные товары возвращаются в `TryOnJobResult.marketProducts`, а результаты поиска кешируются в storage catalog;
 - объявляет provider-specific capabilities по доступным provider settings, чтобы coordinator не выдавал job на неподходящий worker;
 - для virtual try-on provider-ов ожидает в `payload.inputFiles` фото пользователя и фото одежды/товара, индексы задаются `TRYON_PERSON_IMAGE_INDEX` и `TRYON_GARMENT_IMAGE_INDEX`; OpenAI adapter использует фото пользователя для анализа внешности и wardrobe-рекомендаций, принимает `providerModel`/`options` из job, поддерживает `webSearch`, `inputImageUrls`, `imageGeneration` и `toolChoice`, а generated files сохраняет в storage и возвращает в `result.files`;
 - отправляет клиентский результат напрямую в callback URL из assignment;
@@ -187,7 +191,7 @@ npm run dev:telegram
 npm run devtest
 ```
 
-Команда пересобирает TypeScript в `devtest/app`, создает `devtest/.env`, запускает coordinator, storage-node, worker и Telegram client из папки `devtest`, а логи пишет в `devtest/logs`. Local object storage в этом режиме находится в `devtest/runtime/storage/objects`, metadata index - в `devtest/runtime/storage/metadata.json`.
+Команда пересобирает TypeScript в `devtest/app`, создает `devtest/.env`, запускает coordinator, storage-node, worker и Telegram client из папки `devtest`, а логи пишет в `devtest/logs`. Local object storage в этом режиме находится в `devtest/runtime/storage/objects`, metadata index - в `devtest/runtime/storage/metadata.json`, catalog index - в `devtest/runtime/storage/catalog.json`. Для проверки нескольких storage-node задайте `DEVTEST_STORAGE_COUNT=2` или больше; дополнительные узлы получат `runtime/storage-2/...`, `runtime/storage-3/...`.
 
 Смотреть цепочку обработки job удобнее по логам:
 
@@ -348,6 +352,7 @@ npm run build:dist
 - `STORAGE_DRIVER` - `local` или `s3`.
 - `STORAGE_LOCAL_ROOT` - локальная папка dev storage-node.
 - `STORAGE_METADATA_PATH` - путь к metadata index storage-node; если пусто, выбирается рядом с storage root.
+- `STORAGE_CATALOG_PATH` - путь к catalog index storage-node; если пусто, выбирается рядом с storage root.
 - `STORAGE_S3_ENDPOINT`, `STORAGE_S3_REGION`, `STORAGE_S3_BUCKET`, `STORAGE_S3_ACCESS_KEY_ID`, `STORAGE_S3_SECRET_ACCESS_KEY`, `STORAGE_S3_FORCE_PATH_STYLE` - настройки S3-compatible backend.
 - `STORAGE_CAPACITY_BYTES` - опциональная capacity storage-node для выбора coordinator-ом.
 - `STORAGE_MAX_OBJECT_BYTES` - максимальный размер одного объекта для прямого upload.

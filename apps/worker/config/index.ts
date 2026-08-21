@@ -136,6 +136,8 @@ export interface WorkerMarketConfig {
   enabled: boolean;
   providers: MarketProvider[];
   searchLimit: number;
+  storageCacheEnabled: boolean;
+  storageCacheTtlMs: number;
   aliexpress: AliExpressMarketConfig;
   ozon: OzonMarketConfig;
   wildberries: WildberriesMarketConfig;
@@ -561,6 +563,11 @@ export function loadWorkerConfig(): WorkerConfig {
       enabled: readBoolean("MARKET_ENABLED", true),
       providers: readMarketProviders(),
       searchLimit: readNumber("MARKET_SEARCH_LIMIT", 6),
+      storageCacheEnabled: readBoolean("MARKET_STORAGE_CACHE_ENABLED", true),
+      storageCacheTtlMs: readNumber(
+        "MARKET_STORAGE_CACHE_TTL_MS",
+        24 * 60 * 60 * 1_000,
+      ),
       aliexpress: {
         apiKey: readOptionalString("ALIEXPRESS_APP_KEY"),
         apiSecret: readOptionalString("ALIEXPRESS_APP_SECRET"),

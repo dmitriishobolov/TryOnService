@@ -6,6 +6,7 @@ import { createLogger } from "../../shared/logger.js";
 import type {
   StorageObjectRef,
   StorageAccessAssignment,
+  StorageCatalogEntryUpsertRequest,
   MarketProductRef,
   MarketProvider,
   MarketSearchSelection,
@@ -194,6 +195,7 @@ interface IdealProductCardCacheRef {
   imageKey: string;
   metadataKey: string;
   canonicalProductUrl: string;
+  catalogCacheKey: string;
 }
 
 interface IdealMissingItem {
@@ -566,6 +568,15 @@ export class TelegramBot {
       this.config.clientId,
       product.productUrl,
     );
+    const catalogProduct = await this.getCatalogCachedIdealProductCard(
+      chatId,
+      product,
+      cache,
+    );
+
+    if (catalogProduct) {
+      return catalogProduct;
+    }
 
     try {
       const storage = await this.requestProductCardCacheAccess(cache, "read");
@@ -616,6 +627,64 @@ export class TelegramBot {
       });
       return undefined;
     }
+  }
+
+  private async getCatalogCachedIdealProductCard(
+    chatId: string,
+    product: IdealProduct,
+    cache: IdealProductCardCacheRef,
+  ): Promise<IdealProduct | undefined> {
+    try {
+      const lookup = await this.coordinator.lookupStorageCatalog({
+        cacheKeys: [cache.catalogCacheKey],
+        kinds: ["product-card-image"],
+      });
+
+      for (const location of lookup.locations) {
+        if (!location.objectUrl) {
+          continue;
+        }
+
+        const response = await fetchWithTimeout(
+          location.objectUrl,
+          {
+            method: "GET",
+            headers: {
+              Accept: "image/*,*/*;q=0.8",
+            },
+          },
+          this.config.httpClientTimeoutMs,
+        );
+
+        if (!response.ok) {
+          await response.body?.cancel();
+          continue;
+        }
+
+        await response.body?.cancel();
+        logger.info("Ideal outfit clean product card catalog cache hit", {
+          chatId,
+          storageId: location.storageId,
+          key: location.entry.object.key,
+          productUrl: product.productUrl,
+        });
+
+        return {
+          ...product,
+          originalImageUrl: product.originalImageUrl ?? product.imageUrl,
+          imageUrl: location.objectUrl,
+        };
+      }
+    } catch (error) {
+      logger.warn("Ideal outfit clean product card catalog lookup failed", {
+        chatId,
+        productUrl: product.productUrl,
+        cacheKey: cache.catalogCacheKey,
+        error,
+      });
+    }
+
+    return undefined;
   }
 
   private async cacheIdealProductCard(
@@ -704,6 +773,45 @@ export class TelegramBot {
         });
       }
 
+      try {
+        await this.putStorageCatalogEntry(storage, {
+          entry: {
+            cacheKey: cache.catalogCacheKey,
+            kind: "product-card-image",
+            objectKey: payload.object.key,
+            metadata: {
+              productUrl: product.productUrl,
+              canonicalProductUrl: cache.canonicalProductUrl,
+              title: product.title,
+              category: product.category,
+              slot: product.slot,
+              source: product.source,
+            },
+          },
+        });
+        await this.putStorageCatalogEntry(storage, {
+          entry: {
+            cacheKey: cache.catalogCacheKey,
+            kind: "product-card-metadata",
+            objectKey: cache.metadataKey,
+            metadata: {
+              productUrl: product.productUrl,
+              canonicalProductUrl: cache.canonicalProductUrl,
+              title: product.title,
+              category: product.category,
+            },
+          },
+        });
+      } catch (catalogError) {
+        logger.warn("Ideal outfit clean product card catalog entry failed", {
+          chatId,
+          key: payload.object.key,
+          metadataKey: cache.metadataKey,
+          productUrl: product.productUrl,
+          error: catalogError,
+        });
+      }
+
       logger.info("Ideal outfit clean product card cached", {
         chatId,
         key: payload.object.key,
@@ -778,6 +886,30 @@ export class TelegramBot {
         `Product card cache metadata upload failed with ${response.status}`,
       );
     }
+  }
+
+  private async putStorageCatalogEntry(
+    storage: StorageAccessAssignment,
+    request: StorageCatalogEntryUpsertRequest,
+  ): Promise<void> {
+    const response = await fetchWithTimeout(
+      `${storage.baseUrl.replace(/\/$/, "")}/catalog/entries`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "x-storage-access-token": storage.accessToken,
+        },
+        body: JSON.stringify(request),
+      },
+      this.config.httpClientTimeoutMs,
+    );
+
+    if (!response.ok) {
+      throw new Error(`Storage catalog entry upload failed with ${response.status}`);
+    }
+
+    await response.body?.cancel();
   }
 
   private async requestProductCardCacheAccess(
@@ -3887,6 +4019,7 @@ function createIdealProductCardCacheRef(
     imageKey: `${keyPrefix}/${hash}.png`,
     metadataKey: `${keyPrefix}/${hash}.json`,
     canonicalProductUrl,
+    catalogCacheKey: `product-card:${hash}`,
   };
 }
 

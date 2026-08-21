@@ -11,6 +11,7 @@
 - результат обработки, включая `TryOnJobResult.marketProducts` для найденных marketplace-товаров;
 - storage object refs для входных и выходных файлов, включая `storageId` узла, где лежит объект;
 - регистрацию storage-node, heartbeat storage-node и выдачу storage-access;
+- storage catalog entries и lookup locations для distributed cache объектов;
 - ошибки API;
 - регистрацию service client;
 - heartbeat service client;

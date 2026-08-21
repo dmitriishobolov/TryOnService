@@ -10,6 +10,7 @@ API для клиентов и интеграций должен отвечат�
 - регистрацию service client при запуске;
 - прием heartbeat от service client;
 - выдачу storage-access для прямого upload/download в storage-node;
+- lookup storage catalog по cacheKey товара/поиска без проксирования файлов;
 - получение статуса job;
 - получение состояния обработки без обязательного хранения клиентского результата;
 - отмену job, если сценарий это поддерживает.
@@ -19,6 +20,8 @@ API для клиентов и интеграций должен отвечат�
 `GET /jobs/:jobId/assignment?sourceClientId=<clientId>` позволяет клиенту polling-ом дождаться assignment-а для своей queued job. Endpoint требует `x-client-key` и не выдает assignment для чужого `sourceClientId`.
 
 `POST /storage/access` выдает клиенту или worker'у подходящий storage-node и scoped signed token. После этого файлы загружаются и читаются напрямую через storage-node, а coordinator получает только `StorageObjectRef` в payload/result.
+
+`POST /storage/catalog/lookup` принимает `requesterId`, `requesterType`, `cacheKeys` и optional `kinds`. Endpoint требует `x-client-key` или `x-worker-service-key`, опрашивает все свежие storage-node через `STORAGE_SERVICE_KEY` и возвращает `locations`: storageId, baseUrl, найденный catalog entry, read-only `StorageAccessAssignment` и signed `objectUrl` на referenced object. Если разные storage-node хранят дополняющие entries по одному cacheKey, coordinator вернет все locations.
 
 Coordinator жестко нормализует и проверяет `keyPrefix`: client может получить доступ только к `clients/<clientId>` и вложенным ключам, worker - к `workers/<workerId>` или `jobs/...`. Запрос чужого prefix возвращает `403 storage_prefix_forbidden` и пишется в audit log.
 
@@ -40,6 +43,7 @@ Storage-node API на стороне coordinator отвечает за:
 - регистрацию storage-node через `POST /storage/register` и `x-storage-registration-key`;
 - heartbeat через `POST /storage/:storageId/heartbeat` и `x-storage-service-key`;
 - выдачу storage-access через `POST /storage/access` для clients и worker'ов.
+- lookup cache entries через `POST /storage/catalog/lookup` для clients и worker'ов.
 
 Coordinator не принимает `dataBase64` и не отдает бинарные файлы. Его storage API - это control-plane: выбрать storage-node, проверить ключи, подписать token и сохранить registry state.
 
@@ -87,6 +91,7 @@ Security events пишутся в audit store; в Postgres это `tryon_securit
 - `x-worker-service-key` - heartbeat worker'а, prepare assignment, progress/result и cancel после регистрации.
 - `x-storage-registration-key` - registration gate storage-node.
 - `x-storage-service-key` - heartbeat/health storage-node после регистрации.
+- `POST /storage/catalog/lookup` - lookup cached product/search locations; требует client или worker service key и не проксирует объект.
 - `x-storage-access-token` - не используется coordinator-ом; с ним client/worker ходят напрямую в storage-node.
 - `x-admin-key` - debug/admin ручки `GET /health`, `GET /jobs`, `GET /jobs/:id`.
 - `GET /security/events?limit=100` - admin endpoint для просмотра audit events; требует `x-admin-key`.

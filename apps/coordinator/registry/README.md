@@ -29,6 +29,8 @@ Registry хранит сведения о worker'ах, service clients и storag
 - `driver` - текущий backend storage-node, сейчас `local` или будущий `s3`.
 - `status` - `ready` или `offline`.
 - `usedBytes` и `capacityBytes` - опциональные данные загрузки storage-node для выбора подходящего узла.
+
+Storage registry может хранить несколько active storage-node. Для обычного `POST /storage/access` coordinator выбирает один свежий узел с доступной capacity. Для `POST /storage/catalog/lookup` coordinator опрашивает все свежие storage-node и возвращает все locations, где найден нужный cache entry.
 - `lastHeartbeatAt` - время последнего heartbeat.
 
 ## Жизненный цикл worker

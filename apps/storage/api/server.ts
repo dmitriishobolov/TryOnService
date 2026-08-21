@@ -2,9 +2,14 @@ import { createServer } from "node:http";
 import type { IncomingHttpHeaders, Server } from "node:http";
 import { pipeline } from "node:stream/promises";
 
+import {
+  isStorageCatalogEntryUpsertRequest,
+  isStorageCatalogNodeLookupRequest,
+} from "../../shared/contracts/index.js";
 import { verifyDispatchToken } from "../../shared/dispatchToken.js";
 import {
   requestUrl,
+  readJsonBody,
   writeCaughtError,
   writeError,
   writeJson,
@@ -18,17 +23,19 @@ import {
   type ObjectStorage,
 } from "../../shared/storage/index.js";
 import type { StorageConfig } from "../config/index.js";
+import type { StorageCatalogIndex } from "../catalog/index.js";
 
 const logger = createLogger("storage");
 
 interface StorageServerDeps {
   config: StorageConfig;
   objects: ObjectStorage;
+  catalog: StorageCatalogIndex;
   getUsedBytes: () => Promise<number | undefined>;
 }
 
 export function createStorageServer(deps: StorageServerDeps): Server {
-  const { config, objects, getUsedBytes } = deps;
+  const { config, objects, catalog, getUsedBytes } = deps;
   const rateLimiter = new FixedWindowRateLimiter(
     config.apiRateLimitMaxRequests,
     config.apiRateLimitWindowMs,
@@ -61,6 +68,86 @@ export function createStorageServer(deps: StorageServerDeps): Server {
           driver: config.driver,
           usedBytes: await getUsedBytes(),
           capacityBytes: config.capacityBytes,
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/catalog/lookup") {
+        if (!hasStorageServiceKey(request.headers, config)) {
+          writeError(response, 401, "unauthorized_storage", "Invalid storage key");
+          return;
+        }
+
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
+
+        if (!isStorageCatalogNodeLookupRequest(body)) {
+          writeError(
+            response,
+            400,
+            "invalid_storage_catalog_lookup",
+            "Invalid storage catalog lookup payload",
+          );
+          return;
+        }
+
+        const entries = await catalog.lookup(body);
+
+        writeJson(response, 200, {
+          entries,
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/catalog/entries") {
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
+
+        if (!isStorageCatalogEntryUpsertRequest(body)) {
+          writeError(
+            response,
+            400,
+            "invalid_storage_catalog_entry",
+            "Invalid storage catalog entry payload",
+          );
+          return;
+        }
+
+        const key = normalizeStorageKey(body.entry.objectKey);
+
+        if (!hasStorageObjectAccess(request.headers, config, key, "write")) {
+          logger.warn("Storage catalog entry upsert rejected", {
+            storageId: config.storageId,
+            key,
+            cacheKey: body.entry.cacheKey,
+            kind: body.entry.kind,
+            remoteAddress: request.socket.remoteAddress,
+          });
+          writeError(
+            response,
+            401,
+            "unauthorized_storage_catalog",
+            "Invalid storage access token",
+          );
+          return;
+        }
+
+        const entry = await catalog.upsert({
+          ...body.entry,
+          objectKey: key,
+        });
+
+        logger.info("Storage catalog entry upserted", {
+          storageId: config.storageId,
+          key,
+          cacheKey: entry.cacheKey,
+          kind: entry.kind,
+        });
+
+        writeJson(response, 201, {
+          entry,
         });
         return;
       }

@@ -9,6 +9,10 @@ import { createLogger } from "../../shared/logger.js";
 import type { CoordinatorClient } from "../api/coordinatorClient.js";
 import type { WorkerConfig } from "../config/index.js";
 import { searchMarketplaceProducts } from "../market/index.js";
+import {
+  readCachedMarketplaceProducts,
+  writeCachedMarketplaceProducts,
+} from "../market/storageCache.js";
 import { MarketplaceError } from "../market/utils.js";
 import { runSelectedTryOnModel } from "../models/index.js";
 import { TryOnModelError } from "../models/providerUtils.js";
@@ -47,6 +51,7 @@ export async function runWorkerJob(
     const marketProducts = await searchRequestedMarketProducts(
       job,
       config,
+      coordinator,
       signal,
     );
     logger.info("Model execution started", {
@@ -183,6 +188,7 @@ export async function runWorkerJob(
 async function searchRequestedMarketProducts(
   job: WorkerJobRequest,
   config: WorkerConfig,
+  coordinator: CoordinatorClient,
   signal?: AbortSignal,
 ): Promise<MarketProductRef[]> {
   const market = job.payload.market;
@@ -199,6 +205,22 @@ async function searchRequestedMarketProducts(
       limit: market.limit,
       required: market.required ?? false,
     });
+    const cachedProducts = await readCachedMarketplaceProducts({
+      job,
+      config,
+      coordinator,
+    });
+
+    if (cachedProducts) {
+      logger.info("Marketplace product search served from storage cache", {
+        jobId: job.jobId,
+        products: cachedProducts.length,
+        providers: [...new Set(cachedProducts.map((product) => product.provider))],
+      });
+
+      return cachedProducts;
+    }
+
     const products = await searchMarketplaceProducts({
       selection: market,
       config,
@@ -210,6 +232,12 @@ async function searchRequestedMarketProducts(
       jobId: job.jobId,
       products: products.length,
       providers: [...new Set(products.map((product) => product.provider))],
+    });
+    void writeCachedMarketplaceProducts({
+      job,
+      config,
+      coordinator,
+      products,
     });
 
     return products;

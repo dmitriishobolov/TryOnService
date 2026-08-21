@@ -10,6 +10,7 @@ import {
 } from "../shared/storage/index.js";
 import { StorageCoordinatorClient } from "./api/coordinatorClient.js";
 import { createStorageServer } from "./api/server.js";
+import { StorageCatalogIndex } from "./catalog/index.js";
 import { loadStorageConfig, type StorageConfig } from "./config/index.js";
 
 loadEnvFile();
@@ -26,12 +27,14 @@ if (selectedPort !== config.port) {
 }
 
 const objects = createObjectStorage(config);
+const catalog = createStorageCatalog(config, objects);
 const coordinator = new StorageCoordinatorClient(config);
 let isRegistered = false;
 
 const server = createStorageServer({
   config,
   objects,
+  catalog,
   getUsedBytes: async () => objects.getUsedBytes(),
 });
 
@@ -125,5 +128,20 @@ function createObjectStorage(config: StorageConfig): ObjectStorage {
     publicBaseUrl: config.publicUrl
       ? `${config.publicUrl.replace(/\/$/, "")}/objects`
       : undefined,
+  });
+}
+
+function createStorageCatalog(
+  config: StorageConfig,
+  objects: ObjectStorage,
+): StorageCatalogIndex {
+  const catalogPath = config.catalogPath
+    ? resolve(process.cwd(), config.catalogPath)
+    : resolve(process.cwd(), config.localRoot, ".tryon-storage-catalog.json");
+
+  return new StorageCatalogIndex({
+    catalogPath,
+    storageId: config.storageId,
+    objects,
   });
 }

@@ -85,14 +85,20 @@ async function buildDevtestEnv() {
   }
 
   const reservedPorts = new Set();
+  const storageCount = readPositiveInteger(merged.DEVTEST_STORAGE_COUNT, 1);
   const coordinatorPort = await findAvailablePort(
     readPort(merged.COORDINATOR_PORT, 3000),
     reservedPorts,
   );
-  const storagePort = await findAvailablePort(
-    readPort(merged.STORAGE_PORT, 4200),
-    reservedPorts,
-  );
+  const storagePorts = [];
+  const preferredStoragePort = readPort(merged.STORAGE_PORT, 4200);
+
+  for (let index = 0; index < storageCount; index += 1) {
+    storagePorts.push(
+      await findAvailablePort(preferredStoragePort + index, reservedPorts),
+    );
+  }
+
   const workerPort = await findAvailablePort(
     readPort(merged.WORKER_PORT, 4001),
     reservedPorts,
@@ -109,6 +115,8 @@ async function buildDevtestEnv() {
     DEVTEST_SERVICES:
       merged.DEVTEST_SERVICES?.trim() || "coordinator,storage,worker,telegram",
     DEVTEST_CLEAN: merged.DEVTEST_CLEAN?.trim() || "true",
+    DEVTEST_STORAGE_COUNT: String(storageCount),
+    DEVTEST_STORAGE_PORTS: storagePorts.join(","),
     DEVTEST_REQUIRE_TELEGRAM:
       merged.DEVTEST_REQUIRE_TELEGRAM?.trim() || "false",
     COORDINATOR_PORT: String(coordinatorPort),
@@ -116,12 +124,13 @@ async function buildDevtestEnv() {
     COORDINATOR_URL: `http://localhost:${coordinatorPort}`,
     COORDINATOR_PERSISTENCE: "memory",
     REQUIRE_HTTPS_ENDPOINTS: "false",
-    STORAGE_PORT: String(storagePort),
+    STORAGE_PORT: String(storagePorts[0]),
     STORAGE_PUBLIC_PROTOCOL: "http",
     STORAGE_PUBLIC_URL: "",
     STORAGE_DRIVER: "local",
     STORAGE_LOCAL_ROOT: "runtime/storage/objects",
     STORAGE_METADATA_PATH: "runtime/storage/metadata.json",
+    STORAGE_CATALOG_PATH: "runtime/storage/catalog.json",
     STORAGE_S3_ENDPOINT: "",
     STORAGE_S3_REGION: merged.STORAGE_S3_REGION?.trim() || "us-east-1",
     STORAGE_S3_BUCKET: "",
@@ -161,17 +170,14 @@ function compileTypescript() {
 }
 
 function getServicesToStart(selected, env) {
+  const storageServices = createStorageServices(env);
   const allServices = [
     {
       id: "coordinator",
       title: "coordinator",
       entry: "app/apps/coordinator/index.js",
     },
-    {
-      id: "storage",
-      title: "storage",
-      entry: "app/apps/storage/index.js",
-    },
+    ...storageServices,
     {
       id: "worker",
       title: "worker",
@@ -189,7 +195,7 @@ function getServicesToStart(selected, env) {
   ];
 
   return allServices.filter((service) => {
-    if (!selected.has(service.id)) {
+    if (!selected.has(service.id) && !selected.has(service.group)) {
       return false;
     }
 
@@ -217,6 +223,7 @@ function startService(service, env) {
     env: {
       ...process.env,
       ...env,
+      ...(service.env ?? {}),
       ENV_FILE: ".env",
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -302,6 +309,7 @@ function shutdown(reason, code) {
 
 function writeDevtestReadme(env, selectedServices) {
   const services = [...selectedServices].join(", ");
+  const storagePorts = splitCsv(env.DEVTEST_STORAGE_PORTS);
 
   writeFileSync(
     join(devtestDir, "README.md"),
@@ -317,7 +325,7 @@ must stay here instead of source folders or \`dist\`.
 Selected services: \`${services}\`
 
 - coordinator: ${env.COORDINATOR_URL}
-- storage preferred port: ${env.STORAGE_PORT}
+- storage preferred ports: ${storagePorts.join(", ")}
 - worker preferred port: ${env.WORKER_PORT}
 - telegram preferred callback port: ${env.TELEGRAM_CLIENT_PORT}
 
@@ -326,6 +334,7 @@ Selected services: \`${services}\`
 - \`app/\` - compiled JavaScript
 - \`.env\` - generated runtime env
 - \`runtime/storage/objects/\` - local object storage data
+- \`runtime/storage*/catalog.json\` - local storage catalog index files
 - \`logs/\` - service logs
 `,
   );
@@ -337,6 +346,8 @@ function buildEnvFile(env) {
     "DEVTEST_ENV_FILE",
     "DEVTEST_SERVICES",
     "DEVTEST_CLEAN",
+    "DEVTEST_STORAGE_COUNT",
+    "DEVTEST_STORAGE_PORTS",
     "DEVTEST_REQUIRE_TELEGRAM",
     "LOG_LEVEL",
     "COORDINATOR_URL",
@@ -385,6 +396,7 @@ function buildEnvFile(env) {
     "STORAGE_DRIVER",
     "STORAGE_LOCAL_ROOT",
     "STORAGE_METADATA_PATH",
+    "STORAGE_CATALOG_PATH",
     "STORAGE_S3_ENDPOINT",
     "STORAGE_S3_REGION",
     "STORAGE_S3_BUCKET",
@@ -454,6 +466,8 @@ function buildEnvFile(env) {
     "MARKET_ENABLED",
     "MARKET_PROVIDERS",
     "MARKET_SEARCH_LIMIT",
+    "MARKET_STORAGE_CACHE_ENABLED",
+    "MARKET_STORAGE_CACHE_TTL_MS",
     "ALIEXPRESS_APP_KEY",
     "ALIEXPRESS_APP_SECRET",
     "ALIEXPRESS_APP_SIGNATURE",
@@ -582,6 +596,39 @@ function readServices(rawValue) {
   return services;
 }
 
+function createStorageServices(env) {
+  const count = readPositiveInteger(env.DEVTEST_STORAGE_COUNT, 1);
+  const ports = splitCsv(env.DEVTEST_STORAGE_PORTS);
+  const baseStorageId = (env.STORAGE_ID?.trim() || "local-storage-1").replace(
+    /-\d+$/,
+    "",
+  );
+
+  return Array.from({ length: count }, (_value, index) => {
+    const number = index + 1;
+    const suffix = number === 1 ? "" : `-${number}`;
+    const titleSuffix = count === 1 ? "" : `-${number}`;
+    const rootPrefix = number === 1 ? "runtime/storage" : `runtime/storage-${number}`;
+
+    return {
+      id: `storage${suffix}`,
+      group: "storage",
+      title: `storage${titleSuffix}`,
+      entry: "app/apps/storage/index.js",
+      env: {
+        STORAGE_ID:
+          number === 1 && env.STORAGE_ID?.trim()
+            ? env.STORAGE_ID
+            : `${baseStorageId}-${number}`,
+        STORAGE_PORT: ports[index] ?? env.STORAGE_PORT,
+        STORAGE_LOCAL_ROOT: `${rootPrefix}/objects`,
+        STORAGE_METADATA_PATH: `${rootPrefix}/metadata.json`,
+        STORAGE_CATALOG_PATH: `${rootPrefix}/catalog.json`,
+      },
+    };
+  });
+}
+
 function readBoolean(rawValue, fallback) {
   const value = rawValue?.trim().toLowerCase();
 
@@ -600,6 +647,16 @@ function readBoolean(rawValue, fallback) {
   throw new Error(`Expected boolean value, got: ${rawValue}`);
 }
 
+function readPositiveInteger(rawValue, fallback) {
+  const value = Number(rawValue || fallback);
+
+  if (!Number.isInteger(value) || value <= 0 || value > 20) {
+    throw new Error(`Invalid positive integer value: ${rawValue}`);
+  }
+
+  return value;
+}
+
 function readPort(rawValue, fallback) {
   const value = Number(rawValue || fallback);
 
@@ -608,6 +665,13 @@ function readPort(rawValue, fallback) {
   }
 
   return value;
+}
+
+function splitCsv(value) {
+  return String(value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function hasTelegramToken(env) {

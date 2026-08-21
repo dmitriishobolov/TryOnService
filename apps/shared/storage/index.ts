@@ -46,6 +46,7 @@ export interface GetStorageObjectResponse {
 
 export interface ObjectStorage {
   putObject(request: PutStorageObjectRequest): Promise<StorageObjectRef>;
+  headObject(key: string): Promise<StorageObjectRef | undefined>;
   getObject(key: string): Promise<GetStorageObjectResponse>;
   deleteObject(key: string): Promise<void>;
   createKey(prefix: string, filename?: string): string;
@@ -108,6 +109,26 @@ export class LocalObjectStorage implements ObjectStorage {
     await this.metadata.set(ref);
 
     return ref;
+  }
+
+  async headObject(key: string): Promise<StorageObjectRef | undefined> {
+    const normalizedKey = normalizeStorageKey(key);
+    const path = this.resolveObjectPath(normalizedKey);
+
+    try {
+      const info = await stat(path);
+
+      return (
+        this.metadata.get(normalizedKey) ??
+        this.createRef(normalizedKey, info.size, undefined, undefined)
+      );
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return undefined;
+      }
+
+      throw error;
+    }
   }
 
   async getObject(key: string): Promise<GetStorageObjectResponse> {
@@ -229,6 +250,36 @@ export class S3CompatibleObjectStorage implements ObjectStorage {
     return ref;
   }
 
+  async headObject(key: string): Promise<StorageObjectRef | undefined> {
+    const normalizedKey = normalizeStorageKey(key);
+    const url = this.objectUrl(normalizedKey);
+    const headers = this.signRequest("HEAD", url, {
+      "x-amz-content-sha256": "UNSIGNED-PAYLOAD",
+    });
+    const response = await fetch(url, {
+      method: "HEAD",
+      headers,
+    });
+
+    if (response.status === 404) {
+      return undefined;
+    }
+
+    if (!response.ok) {
+      throw new Error(`S3 HEAD failed with status ${response.status}`);
+    }
+
+    return (
+      this.metadata.get(normalizedKey) ??
+      this.createRef(
+        normalizedKey,
+        readContentLength(response.headers),
+        response.headers.get("content-type") ?? undefined,
+        undefined,
+      )
+    );
+  }
+
   async getObject(key: string): Promise<GetStorageObjectResponse> {
     const normalizedKey = normalizeStorageKey(key);
     const url = this.objectUrl(normalizedKey);
@@ -332,7 +383,7 @@ export class S3CompatibleObjectStorage implements ObjectStorage {
   }
 
   private signRequest(
-    method: "GET" | "PUT" | "DELETE",
+    method: "GET" | "PUT" | "DELETE" | "HEAD",
     url: URL,
     headers: Record<string, string>,
   ): Record<string, string> {

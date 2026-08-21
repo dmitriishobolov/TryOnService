@@ -23,6 +23,11 @@
 
 Worker выполнит поиск перед AI-моделью, добавит найденные товары в `TryOnJobResult.marketProducts` и продублирует короткую подборку в `message`, чтобы Telegram-клиент уже мог показать пользователю ссылки.
 
+Перед live-поиском worker проверяет общий storage catalog, если `MARKET_STORAGE_CACHE_ENABLED=true`. Cache key строится из параметров `payload.market`, а найденный JSON `market-search` может лежать на любом зарегистрированном storage-node. После успешного поиска worker сохраняет результат в `workers/<workerId>/market-cache/...` и регистрирует:
+
+- `market-search` - JSON со списком найденных товаров по конкретному запросу;
+- `market-product` - metadata по отдельным `productUrl`, чтобы coordinator мог ответить, где уже есть информация по конкретной карточке товара.
+
 ## Провайдеры
 
 - `aliexpress` - AliExpress Open Platform / Affiliate product query. Требует `ALIEXPRESS_APP_KEY` и `ALIEXPRESS_APP_SECRET`; при наличии tracking/app signature worker добавит их в запрос.
@@ -35,6 +40,7 @@ Worker выполнит поиск перед AI-моделью, добавит 
 
 - `index.ts` - registry adapters и общий `searchMarketplaceProducts`.
 - `types.ts` - интерфейсы `MarketplaceAdapter`, `MarketplaceSearchInput`, `MarketplaceSearchResult`.
+- `storageCache.ts` - общий storage-cache marketplace search/product metadata через coordinator catalog lookup.
 - `utils.ts` - HTTP, нормализация цен, ссылок и поиск по тексту.
 - `aliexpress/` - реализация AliExpress Affiliate API.
 - `ozon/` - реализация Ozon public page parser.
@@ -69,6 +75,7 @@ Ozon/Wildberries public parsers сделаны как обычный lookup по
 - не использует captcha bypass, proxy rotation, stealth browser automation или авторизацию пользователя;
 - не ходит бесконечно по страницам: WB берёт первую страницу, Ozon ограничен `OZON_PUBLIC_SEARCH_PAGES` и `OZON_MAX_SCAN_PRODUCTS`;
 - кеширует выдачу в памяти worker-а: fresh-cache отвечает без внешнего запроса, stale-cache используется как fallback при `429`/ошибках, параллельные одинаковые запросы склеиваются в один in-flight request;
+- дополнительно пишет successful search в object storage catalog как shared cache между worker'ами/storage-node;
 - WB image URL строятся по `nmId` через CDN `basket-XX.wbbasket.ru`, если поисковый JSON не вернул готовые изображения.
 
 ## Добавление нового marketplace provider-а

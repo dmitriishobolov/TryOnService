@@ -5,6 +5,8 @@ import type {
   CreateTryOnJobRequest,
   MarketSearchSelection,
   StorageAccessResponse,
+  StorageCatalogEntryKind,
+  StorageCatalogLookupResponse,
   StorageObjectRef,
   TryOnJobCreateResponse,
   TryOnModelSelection,
@@ -105,6 +107,23 @@ export class TelegramCoordinatorClient {
         scope: params.scope,
         storageId: params.storageId,
         keyPrefix: params.keyPrefix,
+      },
+      this.headers(),
+      this.postOptions(),
+    );
+  }
+
+  lookupStorageCatalog(params: {
+    cacheKeys: string[];
+    kinds?: StorageCatalogEntryKind[];
+  }): Promise<StorageCatalogLookupResponse> {
+    return postJson<StorageCatalogLookupResponse>(
+      `${this.config.coordinatorUrl}/storage/catalog/lookup`,
+      {
+        requesterId: this.config.clientId,
+        requesterType: "client",
+        cacheKeys: params.cacheKeys,
+        kinds: params.kinds,
       },
       this.headers(),
       this.postOptions(),

@@ -2,6 +2,8 @@ import type {
   JobProgressUpdateRequest,
   JobResultUpdateRequest,
   StorageAccessResponse,
+  StorageCatalogEntryKind,
+  StorageCatalogLookupResponse,
   WorkerHeartbeatRequest,
   WorkerRegistrationRequest,
   WorkerRegistrationResponse,
@@ -77,6 +79,23 @@ export class CoordinatorClient {
         scope: params.scope,
         storageId: params.storageId,
         keyPrefix: params.keyPrefix,
+      },
+      this.serviceHeaders(),
+      this.postOptions(),
+    );
+  }
+
+  lookupStorageCatalog(params: {
+    cacheKeys: string[];
+    kinds?: StorageCatalogEntryKind[];
+  }): Promise<StorageCatalogLookupResponse> {
+    return postJson<StorageCatalogLookupResponse>(
+      `${this.config.coordinatorUrl}/storage/catalog/lookup`,
+      {
+        requesterId: this.config.workerId,
+        requesterType: "worker",
+        cacheKeys: params.cacheKeys,
+        kinds: params.kinds,
       },
       this.serviceHeaders(),
       this.postOptions(),

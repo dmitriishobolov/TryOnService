@@ -20,6 +20,7 @@ export interface StorageConfig {
   driver: StorageObjectDriver;
   localRoot: string;
   metadataPath?: string;
+  catalogPath?: string;
   s3Endpoint?: string;
   s3Region: string;
   s3Bucket?: string;
@@ -155,6 +156,7 @@ export function loadStorageConfig(): StorageConfig {
     driver,
     localRoot: readString("STORAGE_LOCAL_ROOT", "tmp/storage"),
     metadataPath: readOptionalString("STORAGE_METADATA_PATH"),
+    catalogPath: readOptionalString("STORAGE_CATALOG_PATH"),
     s3Endpoint,
     s3Region: readString("STORAGE_S3_REGION", "us-east-1"),
     s3Bucket,

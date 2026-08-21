@@ -2,7 +2,7 @@
 
 Coordinator - центральный сервис TryOnService. Он принимает запросы клиентов на assignment, создает jobs, хранит их состояние, знает о доступных worker'ах, service clients и storage-node, а затем возвращает клиенту подходящие endpoints и signed tokens.
 
-Coordinator не выполняет AI-обработку сам, не проксирует клиентские результаты и не гоняет большие файлы. Его задача - matchmaking между client, worker и storage-node, легкое security prepare на выбранном worker-е, выдача scoped storage-access, учет состояния, защита регистрации и управление масштабированием через registry.
+Coordinator не выполняет AI-обработку сам, не проксирует клиентские результаты и не гоняет большие файлы. Его задача - matchmaking между client, worker и storage-node, легкое security prepare на выбранном worker-е, выдача scoped storage-access, lookup distributed storage catalog, учет состояния, защита регистрации и управление масштабированием через registry.
 
 ## Запуск
 
@@ -45,6 +45,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - `POST /storage/register` - регистрация storage-node; требует `x-storage-registration-key`.
 - `POST /storage/:storageId/heartbeat` - heartbeat storage-node; требует `x-storage-service-key`.
 - `POST /storage/access` - выдача подходящего storage-node и scoped token для прямого upload/download; требует `x-client-key` для clients или `x-worker-service-key` для worker'ов.
+- `POST /storage/catalog/lookup` - поиск cache entries по всем свежим storage-node; требует `x-client-key` или `x-worker-service-key`.
 - `POST /jobs` - создание job/assignment зарегистрированным клиентом; требует `x-client-key`, валидный `sourceClientId`, возвращает выбранный worker endpoint, `workerRequest` и dispatch token или `202 queued`.
 - `GET /jobs/:id/assignment` - polling assignment для queued job; требует `x-client-key` и `sourceClientId`.
 - `POST /clients/register` - регистрация service client; требует `x-client-key`.

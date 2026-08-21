@@ -1,8 +1,8 @@
 # Object Storage Node
 
-`apps/storage` - отдельный storage-сервис TryOnService. Он хранит изображения и файлы, сам регистрируется в coordinator и принимает прямой upload/download от clients и worker'ов.
+`apps/storage` - отдельный storage-сервис TryOnService. Он хранит изображения, файлы и локальный catalog index cache-объектов, сам регистрируется в coordinator и принимает прямой upload/download от clients и worker'ов.
 
-Coordinator не проксирует файлы через себя: он только выбирает подходящий storage-node и выдает `StorageAccessAssignment` с `objectBaseUrl`, scoped `accessToken`, TTL и опциональным `keyPrefix`.
+Coordinator не проксирует файлы через себя: он выбирает подходящий storage-node, выдает `StorageAccessAssignment` с `objectBaseUrl`, scoped `accessToken`, TTL и опциональным `keyPrefix`, а для cache lookup опрашивает зарегистрированные storage-node и возвращает locations найденных объектов.
 
 ## Запуск
 
@@ -29,7 +29,9 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 6. Client или worker вызывает storage-node напрямую:
    - `PUT /objects/<key>` для записи файла.
    - `GET /objects/<key>` для чтения файла.
+   - `POST /catalog/entries` для регистрации связи `cacheKey -> objectKey`.
 7. Storage-node проверяет `x-storage-access-token`, scope, storageId, TTL, signing key version и keyPrefix.
+8. Для cache lookup client/worker вызывает coordinator `POST /storage/catalog/lookup`, coordinator опрашивает все свежие storage-node через `POST /catalog/lookup` и возвращает один или несколько найденных locations с read-token на конкретный prefix.
 
 ## Правила
 
@@ -43,6 +45,8 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - `STORAGE_DRIVER=s3` пишет файлы в S3-compatible backend напрямую из request stream.
 - PUT/GET работают streaming-ом и не собирают объект целиком в память storage-node.
 - `usedBytes` берется из metadata index (`STORAGE_METADATA_PATH` или файл рядом с storage root) и обновляется при PUT/DELETE без рекурсивного обхода папки.
+- Catalog index хранится отдельно (`STORAGE_CATALOG_PATH` или файл рядом с storage root), переживает restart storage-node и при lookup проверяет, что referenced object ещё существует.
 - Upload response добавляет `storageId` в `StorageObjectRef`; client обязан передать этот ref в job payload без потери поля.
 - Object keys должны быть scoped и предсказуемыми, например `clients/<clientId>/input/<requestId>/<file>` или `jobs/<jobId>/output/<file>`.
-- Для повторного использования сгенерированных карточек товаров Telegram client хранит clean-card cache в `clients/<clientId>/product-card-cache/<hash-prefix>/<sha256(productUrl)>.png` и JSON metadata рядом с тем же hash.
+- Для повторного использования сгенерированных карточек товаров Telegram client хранит clean-card cache в `clients/<clientId>/product-card-cache/<hash-prefix>/<sha256(productUrl)>.png`, JSON metadata рядом с тем же hash и регистрирует catalog entries `product-card-image`/`product-card-metadata` по normalized product URL.
+- Worker пишет JSON cache marketplace search в `workers/<workerId>/market-cache/<hash-prefix>/<hash>.json` и регистрирует `market-search` plus `market-product` entries, чтобы другие worker'ы могли переиспользовать результаты без повторного обхода площадок.

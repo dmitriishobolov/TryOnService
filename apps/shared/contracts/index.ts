@@ -111,6 +111,62 @@ export interface StorageAccessResponse {
   storage: StorageAccessAssignment;
 }
 
+export type StorageCatalogEntryKind =
+  | "market-search"
+  | "market-product"
+  | "product-card-image"
+  | "product-card-metadata";
+
+export interface StorageCatalogEntry {
+  cacheKey: string;
+  kind: StorageCatalogEntryKind;
+  object: StorageObjectRef;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt?: string;
+}
+
+export interface StorageCatalogEntryInput {
+  cacheKey: string;
+  kind: StorageCatalogEntryKind;
+  objectKey: string;
+  metadata?: Record<string, unknown>;
+  expiresAt?: string;
+}
+
+export interface StorageCatalogEntryUpsertRequest {
+  entry: StorageCatalogEntryInput;
+}
+
+export interface StorageCatalogNodeLookupRequest {
+  cacheKeys: string[];
+  kinds?: StorageCatalogEntryKind[];
+}
+
+export interface StorageCatalogNodeLookupResponse {
+  entries: StorageCatalogEntry[];
+}
+
+export interface StorageCatalogLookupRequest {
+  requesterId: string;
+  requesterType: "client" | "worker";
+  cacheKeys: string[];
+  kinds?: StorageCatalogEntryKind[];
+}
+
+export interface StorageCatalogLocation {
+  storageId: string;
+  baseUrl: string;
+  entry: StorageCatalogEntry;
+  storage?: StorageAccessAssignment;
+  objectUrl?: string;
+}
+
+export interface StorageCatalogLookupResponse {
+  locations: StorageCatalogLocation[];
+}
+
 export interface TryOnModelSelection {
   provider: TryOnModelProvider;
   task?: TryOnModelTask;
@@ -561,6 +617,80 @@ export function isStorageAccessRequest(
       value.scope === "read-write") &&
     (value.storageId === undefined || typeof value.storageId === "string") &&
     (value.keyPrefix === undefined || typeof value.keyPrefix === "string")
+  );
+}
+
+export function isStorageCatalogEntryKind(
+  value: unknown,
+): value is StorageCatalogEntryKind {
+  return (
+    value === "market-search" ||
+    value === "market-product" ||
+    value === "product-card-image" ||
+    value === "product-card-metadata"
+  );
+}
+
+export function isStorageCatalogEntry(value: unknown): value is StorageCatalogEntry {
+  return (
+    isObject(value) &&
+    typeof value.cacheKey === "string" &&
+    value.cacheKey.length > 0 &&
+    isStorageCatalogEntryKind(value.kind) &&
+    isStorageObjectRef(value.object) &&
+    (value.metadata === undefined || isObject(value.metadata)) &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string" &&
+    (value.expiresAt === undefined || typeof value.expiresAt === "string")
+  );
+}
+
+export function isStorageCatalogEntryUpsertRequest(
+  value: unknown,
+): value is StorageCatalogEntryUpsertRequest {
+  if (!isObject(value) || !isObject(value.entry)) {
+    return false;
+  }
+
+  const { entry } = value;
+
+  return (
+    typeof entry.cacheKey === "string" &&
+    entry.cacheKey.length > 0 &&
+    isStorageCatalogEntryKind(entry.kind) &&
+    typeof entry.objectKey === "string" &&
+    entry.objectKey.length > 0 &&
+    (entry.metadata === undefined || isObject(entry.metadata)) &&
+    (entry.expiresAt === undefined || typeof entry.expiresAt === "string")
+  );
+}
+
+export function isStorageCatalogNodeLookupRequest(
+  value: unknown,
+): value is StorageCatalogNodeLookupRequest {
+  return (
+    isObject(value) &&
+    Array.isArray(value.cacheKeys) &&
+    value.cacheKeys.length > 0 &&
+    value.cacheKeys.length <= 100 &&
+    value.cacheKeys.every(
+      (cacheKey) => typeof cacheKey === "string" && cacheKey.length > 0,
+    ) &&
+    (value.kinds === undefined ||
+      (Array.isArray(value.kinds) &&
+        value.kinds.every(isStorageCatalogEntryKind)))
+  );
+}
+
+export function isStorageCatalogLookupRequest(
+  value: unknown,
+): value is StorageCatalogLookupRequest {
+  return (
+    isObject(value) &&
+    isStorageCatalogNodeLookupRequest(value) &&
+    typeof value.requesterId === "string" &&
+    value.requesterId.length > 0 &&
+    (value.requesterType === "client" || value.requesterType === "worker")
   );
 }
 

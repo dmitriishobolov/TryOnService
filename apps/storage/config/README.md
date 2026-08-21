@@ -16,6 +16,7 @@
 - `STORAGE_DRIVER` - `local` или `s3`.
 - `STORAGE_LOCAL_ROOT` - локальная папка для объектов в dev/local backend.
 - `STORAGE_METADATA_PATH` - файл metadata index для объектов и инкрементального `usedBytes`.
+- `STORAGE_CATALOG_PATH` - файл catalog index, где storage-node хранит связи `cacheKey -> objectKey` для product-card и marketplace cache.
 - `STORAGE_S3_ENDPOINT` - endpoint S3-compatible backend.
 - `STORAGE_S3_REGION` - region S3-compatible backend.
 - `STORAGE_S3_BUCKET` - bucket для объектов.

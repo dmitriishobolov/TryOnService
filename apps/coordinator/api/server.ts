@@ -8,6 +8,8 @@ import {
   isJobProgressUpdateRequest,
   isJobResultUpdateRequest,
   isStorageAccessRequest,
+  isStorageCatalogEntry,
+  isStorageCatalogLookupRequest,
   isStorageHeartbeatRequest,
   isStorageRegistrationRequest,
   isWorkerHeartbeatRequest,
@@ -19,6 +21,9 @@ import {
   type RegisteredStorageNode,
   type StorageAccessAssignment,
   type StorageAccessResponse,
+  type StorageCatalogLocation,
+  type StorageCatalogLookupResponse,
+  type StorageCatalogNodeLookupResponse,
   type StorageObjectRef,
   type StorageRegistrationRequest,
   type StorageRegistrationResponse,
@@ -502,6 +507,60 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           metadata: {
             scope: storageAccess.scope,
             keyPrefix: storageAccess.keyPrefix,
+          },
+        });
+
+        writeJson(response, 200, payload);
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/storage/catalog/lookup") {
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
+
+        if (!isStorageCatalogLookupRequest(body)) {
+          writeError(
+            response,
+            400,
+            "invalid_storage_catalog_lookup",
+            "Invalid storage catalog lookup payload",
+          );
+          return;
+        }
+
+        if (
+          (body.requesterType === "client" &&
+            !hasClientKey(request.headers["x-client-key"], config)) ||
+          (body.requesterType === "worker" &&
+            !hasWorkerServiceKey(request.headers["x-worker-service-key"], config))
+        ) {
+          writeError(
+            response,
+            401,
+            "unauthorized_storage_catalog",
+            "Invalid storage catalog key",
+          );
+          return;
+        }
+
+        const payload = await lookupStorageCatalog(storageNodes, config, {
+          requesterId: body.requesterId,
+          cacheKeys: body.cacheKeys,
+          kinds: body.kinds,
+        });
+
+        recordSecurityEvent(audit, {
+          eventType: "storage_catalog_lookup",
+          severity: "info",
+          ipAddress: requesterIp,
+          actorType: body.requesterType,
+          actorId: body.requesterId,
+          resourceType: "storage",
+          metadata: {
+            cacheKeys: body.cacheKeys.length,
+            kinds: body.kinds,
+            locations: payload.locations.length,
           },
         });
 
@@ -1823,6 +1882,98 @@ async function createStorageAccessAssignment(
   return createStorageAccessForNode(storageNode, config, request);
 }
 
+async function lookupStorageCatalog(
+  storageNodes: StorageRegistryStore,
+  config: CoordinatorConfig,
+  request: {
+    requesterId: string;
+    cacheKeys: string[];
+    kinds?: Array<StorageCatalogLocation["entry"]["kind"]>;
+  },
+): Promise<StorageCatalogLookupResponse> {
+  const nodes = await findAvailableStorageNodes(
+    storageNodes,
+    config.storageHeartbeatTimeoutMs,
+  );
+  const settled = await Promise.allSettled(
+    nodes.map(async (node) => {
+      const response = await postJson<StorageCatalogNodeLookupResponse>(
+        `${node.baseUrl}/catalog/lookup`,
+        {
+          cacheKeys: request.cacheKeys,
+          kinds: request.kinds,
+        },
+        {
+          "x-storage-service-key": config.storageServiceKey,
+        },
+        {
+          retries: config.httpClientRetries,
+          timeoutMs: config.httpClientTimeoutMs,
+        },
+      );
+
+      return {
+        node,
+        entries: Array.isArray(response.entries)
+          ? response.entries.filter(isStorageCatalogEntry)
+          : [],
+      };
+    }),
+  );
+  const locations: StorageCatalogLocation[] = [];
+
+  for (const result of settled) {
+    if (result.status === "rejected") {
+      logger.warn("Storage catalog lookup failed on node", {
+        error: result.reason,
+      });
+      continue;
+    }
+
+    for (const entry of result.value.entries) {
+      const objectKey = normalizeStorageKey(entry.object.key);
+      const keyPrefix = dirnameStorageKey(objectKey) ?? objectKey;
+      const storage = createStorageAccessForNode(result.value.node, config, {
+        requesterId: request.requesterId,
+        scope: "read",
+        keyPrefix,
+      });
+
+      locations.push({
+        storageId: result.value.node.storageId,
+        baseUrl: result.value.node.baseUrl,
+        entry,
+        storage,
+        objectUrl: storageObjectAccessUrl(
+          storage.objectBaseUrl,
+          objectKey,
+          storage.accessToken,
+        ),
+      });
+    }
+  }
+
+  return { locations };
+}
+
+async function findAvailableStorageNodes(
+  storageNodes: StorageRegistryStore,
+  heartbeatTimeoutMs: number,
+): Promise<RegisteredStorageNode[]> {
+  const now = Date.now();
+
+  return (await storageNodes.list()).filter((node) => {
+    const lastHeartbeatAt = new Date(node.lastHeartbeatAt).getTime();
+    const isFresh = now - lastHeartbeatAt <= heartbeatTimeoutMs;
+    const hasSpace =
+      node.capacityBytes === undefined ||
+      node.usedBytes === undefined ||
+      node.usedBytes < node.capacityBytes;
+
+    return isFresh && node.status !== "offline" && hasSpace;
+  });
+}
+
 async function findAvailableStorageNodeById(
   storageNodes: StorageRegistryStore,
   storageId: string,
@@ -1878,6 +2029,26 @@ function createStorageAccessForNode(
     scope: request.scope,
     keyPrefix: request.keyPrefix,
   };
+}
+
+function storageObjectAccessUrl(
+  objectBaseUrl: string,
+  key: string,
+  accessToken: string,
+): string {
+  const url = new URL(`${objectBaseUrl.replace(/\/$/, "")}/${encodeStorageKey(key)}`);
+  url.searchParams.set("accessToken", accessToken);
+
+  return url.toString();
+}
+
+function encodeStorageKey(key: string): string {
+  return key
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join("/");
 }
 
 async function failActiveJobsForWorker(

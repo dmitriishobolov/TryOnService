@@ -43,7 +43,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 18. Coordinator возвращает signed dispatch token только после подтверждения worker prepare.
 19. Telegram client отправляет `workerRequest` напрямую выбранному worker'у.
 20. Worker обрабатывает job и отправляет callback в `POST /callbacks/jobs` с `x-client-callback-token`.
-21. Telegram client принимает callback, проверяет token/replay и передает результат в сценарный обработчик бота.
+21. Telegram client принимает callback, проверяет token/replay, сразу возвращает worker-у `202 accepted`, а отправку сообщений/фото в Telegram выполняет асинхронно. Так worker не ретраит callback из-за долгого `sendPhoto`.
 
 ## Реализовано сейчас
 
@@ -60,9 +60,10 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - Vision-проверка включает `allowInputImagePlaceholders=true`, поэтому битый image URL не останавливает весь образ: worker заменит такую картинку placeholder-ом, а модель отклонит конкретный кандидат.
 - OpenAI больше не ищет товары в интернете в сценарии `Идеальный образ`: токены тратятся только на vision-проверку уже найденных API-кандидатов и на image generation. Validation prompt использует compact JSON, `imageDetail=low`, а ответ короткий: `acceptedCandidates` с `canGenerateCleanCard`.
 - Если validation job всё равно не вернул JSON или не принял кандидатов уверенно, бот не завершает сценарий сразу: он берет fallback-кандидатов по одному на категорию/slot и пробует clean-card generation по каждому товару отдельно.
-- Для market jobs бот отправляет короткую базовую категорию товара, например `брюки`, `рубашка`, `куртка`, `кардиган`, чтобы API-поиск не был слишком узким. Worker market-фильтр расширяет близкие категории вроде `куртка/жакет/пиджак/блейзер`, `брюки/чиносы/джинсы`, а OpenAI vision потом выбирает подходящие изображения.
+- Для market jobs бот отправляет короткую базовую категорию товара, например `брюки`, `рубашка`, `куртка`, `кардиган`, чтобы API-поиск не был слишком узким. Цвет и детали остаются в описании для OpenAI vision, но не заужают сам marketplace query. Worker market-фильтр расширяет близкие категории вроде `куртка/жакет/пиджак/блейзер`, `брюки/чиносы/джинсы`, а OpenAI vision потом выбирает подходящие изображения.
 - Для одного образа бот дополнительно отбраковывает дубли категорий и повторяющиеся ссылки: если уже выбран худи, второй худи в подборку не попадет. Если `footwearVisible=false`, бот вырезает обувь из образа до запуска поиска товаров.
 - Для каждого выбранного товара бот запускает отдельный OpenAI job с `options.imageGeneration` и `toolChoice=required`, чтобы получить чистое изображение товара на белом фоне. Если очередь генерации не освободилась, бот отменяет queued job в coordinator, помечает только этот товар как пропущенный и продолжает остальные товары образа.
+- Каждый запуск сценария `Идеальный образ` имеет внутренний `runId`: market search finalization, validation и финальная доставка товаров идемпотентны. Поздний или дублирующий callback по тому же run не сможет повторно запустить clean-card generation или повторно отправить подборку пользователю.
 - Перед запуском такого job бот проверяет product-card cache через `POST /storage/catalog/lookup` по нормализованному `productUrl`. Повторная ссылка товара переиспользует уже сгенерированный PNG с любого доступного storage-node и не тратит новый AI-запрос. После новой генерации бот копирует PNG из `jobs/<jobId>/results/...` в `clients/<clientId>/product-card-cache/...`, сохраняет рядом `.json` metadata с URL товара и регистрирует catalog entries.
 - Если по части образа, например куртке, не найден надежный кандидат или не удалось сгенерировать clean card, бот явно показывает этот элемент в списке `Не удалось подобрать качественную карточку`.
 - Сгенерированная clean card скачивается ботом из storage и отправляется пользователю через `sendPhoto` multipart upload; короткое описание попадает в caption, ссылка на исходную карточку идет в inline-кнопку `Перейти к товару`.
@@ -72,7 +73,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - HTTP client умеет запросить storage-access у coordinator для загрузки пользовательских фото.
 - client registration и heartbeat в coordinator.
 - автоматический выбор ближайшего свободного callback-порта.
-- `POST /callbacks/jobs` проверяет signed callback token по `CLIENT_CALLBACK_SIGNING_KEY`, `CLIENT_CALLBACK_SIGNING_KEY_VERSION` и одноразовому `tokenId`, принимает ответ worker'а и передает его в обработчик текущего сценария Telegram bot.
+- `POST /callbacks/jobs` проверяет signed callback token по `CLIENT_CALLBACK_SIGNING_KEY`, `CLIENT_CALLBACK_SIGNING_KEY_VERSION` и одноразовому `tokenId`, быстро подтверждает прием worker-у и асинхронно передает результат в обработчик текущего сценария Telegram bot.
 - длинные ответы автоматически режутся на несколько Telegram-сообщений;
 - Markdown из ответа модели конвертируется в Telegram HTML, поэтому заголовки, `**жирный текст**`, `__жирный текст__`, inline-code и ссылки отображаются форматированно.
 
@@ -82,12 +83,15 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 
 - `Appearance analysis job dispatched` - Telegram client отправил job worker-у.
 - `Callback request received` - worker дошел до callback endpoint клиента.
+- `Callback accepted, scheduling job result handling` - callback принят, token уже отмечен как использованный, worker получит быстрый ACK.
 - `Callback handled by Telegram bot` - итоговый callback разобран ботом; дальше ищите события конкретного сценария.
+- `Telegram callback handling failed after accept` - callback был принят, но внутренняя отправка/сценарная обработка в Telegram упала уже после ACK worker-у.
 - `Telegram command blocked while session is active` - пользователь попытался переключить сценарий во время активного шага.
 - `Telegram update blocked while job is in progress` - пользователь отправил сообщение или команду во время active job.
 - `Ideal outfit plan job dispatched` - отправлен job на анализ full-body фото и подбор образов.
 - `Ideal outfit market products job dispatched` - отправлен market job на поиск товарных карточек через marketplace adapters Ozon/Wildberries/TSUM/TSUM Outlet/O'STIN/2MOOD/LIMÉ.
 - `Ideal outfit product validation job dispatched` - отправлен job на vision-проверку пригодности картинок товаров к clean-card генерации.
+- `Ideal outfit product validation skipped: run already handled` - поздний/дублирующий validation callback проигнорирован, чтобы не запускать повторную генерацию.
 - `Ideal outfit clean product card cache hit` - clean-card товара уже есть в storage cache, новый image generation job не запускался.
 - `Ideal outfit clean product card catalog cache hit` - clean-card найден через distributed storage catalog на одном из storage-node.
 - `Ideal outfit clean product card cache miss` - clean-card товара в storage cache нет, бот продолжит обычную генерацию.

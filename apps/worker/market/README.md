@@ -23,6 +23,8 @@
 
 Worker выполнит поиск перед AI-моделью, добавит найденные товары в `TryOnJobResult.marketProducts` и продублирует короткую подборку в `message`, чтобы Telegram-клиент уже мог показать пользователю ссылки.
 
+Финальная выдача после dedupe собирается round-robin по provider-ам, а не простым `slice` по порядку adapters. Поэтому если несколько магазинов вернули товары, один provider не забивает весь лимит результата.
+
 Перед live-поиском worker проверяет общий storage catalog, если `MARKET_STORAGE_CACHE_ENABLED=true`. Cache key строится из параметров `payload.market`, а найденный JSON `market-search` может лежать на любом зарегистрированном storage-node. После успешного поиска worker сохраняет результат в `workers/<workerId>/market-cache/...` и регистрирует:
 
 - `market-search` - JSON со списком найденных товаров по конкретному запросу;
@@ -66,6 +68,8 @@ Worker выполнит поиск перед AI-моделью, добавит 
 - `limit` - общий лимит товаров в результате, максимум 100.
 - `category`, `categoryIds`, `minPrice`, `maxPrice`, `currency`, `locale`, `country`, `sort` - дополнительные фильтры, если provider поддерживает их напрямую или через локальную фильтрацию.
 - `required` - если `true`, ошибка marketplace-поиска фейлит job; если `false`, worker логирует ошибку и продолжает AI-обработку.
+
+В Telegram-сценарии `Идеальный образ` query намеренно широкий: обычно это базовая категория вроде `рубашка`, `брюки`, `жакет`. Цвет и стилистические детали остаются в prompt/description для OpenAI vision, чтобы поиск не терял товары из-за слишком узкой строки.
 
 ## Capabilities
 

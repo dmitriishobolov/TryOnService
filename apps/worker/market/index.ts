@@ -110,12 +110,13 @@ export async function searchMarketplaceProducts(params: {
     );
   }
 
-  const uniqueProducts = dedupeProducts(products).slice(0, limit);
+  const uniqueProducts = selectBalancedProducts(dedupeProducts(products), limit);
 
   logger.info("Marketplace search finished", {
     query,
     providers,
     products: uniqueProducts.length,
+    providerProducts: countProductsByProvider(uniqueProducts),
   });
 
   return uniqueProducts;
@@ -184,4 +185,56 @@ function dedupeProducts(products: MarketProductRef[]): MarketProductRef[] {
   }
 
   return deduped;
+}
+
+function selectBalancedProducts(
+  products: MarketProductRef[],
+  limit: number,
+): MarketProductRef[] {
+  const groups = new Map<MarketProvider, MarketProductRef[]>();
+
+  for (const product of products) {
+    groups.set(product.provider, [...(groups.get(product.provider) ?? []), product]);
+  }
+
+  const result: MarketProductRef[] = [];
+  const providers = [...groups.keys()];
+
+  while (result.length < limit && providers.length > 0) {
+    let addedInRound = false;
+
+    for (const provider of providers) {
+      const group = groups.get(provider);
+      const product = group?.shift();
+
+      if (!product) {
+        continue;
+      }
+
+      result.push(product);
+      addedInRound = true;
+
+      if (result.length >= limit) {
+        break;
+      }
+    }
+
+    if (!addedInRound) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+function countProductsByProvider(
+  products: MarketProductRef[],
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+
+  for (const product of products) {
+    counts[product.provider] = (counts[product.provider] ?? 0) + 1;
+  }
+
+  return counts;
 }

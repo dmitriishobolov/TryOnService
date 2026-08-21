@@ -102,6 +102,7 @@ type ChatSession =
     };
 
 interface IdealMarketSearchState {
+  runId: string;
   chatId: string;
   outfit: IdealOutfit;
   inputFiles: StorageObjectRef[];
@@ -109,6 +110,7 @@ interface IdealMarketSearchState {
   completedJobs: number;
   candidates: IdealProduct[];
   missingItems: IdealMissingItem[];
+  finalized: boolean;
 }
 
 type PendingJob =
@@ -137,6 +139,7 @@ type PendingJob =
     }
   | {
       flow: "ideal-products-validation";
+      runId: string;
       chatId: string;
       outfit: IdealOutfit;
       inputFiles: StorageObjectRef[];
@@ -145,6 +148,7 @@ type PendingJob =
     }
   | {
       flow: "ideal-product-card-generation";
+      runId: string;
       chatId: string;
       outfit: IdealOutfit;
       product: IdealProduct;
@@ -334,6 +338,8 @@ export class TelegramBot {
   private readonly sessions = new Map<string, ChatSession>();
   private readonly pendingJobs = new Map<string, PendingJob>();
   private readonly idealProgressMessages = new Map<string, IdealProgressMessage>();
+  private readonly handledIdealValidationRuns = new Set<string>();
+  private readonly deliveredIdealProductRuns = new Set<string>();
 
   constructor(
     private readonly config: TelegramClientConfig,
@@ -1445,6 +1451,7 @@ export class TelegramBot {
     outfit: IdealOutfit,
   ): Promise<void> {
     const searchState: IdealMarketSearchState = {
+      runId: randomUUID(),
       chatId,
       outfit,
       inputFiles: session.inputFiles,
@@ -1452,6 +1459,7 @@ export class TelegramBot {
       completedJobs: 0,
       candidates: [],
       missingItems: [],
+      finalized: false,
     };
     const pendingJobIds: string[] = [];
 
@@ -1633,6 +1641,19 @@ export class TelegramBot {
   private async finishIdealMarketProductSearch(
     searchState: IdealMarketSearchState,
   ): Promise<void> {
+    if (searchState.finalized) {
+      logger.info("Ideal outfit market product search completion skipped", {
+        chatId: searchState.chatId,
+        outfitId: searchState.outfit.id,
+        runId: searchState.runId,
+        completedJobs: searchState.completedJobs,
+        totalJobs: searchState.totalJobs,
+      });
+      return;
+    }
+
+    searchState.finalized = true;
+
     const candidates = sanitizeIdealProducts(searchState.candidates, {
       allowedItems: searchState.outfit.items,
       requireCleanCardReady: false,
@@ -1647,6 +1668,7 @@ export class TelegramBot {
     logger.info("Ideal outfit market product search completed", {
       chatId: searchState.chatId,
       outfitId: searchState.outfit.id,
+      runId: searchState.runId,
       rawCandidates: searchState.candidates.length,
       filteredCandidates: candidates.length,
       missingItems: missingItems.length,
@@ -1694,6 +1716,7 @@ export class TelegramBot {
 
   private async createIdealProductValidationRequest(
     pending: {
+      runId: string;
       chatId: string;
       outfit: IdealOutfit;
       inputFiles: StorageObjectRef[];
@@ -1707,6 +1730,7 @@ export class TelegramBot {
       logger.info("Ideal outfit product image validation requested", {
         chatId: pending.chatId,
         outfitId: pending.outfit.id,
+        runId: pending.runId,
         candidates: candidates.length,
       });
       const assignment = await this.coordinator.createRequestJob({
@@ -1720,6 +1744,7 @@ export class TelegramBot {
 
       this.pendingJobs.set(jobId, {
         flow: "ideal-products-validation",
+        runId: pending.runId,
         chatId: pending.chatId,
         outfit: pending.outfit,
         inputFiles: pending.inputFiles,
@@ -1751,6 +1776,7 @@ export class TelegramBot {
         jobId: assignment.job.id,
         workerId: assignment.worker.workerId,
         outfitId: pending.outfit.id,
+        runId: pending.runId,
       });
       await this.updateIdealProgressMessage(
         pending.chatId,
@@ -1792,6 +1818,10 @@ export class TelegramBot {
     pending: Extract<PendingJob, { flow: "ideal-products-validation" }>,
     callback: TelegramJobCallbackRequest,
   ): Promise<void> {
+    if (!this.claimIdealValidationRun(pending.runId, callback.jobId)) {
+      return;
+    }
+
     const parsed = parseJsonFromOpenAiMessage<IdealProductValidationResponse>(
       callback.result.message,
     );
@@ -1800,6 +1830,7 @@ export class TelegramBot {
       logger.warn("Ideal outfit product validation failed, using fallback candidates", {
         chatId: pending.chatId,
         outfitId: pending.outfit.id,
+        runId: pending.runId,
         candidates: pending.candidates.length,
         responseStart: callback.result.message.slice(0, 300),
       });
@@ -1812,6 +1843,7 @@ export class TelegramBot {
           sanitizeIdealMissingItems(parsed?.missingItems),
         ),
         pending.inputFiles,
+        pending.runId,
         "Не получилось проверить изображения товаров пачкой, поэтому пробую собрать карточки по найденным кандидатам.",
       );
       return;
@@ -1825,6 +1857,7 @@ export class TelegramBot {
     logger.info("Ideal outfit product validation parsed", {
       chatId: pending.chatId,
       outfitId: pending.outfit.id,
+      runId: pending.runId,
       candidates: pending.candidates.length,
       acceptedRaw: Array.isArray(parsed.acceptedCandidates)
         ? parsed.acceptedCandidates.length
@@ -1849,6 +1882,7 @@ export class TelegramBot {
         selectFallbackIdealProducts(pending.candidates, pending.outfit.items),
         missingItems,
         pending.inputFiles,
+        pending.runId,
         "Проверка фото не приняла кандидаты уверенно, поэтому пробую собрать карточки по лучшим найденным товарам.",
       );
       return;
@@ -1860,6 +1894,7 @@ export class TelegramBot {
       products,
       missingItems,
       pending.inputFiles,
+      pending.runId,
     );
   }
 
@@ -1869,6 +1904,7 @@ export class TelegramBot {
     products: IdealProduct[],
     missingItems: IdealMissingItem[],
     inputFiles: StorageObjectRef[],
+    runId: string,
     fallbackMessage?: string,
   ): Promise<void> {
     if (products.length === 0) {
@@ -1945,6 +1981,7 @@ export class TelegramBot {
       [],
       missingItems,
       inputFiles,
+      runId,
     );
   }
 
@@ -1956,7 +1993,18 @@ export class TelegramBot {
     generatedProducts: IdealProduct[],
     missingItems: IdealMissingItem[],
     inputFiles: StorageObjectRef[],
+    runId: string,
   ): Promise<void> {
+    if (this.deliveredIdealProductRuns.has(runId)) {
+      logger.info("Clean product card generation skipped after delivery", {
+        chatId,
+        outfitId: outfit.id,
+        runId,
+        category: product.category,
+      });
+      return;
+    }
+
     let pendingJobId: string | undefined;
     const totalProducts =
       generatedProducts.length + remainingProducts.length + 1;
@@ -1971,6 +2019,7 @@ export class TelegramBot {
       logger.info("Ideal outfit clean product card cache hit", {
         chatId,
         outfitId: outfit.id,
+        runId,
         category: product.category,
         title: product.title,
         productUrl: product.productUrl,
@@ -1991,6 +2040,7 @@ export class TelegramBot {
         generatedProducts: [...generatedProducts, cachedProduct],
         missingItems,
         inputFiles,
+        runId,
       });
       return;
     }
@@ -1999,6 +2049,7 @@ export class TelegramBot {
       logger.info("Ideal outfit clean product card generation requested", {
         chatId,
         outfitId: outfit.id,
+        runId,
         category: product.category,
         title: product.title,
       });
@@ -2013,6 +2064,7 @@ export class TelegramBot {
 
       this.pendingJobs.set(jobId, {
         flow: "ideal-product-card-generation",
+        runId,
         chatId,
         outfit,
         product,
@@ -2045,6 +2097,7 @@ export class TelegramBot {
         chatId,
         jobId: assignment.job.id,
         workerId: assignment.worker.workerId,
+        runId,
         category: product.category,
       });
       await this.updateIdealProgressMessage(
@@ -2087,6 +2140,7 @@ export class TelegramBot {
           },
         ]),
         inputFiles,
+        runId,
       });
     }
   }
@@ -2095,6 +2149,17 @@ export class TelegramBot {
     pending: Extract<PendingJob, { flow: "ideal-product-card-generation" }>,
     callback: TelegramJobCallbackRequest,
   ): Promise<void> {
+    if (this.deliveredIdealProductRuns.has(pending.runId)) {
+      logger.info("Clean product card callback skipped after delivery", {
+        chatId: pending.chatId,
+        jobId: callback.jobId,
+        outfitId: pending.outfit.id,
+        runId: pending.runId,
+        category: pending.product.category,
+      });
+      return;
+    }
+
     const generatedFile = callback.result.files?.find((file) => file.url);
     const cachedFile = generatedFile
       ? await this.cacheIdealProductCard(pending.chatId, pending.product, generatedFile)
@@ -2141,6 +2206,7 @@ export class TelegramBot {
       generatedProducts,
       missingItems,
       inputFiles: pending.inputFiles,
+      runId: pending.runId,
     });
   }
 
@@ -2151,7 +2217,17 @@ export class TelegramBot {
     generatedProducts: IdealProduct[];
     missingItems: IdealMissingItem[];
     inputFiles: StorageObjectRef[];
+    runId: string;
   }): Promise<void> {
+    if (this.deliveredIdealProductRuns.has(params.runId)) {
+      logger.info("Ideal product generation continuation skipped after delivery", {
+        chatId: params.chatId,
+        outfitId: params.outfit.id,
+        runId: params.runId,
+      });
+      return;
+    }
+
     const [nextProduct, ...remainingProducts] = params.remainingProducts;
 
     if (nextProduct) {
@@ -2163,6 +2239,7 @@ export class TelegramBot {
         params.generatedProducts,
         params.missingItems,
         params.inputFiles,
+        params.runId,
       );
       return;
     }
@@ -2175,6 +2252,7 @@ export class TelegramBot {
         params.missingItems,
         buildMissingItemsFromOutfit(params.outfit, params.generatedProducts),
       ),
+      params.runId,
     );
   }
 
@@ -2183,7 +2261,19 @@ export class TelegramBot {
     lookTitle: string,
     products: IdealProduct[],
     missingItems: IdealMissingItem[],
+    runId: string,
   ): Promise<void> {
+    if (this.deliveredIdealProductRuns.has(runId)) {
+      logger.info("Ideal outfit product delivery skipped: run already delivered", {
+        chatId,
+        runId,
+        received: products.length,
+      });
+      return;
+    }
+
+    this.deliveredIdealProductRuns.add(runId);
+
     if (products.length === 0) {
       await this.updateIdealProgressMessage(
         chatId,
@@ -2268,6 +2358,7 @@ export class TelegramBot {
 
     logger.info("Ideal outfit products delivered", {
       chatId,
+      runId,
       delivered,
       received: products.length,
       missing: missingItems.length,
@@ -2533,6 +2624,11 @@ export class TelegramBot {
     pending: Extract<PendingJob, { flow: "ideal-products-validation" }>,
     jobId: string,
   ): Promise<void> {
+    if (!this.claimIdealValidationRun(pending.runId, jobId)) {
+      this.pendingJobs.delete(jobId);
+      return;
+    }
+
     await this.cancelQueuedCoordinatorJob(
       jobId,
       "Telegram client stopped waiting for ideal product validation assignment",
@@ -2542,6 +2638,7 @@ export class TelegramBot {
       chatId: pending.chatId,
       jobId,
       outfitId: pending.outfit.id,
+      runId: pending.runId,
       candidates: pending.candidates.length,
     });
 
@@ -2563,6 +2660,7 @@ export class TelegramBot {
       selectFallbackIdealProducts(pending.candidates, pending.outfit.items),
       pending.missingItems,
       pending.inputFiles,
+      pending.runId,
       "Проверка фото не дождалась свободного сервера, поэтому пробую собрать карточки только по выбранным элементам образа.",
     );
   }
@@ -2585,6 +2683,7 @@ export class TelegramBot {
       chatId: pending.chatId,
       jobId,
       outfitId: pending.outfit.id,
+      runId: pending.runId,
       category: pending.product.category,
       currentProductIndex,
       totalProducts,
@@ -2613,6 +2712,7 @@ export class TelegramBot {
         },
       ]),
       inputFiles: pending.inputFiles,
+      runId: pending.runId,
     });
   }
 
@@ -2633,6 +2733,19 @@ export class TelegramBot {
         error,
       });
     }
+  }
+
+  private claimIdealValidationRun(runId: string, jobId: string): boolean {
+    if (this.handledIdealValidationRuns.has(runId)) {
+      logger.info("Ideal outfit product validation skipped: run already handled", {
+        runId,
+        jobId,
+      });
+      return false;
+    }
+
+    this.handledIdealValidationRuns.add(runId);
+    return true;
   }
 
   private async updateQueuedIdealProgress(
@@ -3158,13 +3271,8 @@ function createIdealMarketSearchQuery(item: IdealOutfitItem): string {
     category && !isGenericIdealCategory(category)
       ? category
       : searchQuery || fallbackTerm || category || item.description.trim();
-  const color = item.color?.trim();
-  const query =
-    color && !baseQuery.toLowerCase().includes(color.toLowerCase())
-      ? `${color} ${baseQuery}`
-      : baseQuery;
 
-  return truncateText(query, 80);
+  return truncateText(baseQuery, 80);
 }
 
 function createIdealMarketCategory(item: IdealOutfitItem): string {

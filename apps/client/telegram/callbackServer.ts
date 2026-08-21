@@ -104,20 +104,32 @@ export function createTelegramCallbackServer(
 
         callbackReplayGuard.remember(token.tokenId, token.expiresAt);
 
-        logger.info("Callback accepted, handing job result to bot", {
+        logger.info("Callback accepted, scheduling job result handling", {
           jobId: body.jobId,
           chatId: body.client.chatId,
           messageLength: body.result.message.length,
           files: body.result.files?.length ?? 0,
         });
-        await bot.handleJobCallback(body);
-        logger.info("Callback handled by Telegram bot", {
-          jobId: body.jobId,
-          chatId: body.client.chatId,
-        });
 
-        writeJson(response, 200, {
+        void bot.handleJobCallback(body).then(
+          () => {
+            logger.info("Callback handled by Telegram bot", {
+              jobId: body.jobId,
+              chatId: body.client.chatId,
+            });
+          },
+          (error: unknown) => {
+            logger.error("Telegram callback handling failed after accept", {
+              jobId: body.jobId,
+              chatId: body.client.chatId,
+              error,
+            });
+          },
+        );
+
+        writeJson(response, 202, {
           ok: true,
+          accepted: true,
           jobId: body.jobId,
         });
         return;

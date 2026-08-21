@@ -263,6 +263,7 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
           audit,
           requesterIp,
           inputFilesStoragePrefix,
+          queueWaitLogLevel: "debug",
         });
 
         if (isQueuedJobResponse(assignment)) {
@@ -1379,6 +1380,7 @@ interface AssignJobDeps {
   audit: SecurityAuditStore;
   requesterIp: string;
   inputFilesStoragePrefix: ValidInputFilesStoragePrefix;
+  queueWaitLogLevel?: "debug" | "warn";
 }
 
 async function assignJobIfPossible({
@@ -1390,6 +1392,7 @@ async function assignJobIfPossible({
   audit,
   requesterIp,
   inputFilesStoragePrefix,
+  queueWaitLogLevel = "warn",
 }: AssignJobDeps): Promise<TryOnJobCreateResponse> {
   const firstQueued = (await jobs.findQueued())[0];
 
@@ -1416,7 +1419,7 @@ async function assignJobIfPossible({
   );
 
   if (!worker) {
-    logger.warn("Job assignment queued: no available worker", {
+    logger[queueWaitLogLevel]("Job assignment queued: no available worker", {
       jobId: job.id,
       requiredCapabilities,
     });
@@ -1426,7 +1429,7 @@ async function assignJobIfPossible({
   const reservedWorker = await workers.reserve(worker.workerId);
 
   if (!reservedWorker) {
-    logger.warn("Job assignment queued: worker became unavailable before reserve", {
+    logger[queueWaitLogLevel]("Job assignment queued: worker became unavailable before reserve", {
       jobId: job.id,
       workerId: worker.workerId,
     });

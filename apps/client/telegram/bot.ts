@@ -400,16 +400,20 @@ export class TelegramBot {
       }
     }
 
-    const sent = await this.sendFormattedMessage(
-      chatId,
-      text,
-      processingMarkup(),
-    );
+    const sent = await this.sendFormattedMessage(chatId, text);
     const messageId = readTelegramMessageId(sent);
 
     if (messageId) {
       this.idealProgressMessages.set(chatId, {
         messageId,
+      });
+      logger.info("Ideal progress message created", {
+        chatId,
+        messageId,
+      });
+    } else {
+      logger.warn("Ideal progress message id was not returned by Telegram", {
+        chatId,
       });
     }
   }
@@ -3118,19 +3122,120 @@ function formatIdealProductProgress(params: {
   search: string;
   validation: string;
   generation: string;
+  progress?: number;
   note?: string;
 }): string {
+  const progress = clampProgress(
+    params.progress ?? inferIdealProductProgress(params),
+  );
+
   return [
     `Подбор товаров для **${params.lookTitle}**`,
     "",
-    `1. Поиск товаров: ${params.search}`,
-    `2. Проверка фото: ${params.validation}`,
-    `3. Генерация карточек: ${params.generation}`,
+    `Прогресс: ${formatTextProgressBar(progress)}`,
+    "",
+    `Поиск товаров: ${params.search}`,
+    `Проверка фото: ${params.validation}`,
+    `Генерация карточек: ${params.generation}`,
     params.note ? "" : undefined,
     params.note,
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
+}
+
+function inferIdealProductProgress(params: {
+  search: string;
+  validation: string;
+  generation: string;
+}): number {
+  const search = params.search.toLowerCase();
+  const validation = params.validation.toLowerCase();
+  const generation = params.generation.toLowerCase();
+
+  if (
+    search.includes("ошибка") ||
+    validation.includes("ошибка") ||
+    generation.includes("ошибка")
+  ) {
+    return 100;
+  }
+
+  const generatedMatch = /готово\s+(\d+)\s*\/\s*(\d+)/i.exec(
+    params.generation,
+  );
+
+  if (generatedMatch) {
+    const done = Number(generatedMatch[1]);
+    const total = Number(generatedMatch[2]);
+
+    if (Number.isFinite(done) && Number.isFinite(total) && total > 0) {
+      return 74 + Math.round((Math.min(done, total) / total) * 22);
+    }
+  }
+
+  if (generation.includes("готово")) {
+    return 100;
+  }
+
+  if (generation.includes("выполня")) {
+    return 78;
+  }
+
+  if (generation.includes("очеред")) {
+    return 70;
+  }
+
+  if (generation.includes("ожида")) {
+    if (validation.includes("готово")) {
+      return 66;
+    }
+
+    if (validation.includes("выполня")) {
+      return 56;
+    }
+
+    if (validation.includes("очеред")) {
+      return 50;
+    }
+
+    if (validation.includes("создаю")) {
+      return 44;
+    }
+  }
+
+  if (validation.includes("готово")) {
+    return 66;
+  }
+
+  if (search.includes("готово")) {
+    return 34;
+  }
+
+  if (search.includes("выполня")) {
+    return 22;
+  }
+
+  if (search.includes("очеред")) {
+    return 14;
+  }
+
+  if (search.includes("создаю")) {
+    return 6;
+  }
+
+  return 3;
+}
+
+function formatTextProgressBar(progress: number): string {
+  const total = 20;
+  const filled = Math.round((clampProgress(progress) / 100) * total);
+
+  return `[${"#".repeat(filled)}${"-".repeat(total - filled)}] ${clampProgress(progress)}%`;
+}
+
+function clampProgress(progress: number): number {
+  return Math.max(0, Math.min(100, Math.round(progress)));
 }
 
 function formatProductSelectionIntro(
@@ -3139,6 +3244,10 @@ function formatProductSelectionIntro(
   missingItems: IdealMissingItem[],
 ): string {
   const lines = [
+    `Подбор товаров для **${lookTitle}**`,
+    "",
+    `Прогресс: ${formatTextProgressBar(100)}`,
+    "",
     `Подборка для образа **${lookTitle}**.`,
     `Показываю чистые карточки товаров на белом фоне. Исходные страницы искались в основном по РФ, рублям и доставке в Москву, когда это было видно.`,
     `Подготовлено товаров: ${products.length}.`,

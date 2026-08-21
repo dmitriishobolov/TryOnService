@@ -6,6 +6,7 @@ import {
   joinUrl,
   requireApiKey,
   selectInputFile,
+  storeResultFromBuffer,
   TryOnModelError,
 } from "../providerUtils.js";
 import { createLogger } from "../../../shared/logger.js";
@@ -37,11 +38,12 @@ const reasoningEffortValues = [
   "high",
   "xhigh",
 ] as const satisfies readonly OpenAiReasoningEffort[];
+const toolChoiceValues = ["auto", "none", "required"] as const;
 
 export const openAiTryOnAdapter: TryOnModelAdapter = {
   provider,
   displayName: "OpenAI",
-  run: async ({ job, config, signal }) => {
+  run: async ({ job, config, coordinator, signal }) => {
     const apiKey = requireApiKey(
       provider,
       "OPENAI_API_KEY",
@@ -94,6 +96,8 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
       config.openai.storeResponse,
     );
     const tools = buildTools(options);
+    const include = buildInclude(tools);
+    const toolChoice = readToolChoice(options, tools);
     const extraInputImageUrls = readRemoteImageUrls(options);
     logger.info("OpenAI Responses request started", {
       jobId: job.jobId,
@@ -109,6 +113,7 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
       inputBytes: personImage.buffer.length,
       promptLength: prompt.length,
       tools: tools.map((tool) => tool.type),
+      toolChoice,
       extraInputImages: extraInputImageUrls.length,
     });
     const response = await fetchJson<unknown>(
@@ -152,11 +157,8 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
           ...(tools.length
             ? {
                 tools,
-                tool_choice: "auto",
-                include: [
-                  "web_search_call.results",
-                  "web_search_call.action.sources",
-                ],
+                tool_choice: toolChoice,
+                ...(include.length ? { include } : {}),
               }
             : {}),
         }),
@@ -165,8 +167,9 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
       signal,
     );
     const outputText = extractOutputText(response);
+    const generatedImages = extractGeneratedImages(response);
 
-    if (!outputText) {
+    if (!outputText && generatedImages.length === 0) {
       logger.warn("OpenAI Responses output text missing", {
         jobId: job.jobId,
         model,
@@ -177,15 +180,32 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
         true,
       );
     }
+    const files = await Promise.all(
+      generatedImages.map((buffer) =>
+        storeResultFromBuffer({
+          provider,
+          jobId: job.jobId,
+          buffer,
+          contentType: "image/png",
+          coordinator,
+          config,
+          signal,
+        }),
+      ),
+    );
 
     logger.info("OpenAI Responses request finished", {
       jobId: job.jobId,
       model,
-      outputLength: outputText.length,
+      outputLength: outputText?.length ?? 0,
+      generatedImages: files.length,
     });
 
     return {
-      message: `Ответ от сервера. Провайдер: OpenAI.\n\n${outputText}`,
+      message: `Ответ от сервера. Провайдер: OpenAI.\n\n${
+        outputText ?? "Изображение сгенерировано и сохранено в storage."
+      }`,
+      ...(files.length ? { files } : {}),
     };
   },
 };
@@ -196,6 +216,13 @@ interface OpenAiToolConfig {
     allowed_domains?: string[];
   };
   search_context_size?: string;
+  model?: string;
+  quality?: string;
+  size?: string;
+  background?: string;
+  output_format?: string;
+  input_fidelity?: string;
+  moderation?: string;
 }
 
 type OpenAiInputContent =
@@ -361,8 +388,43 @@ function buildReasoningConfig(
 
 function buildTools(options: Record<string, unknown>): OpenAiToolConfig[] {
   const webSearchTool = buildWebSearchTool(options);
+  const imageGenerationTool = buildImageGenerationTool(options);
 
-  return webSearchTool ? [webSearchTool] : [];
+  return [webSearchTool, imageGenerationTool].filter(
+    (tool): tool is OpenAiToolConfig => Boolean(tool),
+  );
+}
+
+function buildInclude(tools: OpenAiToolConfig[]): string[] {
+  return tools.some((tool) => tool.type === "web_search")
+    ? ["web_search_call.results", "web_search_call.action.sources"]
+    : [];
+}
+
+function readToolChoice(
+  options: Record<string, unknown>,
+  tools: OpenAiToolConfig[],
+): string {
+  const value = options.toolChoice;
+
+  if (value === undefined) {
+    return tools.length === 1 && tools[0]?.type === "image_generation"
+      ? "required"
+      : "auto";
+  }
+
+  if (
+    typeof value === "string" &&
+    toolChoiceValues.some((item) => item === value)
+  ) {
+    return value;
+  }
+
+  throw new TryOnModelError(
+    "openai_invalid_toolChoice",
+    "OpenAI option toolChoice must be auto, none or required",
+    false,
+  );
 }
 
 function buildWebSearchTool(
@@ -406,6 +468,61 @@ function buildWebSearchTool(
         }
       : {}),
   };
+}
+
+function buildImageGenerationTool(
+  options: Record<string, unknown>,
+): OpenAiToolConfig | undefined {
+  const raw = options.imageGeneration;
+
+  if (raw === undefined || raw === false) {
+    return undefined;
+  }
+
+  if (raw !== true && !isRecord(raw)) {
+    throw new TryOnModelError(
+      "openai_invalid_imageGeneration",
+      "OpenAI option imageGeneration must be a boolean or object",
+      false,
+    );
+  }
+
+  const rawOptions = isRecord(raw) ? raw : {};
+
+  return {
+    type: "image_generation",
+    ...readOptionalToolString(rawOptions, "model"),
+    ...readOptionalToolString(rawOptions, "quality"),
+    ...readOptionalToolString(rawOptions, "size"),
+    ...readOptionalToolString(rawOptions, "background"),
+    ...readOptionalToolString(rawOptions, "moderation"),
+    ...readOptionalToolString(rawOptions, "inputFidelity", "input_fidelity"),
+    ...readOptionalToolString(rawOptions, "outputFormat", "output_format"),
+  };
+}
+
+function readOptionalToolString(
+  options: Record<string, unknown>,
+  key: string,
+  outputKey = key,
+): Record<string, string> {
+  const value = options[key];
+
+  if (value === undefined) {
+    return {};
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    return {
+      [outputKey]: value.trim(),
+    };
+  }
+
+  throw new TryOnModelError(
+    `openai_invalid_imageGeneration_${key}`,
+    `OpenAI imageGeneration.${key} must be a string`,
+    false,
+  );
 }
 
 function readStringArrayOption(value: unknown, key: string): string[] {
@@ -596,6 +713,35 @@ function extractOutputText(value: unknown): string | undefined {
   }
 
   return collectText(value).join("\n").trim() || undefined;
+}
+
+function extractGeneratedImages(value: unknown): Buffer[] {
+  return collectGeneratedImageBase64(value)
+    .map((encoded) => Buffer.from(encoded, "base64"))
+    .filter((buffer) => buffer.length > 0);
+}
+
+function collectGeneratedImageBase64(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap(collectGeneratedImageBase64);
+  }
+
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  const result =
+    value.type === "image_generation_call" && typeof value.result === "string"
+      ? [value.result]
+      : [];
+
+  return result.concat(
+    Object.values(value).flatMap(collectGeneratedImageBase64),
+  );
 }
 
 function collectText(value: unknown): string[] {

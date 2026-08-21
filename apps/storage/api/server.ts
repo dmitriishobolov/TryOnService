@@ -116,7 +116,15 @@ export function createStorageServer(deps: StorageServerDeps): Server {
       if (objectMatch && request.method === "GET") {
         const key = normalizeStorageKey(decodeURIComponent(objectMatch[1]));
 
-        if (!hasStorageObjectAccess(request.headers, config, key, "read")) {
+        if (
+          !hasStorageObjectAccess(
+            request.headers,
+            config,
+            key,
+            "read",
+            url.searchParams.get("accessToken") ?? undefined,
+          )
+        ) {
           logger.warn("Storage object download rejected", {
             storageId: config.storageId,
             key,
@@ -194,8 +202,10 @@ function hasStorageObjectAccess(
   config: StorageConfig,
   key: string,
   operation: "read" | "write",
+  tokenOverride?: string,
 ): boolean {
-  const token = firstHeaderValue(headers["x-storage-access-token"]);
+  const token =
+    tokenOverride ?? firstHeaderValue(headers["x-storage-access-token"]);
   const verification = verifyDispatchToken(token, config.accessSigningKey);
   const payload = verification.payload;
 

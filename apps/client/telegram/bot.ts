@@ -109,8 +109,19 @@ type PendingJob =
       flow: "ideal-products-validation";
       chatId: string;
       outfit: IdealOutfit;
+      inputFiles: StorageObjectRef[];
       candidates: IdealProduct[];
       missingItems: IdealMissingItem[];
+    }
+  | {
+      flow: "ideal-product-card-generation";
+      chatId: string;
+      outfit: IdealOutfit;
+      product: IdealProduct;
+      remainingProducts: IdealProduct[];
+      generatedProducts: IdealProduct[];
+      missingItems: IdealMissingItem[];
+      inputFiles: StorageObjectRef[];
     };
 
 interface IdealOutfitItem {
@@ -146,19 +157,7 @@ interface IdealProduct {
   price?: string;
   source?: string;
   whyFits?: string;
-  imageCheck?: IdealProductImageCheck;
-}
-
-interface IdealProductImageCheck {
-  approved: boolean;
-  productOnly: boolean;
-  noPerson: boolean;
-  noMannequin: boolean;
-  noOtherClothes: boolean;
-  cleanBackground: boolean;
-  fullyVisible: boolean;
-  noTextOverlay: boolean;
-  rejectionReason?: string;
+  originalImageUrl?: string;
 }
 
 interface IdealMissingItem {
@@ -186,7 +185,8 @@ interface IdealProductValidationResponse {
 interface IdealAcceptedCandidate {
   imageIndex: number;
   whyFits?: string;
-  imageCheck?: IdealProductImageCheck;
+  canGenerateCleanCard: boolean;
+  reason?: string;
 }
 
 interface IdealOutfitSanitizeOptions {
@@ -367,10 +367,12 @@ export class TelegramBot {
       return;
     }
 
-    await this.handleIdealProductValidationCallback(
-      pending,
-      callback.result.message,
-    );
+    if (pending.flow === "ideal-products-validation") {
+      await this.handleIdealProductValidationCallback(pending, callback);
+      return;
+    }
+
+    await this.handleIdealProductCardGenerationCallback(pending, callback);
   }
 
   private async sendFormattedMessage(
@@ -1022,7 +1024,7 @@ export class TelegramBot {
 
     const candidates = sanitizeIdealProducts(parsed.products, {
       allowedItems: pending.outfit.items,
-      requireImageCheck: false,
+      requireCleanCardReady: false,
       allowMultiplePerCategory: true,
       maxProducts: maxIdealProductCandidates(pending.outfit),
     });
@@ -1075,6 +1077,7 @@ export class TelegramBot {
         flow: "ideal-products-validation",
         chatId: pending.chatId,
         outfit: pending.outfit,
+        inputFiles: pending.inputFiles,
         candidates,
         missingItems,
       });
@@ -1102,7 +1105,7 @@ export class TelegramBot {
       });
       await this.sendMessage(
         pending.chatId,
-        `Нашёл ${candidates.length} кандидатов. Проверяю, что на фото только товар без человека и лишней одежды.`,
+        `Нашёл ${candidates.length} кандидатов. Проверяю, какие товары можно аккуратно превратить в чистые карточки.`,
         processingMarkup(),
       );
     } catch (error) {
@@ -1124,10 +1127,10 @@ export class TelegramBot {
 
   private async handleIdealProductValidationCallback(
     pending: Extract<PendingJob, { flow: "ideal-products-validation" }>,
-    message: string,
+    callback: TelegramJobCallbackRequest,
   ): Promise<void> {
     const parsed = parseJsonFromOpenAiMessage<IdealProductValidationResponse>(
-      message,
+      callback.result.message,
     );
 
     if (!parsed || parsed.ok !== true) {
@@ -1158,7 +1161,219 @@ export class TelegramBot {
           pending.outfit,
           products,
           missingItems,
-          "Не осталось товаров после проверки фото: отсеял карточки с человеком, манекеном, лишней одеждой или плохим фоном.",
+          "Не осталось товаров после проверки фото: не нашлось кандидатов, из которых можно надежно сделать чистую карточку товара.",
+        ),
+        mainMenuMarkup(),
+      );
+      return;
+    }
+
+    const [firstProduct, ...remainingProducts] = products;
+
+    if (!firstProduct) {
+      await this.sendMessage(
+        pending.chatId,
+        formatMissingProductsMessage(
+          pending.outfit,
+          [],
+          missingItems,
+          "Не осталось товаров после проверки фото.",
+        ),
+        mainMenuMarkup(),
+      );
+      return;
+    }
+
+    await this.createIdealProductCardGenerationRequest(
+      pending.chatId,
+      pending.outfit,
+      firstProduct,
+      remainingProducts,
+      [],
+      missingItems,
+      pending.inputFiles,
+    );
+  }
+
+  private async createIdealProductCardGenerationRequest(
+    chatId: string,
+    outfit: IdealOutfit,
+    product: IdealProduct,
+    remainingProducts: IdealProduct[],
+    generatedProducts: IdealProduct[],
+    missingItems: IdealMissingItem[],
+    inputFiles: StorageObjectRef[],
+  ): Promise<void> {
+    let pendingJobId: string | undefined;
+
+    try {
+      logger.info("Ideal outfit clean product card generation requested", {
+        chatId,
+        outfitId: outfit.id,
+        category: product.category,
+        title: product.title,
+      });
+      const assignment = await this.coordinator.createRequestJob({
+        chatId,
+        text: createIdealProductCardGenerationPrompt(product),
+        model: createIdealProductCardGenerationModelSelection(product),
+        inputFiles,
+      });
+      const jobId = getResponseJobId(assignment);
+      pendingJobId = jobId;
+
+      this.pendingJobs.set(jobId, {
+        flow: "ideal-product-card-generation",
+        chatId,
+        outfit,
+        product,
+        remainingProducts,
+        generatedProducts,
+        missingItems,
+        inputFiles,
+      });
+
+      if (isQueuedJobResponse(assignment)) {
+        await this.sendMessage(
+          chatId,
+          `Генерирую чистую карточку товара: ${product.category}. Запрос ${assignment.job.id} поставлен в очередь.`,
+          processingMarkup(),
+        );
+        void this.waitForAssignmentAndDispatch(
+          chatId,
+          assignment.job.id,
+          assignment.retryAfterMs,
+        );
+        return;
+      }
+
+      await this.worker.dispatchJob(assignment);
+      logger.info("Ideal outfit clean product card generation job dispatched", {
+        chatId,
+        jobId: assignment.job.id,
+        workerId: assignment.worker.workerId,
+        category: product.category,
+      });
+      await this.sendMessage(
+        chatId,
+        `Генерирую чистую карточку товара: ${product.category}.`,
+        processingMarkup(),
+      );
+    } catch (error) {
+      if (pendingJobId) {
+        this.pendingJobs.delete(pendingJobId);
+      }
+      logger.error("Failed to create clean product card generation job", {
+        chatId,
+        category: product.category,
+        error,
+      });
+      await this.continueOrDeliverGeneratedProducts({
+        chatId,
+        outfit,
+        remainingProducts,
+        generatedProducts,
+        missingItems: mergeMissingItems(missingItems, [
+          {
+            slot: product.slot,
+            category: product.category,
+            reason: "Не удалось запустить генерацию чистой карточки товара",
+          },
+        ]),
+        inputFiles,
+      });
+    }
+  }
+
+  private async handleIdealProductCardGenerationCallback(
+    pending: Extract<PendingJob, { flow: "ideal-product-card-generation" }>,
+    callback: TelegramJobCallbackRequest,
+  ): Promise<void> {
+    const generatedFile = callback.result.files?.find((file) => file.url);
+    const generatedProducts = generatedFile?.url
+      ? [
+          ...pending.generatedProducts,
+          {
+            ...pending.product,
+            originalImageUrl:
+              pending.product.originalImageUrl ?? pending.product.imageUrl,
+            imageUrl: generatedFile.url,
+          },
+        ]
+      : pending.generatedProducts;
+    const missingItems = generatedFile?.url
+      ? pending.missingItems
+      : mergeMissingItems(pending.missingItems, [
+          {
+            slot: pending.product.slot,
+            category: pending.product.category,
+            reason: "Не удалось получить сгенерированную чистую карточку товара",
+          },
+        ]);
+
+    await this.continueOrDeliverGeneratedProducts({
+      chatId: pending.chatId,
+      outfit: pending.outfit,
+      remainingProducts: pending.remainingProducts,
+      generatedProducts,
+      missingItems,
+      inputFiles: pending.inputFiles,
+    });
+  }
+
+  private async continueOrDeliverGeneratedProducts(params: {
+    chatId: string;
+    outfit: IdealOutfit;
+    remainingProducts: IdealProduct[];
+    generatedProducts: IdealProduct[];
+    missingItems: IdealMissingItem[];
+    inputFiles: StorageObjectRef[];
+  }): Promise<void> {
+    const [nextProduct, ...remainingProducts] = params.remainingProducts;
+
+    if (nextProduct) {
+      await this.createIdealProductCardGenerationRequest(
+        params.chatId,
+        params.outfit,
+        nextProduct,
+        remainingProducts,
+        params.generatedProducts,
+        params.missingItems,
+        params.inputFiles,
+      );
+      return;
+    }
+
+    await this.deliverIdealProducts(
+      params.chatId,
+      params.outfit.title,
+      params.generatedProducts,
+      mergeMissingItems(
+        params.missingItems,
+        buildMissingItemsFromOutfit(params.outfit, params.generatedProducts),
+      ),
+    );
+  }
+
+  private async deliverIdealProducts(
+    chatId: string,
+    lookTitle: string,
+    products: IdealProduct[],
+    missingItems: IdealMissingItem[],
+  ): Promise<void> {
+    if (products.length === 0) {
+      await this.sendMessage(
+        chatId,
+        formatMissingProductsMessage(
+          {
+            id: "look",
+            title: lookTitle,
+            summary: "",
+            items: [],
+          },
+          products,
+          missingItems,
+          "Не удалось подготовить чистые карточки товаров для этого образа.",
         ),
         mainMenuMarkup(),
       );
@@ -1166,13 +1381,8 @@ export class TelegramBot {
     }
 
     await this.sendMessage(
-      pending.chatId,
-      formatProductSelectionIntro(
-        parsed.lookTitle ?? pending.outfit.title,
-        products,
-        missingItems,
-      ),
-      mainMenuMarkup(),
+      chatId,
+      formatProductSelectionIntro(lookTitle, products, missingItems),
     );
 
     let delivered = 0;
@@ -1180,7 +1390,7 @@ export class TelegramBot {
     for (const product of products) {
       try {
         await this.sendPhoto(
-          pending.chatId,
+          chatId,
           product.imageUrl,
           formatProductCaption(product),
           productCardMarkup(product),
@@ -1188,7 +1398,7 @@ export class TelegramBot {
         delivered += 1;
       } catch (error) {
         logger.warn("Failed to send product photo, product skipped", {
-          chatId: pending.chatId,
+          chatId,
           title: product.title,
           imageUrl: product.imageUrl,
           productUrl: product.productUrl,
@@ -1199,15 +1409,17 @@ export class TelegramBot {
 
     if (delivered === 0) {
       await this.sendMessage(
-        pending.chatId,
+        chatId,
         "Карточки нашлись, но Telegram не смог загрузить их изображения. Попробуйте другой образ.",
         mainMenuMarkup(),
       );
       return;
     }
 
+    await this.sendMessage(chatId, "Подборка готова.", mainMenuMarkup());
+
     logger.info("Ideal outfit products delivered", {
-      chatId: pending.chatId,
+      chatId,
       delivered,
       received: products.length,
       missing: missingItems.length,
@@ -1809,6 +2021,34 @@ function createIdealProductValidationModelSelection(
   };
 }
 
+function createIdealProductCardGenerationModelSelection(
+  product: IdealProduct,
+): TryOnModelSelection {
+  return {
+    provider: "openai",
+    task: "wardrobe-recommendation",
+    options: {
+      imageDetail: "low",
+      textVerbosity: "low",
+      reasoningEffort: "minimal",
+      reasoningMode: "standard",
+      maxOutputTokens: 300,
+      store: false,
+      toolChoice: "required",
+      inputImageUrls: [product.imageUrl],
+      maxInputImageUrls: 1,
+      imageGeneration: {
+        model: "gpt-image-1",
+        quality: "medium",
+        size: "1024x1024",
+        background: "opaque",
+        outputFormat: "png",
+        inputFidelity: "low",
+      },
+    },
+  };
+}
+
 function createIdealProductSearchPrompt(outfit: IdealOutfit): string {
   const maxCandidates = maxIdealProductCandidates(outfit);
 
@@ -1828,9 +2068,13 @@ ${JSON.stringify(compactOutfitForPrompt(outfit))}
 - до ${idealCandidatesPerOutfitItem} кандидатов на каждый item, всего не больше ${maxCandidates};
 - productUrl должен быть карточкой товара, не категорией, поиском или рекламной страницей;
 - imageUrl должен быть прямой или доступной картинкой товара;
+- приоритет: цена в рублях, доставка или наличие в России, Москва или Московский регион если это видно;
+- в search query можно добавлять "купить", "руб", "Москва", "доставка по России";
 - не добавляй категории, которых нет в outfit.items;
 - не выдумывай url, цену, магазин;
-- если видно, что фото на человеке/манекене/в коллаже/с другими вещами, не бери;
+- если фото уже на белом/однотонном фоне и с одним товаром, такой кандидат лучше;
+- если товар на человеке/манекене/в lookbook, кандидат можно брать только когда сам предмет хорошо виден и его реально изолировать в отдельную чистую карточку;
+- если в фото много одинаковых товаров, товар закрыт телом/руками, видна только малая часть вещи или непонятно, какой предмет относится к item, не бери;
 - если сомневаешься в фото, кандидат можно оставить: следующий шаг проверит изображение vision-моделью;
 - если по item нет кандидатов, добавь missingItems.
 
@@ -1881,7 +2125,7 @@ function createIdealProductValidationPrompt(
   }));
 
   return `
-Быстро проверь product images.
+Быстро проверь product images для последующей генерации clean product card.
 Image 0 = фото пользователя, игнорируй.
 Дальше images идут по candidate.i: 1,2,3...
 
@@ -1891,16 +2135,14 @@ ${JSON.stringify(compactOutfitForPrompt(outfit))}
 Candidates:
 ${JSON.stringify(compactCandidates)}
 
-Прими candidate только если ВСЁ true:
-- один основной товар нужной категории;
-- нет человека, частей тела, модели, манекена;
-- нет другой одежды/обуви/аксессуаров рядом;
-- не коллаж, не lookbook, не flat lay из нескольких вещей;
-- фон белый/светлый/однотонный/контрастный;
-- товар виден почти целиком;
-- нет текста/водяных знаков поверх.
+Прими candidate, если по изображению можно уверенно сгенерировать одну чистую карточку товара:
+- нужен один целевой предмет категории candidate.c;
+- предмет должен быть хорошо виден по форме, цвету, крою и деталям;
+- фото с человеком, моделью или манекеном допустимо, если целевой предмет можно отделить от тела и фона;
+- другие элементы одежды допустимы только если они не мешают понять целевой предмет;
+- фон может быть любым, потому что следующий шаг перерисует белый фон;
+- reject, если предмет слишком закрыт, слишком мал, обрезан критично, смешан с несколькими похожими вещами, это не товар или невозможно понять, что продается.
 
-Сомнение = reject.
 Верни не больше 1 accepted на категорию. Не повторяй title/url/imageUrl.
 
 Верни только строгий JSON без Markdown:
@@ -1911,28 +2153,41 @@ ${JSON.stringify(compactCandidates)}
     {
       "imageIndex": 1,
       "whyFits": "до 60 символов",
-      "imageCheck": {
-        "approved": true,
-        "productOnly": true,
-        "noPerson": true,
-        "noMannequin": true,
-        "noOtherClothes": true,
-        "cleanBackground": true,
-        "fullyVisible": true,
-        "noTextOverlay": true
-      }
+      "canGenerateCleanCard": true,
+      "reason": "видна форма, цвет и детали вещи"
     }
   ],
   "missingItems": [
     {
       "slot": "outerwear",
       "category": "куртка",
-      "reason": "все кандидаты отклонены: человек/манекен/лишняя одежда/плохой фон"
+      "reason": "все кандидаты отклонены: предмет неясен или его нельзя изолировать в чистую карточку"
     }
   ]
 }
 
 Если accepted нет, верни ok=true, acceptedCandidates=[] и missingItems по всем категориям outfit.
+`.trim();
+}
+
+function createIdealProductCardGenerationPrompt(product: IdealProduct): string {
+  return `
+Image 0 = фото пользователя, игнорируй.
+Image 1 = найденное фото товара.
+
+Сгенерируй одну чистую карточку товара для категории "${product.category}".
+Целевой товар: ${product.title}.
+Описание: ${product.shortDescription}.
+
+Требования к изображению:
+- только один целевой предмет одежды или обуви;
+- убрать человека, лицо, тело, руки, ноги, манекен, фон, интерьер и другие вещи;
+- белый фон, фронтальный вид, предмет по центру, целиком в кадре;
+- сохранить цвет, материал, крой, принт, застежки и характерные детали;
+- без текста, водяных знаков, ценников, рамок и декоративных элементов;
+- не добавлять новые элементы гардероба.
+
+Используй image_generation tool. В тексте ответа напиши только "ok".
 `.trim();
 }
 
@@ -2077,9 +2332,7 @@ function selectAcceptedIdealProducts(
       continue;
     }
 
-    const imageCheck = acceptedCandidate.imageCheck;
-
-    if (!imageCheck?.approved) {
+    if (acceptedCandidate.canGenerateCleanCard !== true) {
       continue;
     }
 
@@ -2087,7 +2340,6 @@ function selectAcceptedIdealProducts(
     products.push({
       ...candidate,
       whyFits: acceptedCandidate.whyFits ?? candidate.whyFits,
-      imageCheck,
     });
   }
 
@@ -2112,16 +2364,16 @@ function sanitizeAcceptedCandidate(
   }
 
   const imageIndex = readPositiveInteger(value.imageIndex);
-  const imageCheck = sanitizeIdealProductImageCheck(value.imageCheck);
 
-  if (!imageIndex || !imageCheck?.approved) {
+  if (!imageIndex || value.canGenerateCleanCard !== true) {
     return undefined;
   }
 
   return {
     imageIndex,
     whyFits: readOptionalString(value.whyFits),
-    imageCheck,
+    canGenerateCleanCard: true,
+    reason: readOptionalString(value.reason),
   };
 }
 
@@ -2129,7 +2381,7 @@ function sanitizeIdealProducts(
   value: unknown,
   options: {
     allowedItems: IdealOutfitItem[];
-    requireImageCheck: boolean;
+    requireCleanCardReady: boolean;
     allowMultiplePerCategory: boolean;
     maxProducts: number;
   },
@@ -2148,7 +2400,7 @@ function sanitizeIdealProducts(
   const products: IdealProduct[] = [];
 
   for (const raw of value) {
-    const product = sanitizeIdealProduct(raw, options.requireImageCheck);
+    const product = sanitizeIdealProduct(raw, options.requireCleanCardReady);
 
     if (!product) {
       continue;
@@ -2175,7 +2427,7 @@ function sanitizeIdealProducts(
 
 function sanitizeIdealProduct(
   value: unknown,
-  requireImageCheck: boolean,
+  requireCleanCardReady: boolean,
 ): IdealProduct | undefined {
   if (!isPlainObject(value)) {
     return undefined;
@@ -2199,11 +2451,11 @@ function sanitizeIdealProduct(
     return undefined;
   }
 
-  const imageCheck = sanitizeIdealProductImageCheck(value.imageCheck);
-
-  if (requireImageCheck && !imageCheck?.approved) {
+  if (requireCleanCardReady && value.canGenerateCleanCard !== true) {
     return undefined;
   }
+
+  const originalImageUrl = readOptionalString(value.originalImageUrl);
 
   return {
     slot,
@@ -2215,40 +2467,10 @@ function sanitizeIdealProduct(
     price: readOptionalString(value.price),
     source: readOptionalString(value.source),
     whyFits: readOptionalString(value.whyFits),
-    imageCheck,
+    ...(originalImageUrl && isHttpUrl(originalImageUrl)
+      ? { originalImageUrl }
+      : {}),
   };
-}
-
-function sanitizeIdealProductImageCheck(
-  value: unknown,
-): IdealProductImageCheck | undefined {
-  if (!isPlainObject(value)) {
-    return undefined;
-  }
-
-  const check: IdealProductImageCheck = {
-    approved: value.approved === true,
-    productOnly: value.productOnly === true,
-    noPerson: value.noPerson === true,
-    noMannequin: value.noMannequin === true,
-    noOtherClothes: value.noOtherClothes === true,
-    cleanBackground: value.cleanBackground === true,
-    fullyVisible: value.fullyVisible === true,
-    noTextOverlay: value.noTextOverlay === true,
-    rejectionReason: readOptionalString(value.rejectionReason),
-  };
-
-  check.approved =
-    check.approved &&
-    check.productOnly &&
-    check.noPerson &&
-    check.noMannequin &&
-    check.noOtherClothes &&
-    check.cleanBackground &&
-    check.fullyVisible &&
-    check.noTextOverlay;
-
-  return check;
 }
 
 function sanitizeIdealMissingItems(value: unknown): IdealMissingItem[] {
@@ -2317,7 +2539,7 @@ function buildMissingItemsFromOutfit(
     .map((item) => ({
       slot: item.slot,
       category: item.category,
-      reason: "Не найден товар с подходящей карточкой и чистым фото без человека и лишней одежды",
+      reason: "Не найден товар, который можно надежно превратить в чистую карточку на белом фоне",
     }));
 }
 
@@ -2368,8 +2590,8 @@ function formatProductSelectionIntro(
 ): string {
   const lines = [
     `Подборка для образа **${lookTitle}**.`,
-    `Показываю только карточки, где на фото один товар без человека, манекена и лишней одежды.`,
-    `Прошли проверку: ${products.length}.`,
+    `Показываю чистые карточки товаров на белом фоне. Исходные страницы искались в основном по РФ, рублям и доставке в Москву, когда это было видно.`,
+    `Подготовлено товаров: ${products.length}.`,
   ];
 
   if (missingItems.length) {

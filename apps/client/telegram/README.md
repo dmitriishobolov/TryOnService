@@ -30,17 +30,19 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 5. На время active job бот скрывает reply keyboard через `remove_keyboard`, чтобы пользователь не сбил интерфейс кнопками меню.
 6. Если фото не подходит для почти полного роста, worker возвращает JSON-отказ, а бот просит прислать другое изображение.
 7. Если фото подходит, worker возвращает до 3 образов. Бот показывает описание каждого образа и кнопки `Образ 1`, `Образ 2`, `Образ 3`.
-8. После выбора образа бот создает второй OpenAI job с web search только по `ozon.ru`, `wildberries.ru` и `aliexpress.ru`: worker ищет до 10 кандидатов товарных карточек для каждого элемента образа. Если на исходном фото обувь не видна, обувные категории не уходят в поиск.
-9. Бот создает третий OpenAI vision job: worker получает найденные `imageUrl` как `payload.model.options.inputImageUrls` и проверяет, что на фото один товар без человека, манекена, других вещей, коллажей, текста и шумного фона. Validation prompt просит вернуть только индексы принятых кандидатов, чтобы не тратить токены на повтор карточек.
-10. Бот отправляет пользователю только товары, которые прошли vision-проверку, как фото с кратким описанием и inline-кнопкой `Перейти к товару`. Для элементов без качественной карточки бот выводит отдельный список причин.
-11. Если пользователь нажал `Отмена` в шаге ожидания фото или выбора образа, бот сбрасывает текущее состояние и возвращает главное меню. Во время уже отправленного job отмена не выполняется и бот просит дождаться результата.
-12. Пользователь также может отправить `/request`, `/request openai` или фото с подписью `/request openai` для ручного legacy/demo flow.
-13. Telegram client запрашивает assignment через coordinator API и передает `sourceClientId`.
-14. Coordinator находит callback URL Telegram client, создает queued job, выбирает worker и отправляет worker-у prepare по этой job, когда capacity доступна.
-15. Coordinator возвращает signed dispatch token только после подтверждения worker prepare.
-16. Telegram client отправляет `workerRequest` напрямую выбранному worker'у.
-17. Worker обрабатывает job и отправляет callback в `POST /callbacks/jobs` с `x-client-callback-token`.
-18. Telegram client принимает callback, проверяет token/replay и передает результат в сценарный обработчик бота.
+8. После выбора образа бот создает второй OpenAI job с web search только по `ozon.ru`, `wildberries.ru` и `aliexpress.ru`: worker ищет до 10 кандидатов товарных карточек для каждого элемента образа, с приоритетом рублей, России и Москвы/Московского региона, если это видно в выдаче. Если на исходном фото обувь не видна, обувные категории не уходят в поиск.
+9. Бот создает третий OpenAI vision job: worker получает найденные `imageUrl` как `payload.model.options.inputImageUrls` и проверяет, можно ли из изображения надежно выделить один целевой товар в чистую карточку. Фото на человеке, модели или манекене допустимо, если форма, цвет, крой и детали предмета хорошо видны.
+10. Для каждого принятого кандидата бот создает отдельный OpenAI image generation job с `options.imageGeneration` и `toolChoice=required`. Worker генерирует PNG-карточку: один предмет, фронтальный вид, белый фон, без человека, манекена, других вещей и текста.
+11. Worker сохраняет сгенерированную карточку в object storage и возвращает ее в `result.files`. Бот отправляет пользователю именно clean-card изображение как `sendPhoto`, а ссылка на исходную товарную карточку идет в inline-кнопку `Перейти к товару`.
+12. Для элементов без надежного кандидата или без сгенерированной карточки бот выводит отдельный список причин.
+13. Если пользователь нажал `Отмена` в шаге ожидания фото или выбора образа, бот сбрасывает текущее состояние и возвращает главное меню. Во время уже отправленного job отмена не выполняется и бот просит дождаться результата.
+14. Пользователь также может отправить `/request`, `/request openai` или фото с подписью `/request openai` для ручного legacy/demo flow.
+15. Telegram client запрашивает assignment через coordinator API и передает `sourceClientId`.
+16. Coordinator находит callback URL Telegram client, создает queued job, выбирает worker и отправляет worker-у prepare по этой job, когда capacity доступна.
+17. Coordinator возвращает signed dispatch token только после подтверждения worker prepare.
+18. Telegram client отправляет `workerRequest` напрямую выбранному worker'у.
+19. Worker обрабатывает job и отправляет callback в `POST /callbacks/jobs` с `x-client-callback-token`.
+20. Telegram client принимает callback, проверяет token/replay и передает результат в сценарный обработчик бота.
 
 ## Реализовано сейчас
 
@@ -52,13 +54,13 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - Пока у чата есть active pending job, любые новые сообщения и команды блокируются до callback-а, а reply keyboard скрывается.
 - Фото в сценарии разбора внешности создает OpenAI job с жестким prompt: если это не фото реального человека или лицо не видно, модель должна ответить отказом без анализа.
 - Фото в сценарии идеального образа создает OpenAI job со строгим JSON-ответом: `ok=false` для неподходящего фото или `ok=true` с массивом `outfits` и флагом `footwearVisible`.
-- По выбранному образу создается второй OpenAI job с `options.webSearch.allowedDomains=["ozon.ru","wildberries.ru","aliexpress.ru"]`, чтобы найти до 10 кандидатов на каждый элемент образа.
-- После web search создается отдельный OpenAI vision job с `options.inputImageUrls` и `options.maxInputImageUrls`, чтобы проверить изображения кандидатов до отправки пользователю.
-- Prompt-ы для поиска и проверки используют compact JSON, `imageDetail=low`, `reasoningEffort=minimal` и короткий validation-ответ `acceptedCandidates`, чтобы снизить расход токенов.
+- По выбранному образу создается второй OpenAI job с `options.webSearch.allowedDomains=["ozon.ru","wildberries.ru","aliexpress.ru"]`, чтобы найти до 10 кандидатов на каждый элемент образа. Prompt просит приоритетно искать товары в рублях, с РФ/Москвой или доставкой по России, когда это видно.
+- После web search создается отдельный OpenAI vision job с `options.inputImageUrls` и `options.maxInputImageUrls`, чтобы проверить, можно ли из изображения кандидата сгенерировать чистую карточку одного товара.
+- Prompt-ы для поиска и проверки используют compact JSON, `imageDetail=low`, `reasoningEffort=minimal` и короткий validation-ответ `acceptedCandidates` с `canGenerateCleanCard`, чтобы снизить расход токенов.
 - Для одного образа бот дополнительно отбраковывает дубли категорий и повторяющиеся ссылки: если уже выбран худи, второй худи в подборку не попадет. Если `footwearVisible=false`, бот вырезает обувь из образа до запуска поиска товаров.
-- Финальная выдача принимает товар только если `imageCheck.approved=true` и все флаги `productOnly`, `noPerson`, `noMannequin`, `noOtherClothes`, `cleanBackground`, `fullyVisible`, `noTextOverlay` истинны.
-- Если по части образа, например куртке, не найдено чистое фото товара, бот явно показывает этот элемент в списке `Не удалось подобрать качественную карточку`.
-- Товар отправляется пользователю через `sendPhoto`, короткое описание попадает в caption, ссылка на карточку идет в inline-кнопку `Перейти к товару`.
+- Для каждого принятого товара бот запускает отдельный OpenAI job с `options.imageGeneration` и `toolChoice=required`, чтобы получить чистое изображение товара на белом фоне.
+- Если по части образа, например куртке, не найден надежный кандидат или не удалось сгенерировать clean card, бот явно показывает этот элемент в списке `Не удалось подобрать качественную карточку`.
+- Сгенерированная clean card отправляется пользователю через `sendPhoto`, короткое описание попадает в caption, ссылка на исходную карточку идет в inline-кнопку `Перейти к товару`.
 - `/request` создает mock/demo job в coordinator, ждет assignment при очереди и отправляет job worker'у напрямую.
 - Фото с подписью `/request openai` загружается в object storage и создает job с `payload.model.provider=openai`.
 - Чтобы выбрать конкретную OpenAI-модель из запроса клиента, используйте подпись вида `/request openai:gpt-5.6-luna`.
@@ -80,7 +82,8 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - `Telegram update blocked while job is in progress` - пользователь отправил сообщение или команду во время active job.
 - `Ideal outfit plan job dispatched` - отправлен job на анализ full-body фото и подбор образов.
 - `Ideal outfit products job dispatched` - отправлен job на web search товарных карточек.
-- `Ideal outfit product validation job dispatched` - отправлен job на vision-проверку картинок товаров.
+- `Ideal outfit product validation job dispatched` - отправлен job на vision-проверку пригодности картинок товаров к clean-card генерации.
+- `Ideal outfit clean product card generation job dispatched` - отправлен job на генерацию чистой карточки товара.
 - `Ideal outfit products delivered` - товары отправлены пользователю.
 
 Если первого события нет, проблема до worker dispatch. Если первое есть, а callback-событий нет, смотрите `devtest/logs/worker.log` по тому же `jobId`.

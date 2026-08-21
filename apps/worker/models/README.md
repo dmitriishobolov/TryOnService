@@ -10,9 +10,9 @@
 - `tryoncloud` - TryOnCloud Developer API или Platform API. `developer` отправляет файлы и получает raw PNG, `platform` отправляет `user_image` + публичный `product_image_url`.
 - `genlook` - Genlook Try-On API: worker загружает person image, создает generation и polling-ом ждет результат. Auth header и paths вынесены в env.
 - `wearfits` - WEARFITS Virtual Try-On API: worker отправляет sync submit на `/api/v1/virtual-fitting`, затем polling-ом ждет job result.
-- `openai` - OpenAI/ChatGPT vision adapter: worker отправляет фото пользователя в Responses API как data URL и возвращает текстовый анализ внешности/гардероба. Поддерживает per-job options: `imageDetail`, `textVerbosity`, `reasoningEffort`, `reasoningMode`, `maxOutputTokens`, `store`, `webSearch`, `inputImageUrls`, `maxInputImageUrls`.
+- `openai` - OpenAI/ChatGPT vision adapter: worker отправляет фото пользователя в Responses API как data URL и возвращает текстовый анализ внешности/гардероба. Поддерживает per-job options: `imageDetail`, `textVerbosity`, `reasoningEffort`, `reasoningMode`, `maxOutputTokens`, `store`, `webSearch`, `inputImageUrls`, `maxInputImageUrls`, `imageGeneration`, `toolChoice`.
 
-Для virtual try-on provider-ов worker ожидает минимум два `payload.inputFiles`: `TRYON_PERSON_IMAGE_INDEX` указывает фото пользователя, `TRYON_GARMENT_IMAGE_INDEX` - фото одежды/товара. OpenAI adapter использует только person image. Результат генеративных provider-ов сохраняется напрямую в object storage под `jobs/<jobId>/results/...`; coordinator получает только `StorageObjectRef` в `TryOnJobResult.files`.
+Для virtual try-on provider-ов worker ожидает минимум два `payload.inputFiles`: `TRYON_PERSON_IMAGE_INDEX` указывает фото пользователя, `TRYON_GARMENT_IMAGE_INDEX` - фото одежды/товара. OpenAI adapter всегда использует person image как первое изображение и может дополнительно получить удаленные изображения через `inputImageUrls`. Результат генеративных provider-ов и OpenAI image generation сохраняется напрямую в object storage под `jobs/<jobId>/results/...`; coordinator получает только `StorageObjectRef` в `TryOnJobResult.files`.
 
 ## Структура
 
@@ -78,9 +78,29 @@ Runner выбирает adapter через `payload.model.provider`, а provider
 }
 ```
 
-Worker всегда добавляет основное фото пользователя из `payload.inputFiles` первым изображением, а затем добавляет `inputImageUrls` в указанном порядке. Сейчас это используется Telegram-сценарием `Идеальный образ`: после web search бот отправляет найденные product images на отдельную vision-проверку и показывает пользователю только карточки, где на фото один товар без человека, манекена, других вещей, коллажа, текста и шумного фона.
+Worker всегда добавляет основное фото пользователя из `payload.inputFiles` первым изображением, а затем добавляет `inputImageUrls` в указанном порядке. Сейчас это используется Telegram-сценарием `Идеальный образ`: после web search бот отправляет найденные product images на отдельную vision-проверку, где модель принимает кандидатов с `canGenerateCleanCard=true`, если из изображения можно надежно выделить один целевой товар. Фото товара на человеке или манекене допустимо, если предмет хорошо виден и его можно отделить от фона.
 
 По умолчанию worker берет до 12 дополнительных `inputImageUrls`. Клиент может поднять лимит через `maxInputImageUrls`; worker всё равно ограничивает его верхним предохранителем `80`.
+
+Для OpenAI image generation клиент может передать `payload.model.options.imageGeneration` как `true` или объект с параметрами built-in tool. Если job содержит только `imageGeneration` tool, worker по умолчанию отправляет `tool_choice=required`; клиент также может задать `toolChoice` явно:
+
+```json
+{
+  "toolChoice": "required",
+  "inputImageUrls": ["https://example.com/product.jpg"],
+  "maxInputImageUrls": 1,
+  "imageGeneration": {
+    "model": "gpt-image-1",
+    "quality": "medium",
+    "size": "1024x1024",
+    "background": "opaque",
+    "outputFormat": "png",
+    "inputFidelity": "low"
+  }
+}
+```
+
+Adapter извлекает `image_generation_call.result`, сохраняет PNG через `storeResultFromBuffer` и возвращает файл в `TryOnJobResult.files`. `StorageObjectRef.url` содержит короткоживущий signed URL на storage-node, поэтому клиент может сразу отправить изображение пользователю, не проксируя файл через coordinator.
 
 ## Добавление нового AI provider-а
 

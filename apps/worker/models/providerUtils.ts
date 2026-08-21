@@ -432,7 +432,10 @@ async function putResultObject(params: {
     );
   }
 
-  return payload.object;
+  return {
+    ...payload.object,
+    url: storageSignedObjectUrl(storage.objectBaseUrl, key, storage.accessToken),
+  };
 }
 
 function extensionForContentType(contentType: string): string {
@@ -460,6 +463,19 @@ function encodeStorageKey(key: string): string {
     .split("/")
     .map((part) => encodeURIComponent(part))
     .join("/");
+}
+
+function storageSignedObjectUrl(
+  objectBaseUrl: string,
+  key: string,
+  accessToken: string,
+): string {
+  const url = new URL(
+    `${objectBaseUrl.replace(/\/$/, "")}/${encodeStorageKey(key)}`,
+  );
+  url.searchParams.set("accessToken", accessToken);
+
+  return url.toString();
 }
 
 function parseJson(raw: string): unknown {

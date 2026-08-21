@@ -36,6 +36,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - Storage-node не знает Telegram, jobs workflow или AI API.
 - Storage-node не принимает master credentials от clients/worker'ов.
 - Доступ к объектам только по signed token purpose `storage-access`.
+- Для `GET /objects/<key>` token можно передать header-ом `x-storage-access-token` или query-параметром `accessToken`. Query-вариант нужен для внешних клиентов вроде Telegram `sendPhoto`, которым проще отдать готовый URL.
 - Storage-node доверяет `keyPrefix` только из token coordinator-а; client/worker не могут расширить scope на стороне storage-node.
 - `STORAGE_DRIVER=local` пишет файлы в `STORAGE_LOCAL_ROOT`.
 - `STORAGE_DRIVER=s3` пишет файлы в S3-compatible backend напрямую из request stream.

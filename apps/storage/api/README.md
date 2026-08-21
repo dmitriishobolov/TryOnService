@@ -6,9 +6,9 @@
 
 - `GET /health` - health/status storage-node; требует `x-storage-service-key`.
 - `PUT /objects/:key` - прямой upload объекта; требует `x-storage-access-token` со scope `write` или `read-write`.
-- `GET /objects/:key` - прямое чтение объекта; требует `x-storage-access-token` со scope `read` или `read-write`.
+- `GET /objects/:key` - прямое чтение объекта; требует `x-storage-access-token` со scope `read` или `read-write`. Для пользовательских preview/download URL можно передать тот же token как query-параметр `accessToken`.
 
-`x-storage-access-token` подписывает coordinator через `STORAGE_ACCESS_SIGNING_KEY`. Storage-node проверяет подпись, `STORAGE_ACCESS_SIGNING_KEY_VERSION`, storageId, TTL, scope и keyPrefix локально, поэтому для чтения/записи файлов не нужен дополнительный roundtrip в coordinator.
+`x-storage-access-token` или query `accessToken` подписывает coordinator через `STORAGE_ACCESS_SIGNING_KEY`. Storage-node проверяет подпись, `STORAGE_ACCESS_SIGNING_KEY_VERSION`, storageId, TTL, scope и keyPrefix локально, поэтому для чтения/записи файлов не нужен дополнительный roundtrip в coordinator.
 
 PUT и GET работают потоково: storage-node не собирает объект целиком в память. После успешного PUT backend обновляет metadata index и `usedBytes` инкрементально.
 
@@ -26,4 +26,5 @@ PUT и GET работают потоково: storage-node не собирает
 - Размер одного объекта ограничивается `STORAGE_MAX_OBJECT_BYTES`.
 - Object key нормализуется как POSIX path и не может содержать выход через `..`.
 - Если token содержит `keyPrefix`, upload/download разрешен только внутри этого prefix.
+- Query `accessToken` поддерживается только для `GET /objects/:key`; upload всегда использует header `x-storage-access-token`.
 - Ошибки возвращаются в общем формате `ApiErrorResponse`, кроме успешного `GET /objects/:key`, который отдает raw bytes.

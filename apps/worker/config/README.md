@@ -34,6 +34,7 @@
 - `WILDBERRIES_SEARCH_MODE` - режим поиска Wildberries: `public` ищет по публичной выдаче `search.wb.ru` без token, `seller` ищет только seller-карточки через Content API, `auto` использует seller при наличии `WILDBERRIES_API_KEY`, иначе public.
 - `WILDBERRIES_API_KEY`, `WILDBERRIES_API_BASE_URL`, `WILDBERRIES_CARDS_LIST_PATH`, `WILDBERRIES_MAX_SCAN_CARDS`, `WILDBERRIES_WITH_PHOTO` - настройки Wildberries Content API для `seller`-режима. Adapter ищет среди карточек продавца, доступных этому token.
 - `WILDBERRIES_LOCALE`, `WILDBERRIES_PRODUCT_URL_TEMPLATE`, `WILDBERRIES_PUBLIC_SEARCH_BASE_URL`, `WILDBERRIES_PUBLIC_SEARCH_PATH`, `WILDBERRIES_PUBLIC_DEST`, `WILDBERRIES_PUBLIC_SORT`, `WILDBERRIES_PUBLIC_SPP`, `WILDBERRIES_PUBLIC_USER_AGENT` - настройки публичного поиска Wildberries. `public`-режим ходит в JSON endpoint, который использует сайт, с browser-like заголовками, но без captcha/proxy/stealth обхода.
+- `WILDBERRIES_PUBLIC_CACHE_TTL_MS`, `WILDBERRIES_PUBLIC_CACHE_STALE_TTL_MS`, `WILDBERRIES_PUBLIC_CACHE_MAX_ENTRIES`, `WILDBERRIES_PUBLIC_ERROR_COOLDOWN_MS` - in-memory cache публичной выдачи WB на worker-е: fresh TTL, fallback stale TTL после fresh TTL, максимум cache entries и пауза новых miss-запросов после 429.
 - Где получить marketplace credentials и какие права выбрать, описано в [market/API_KEYS.md](../market/API_KEYS.md).
 - `API_RATE_LIMIT_WINDOW_MS` - окно входящего rate limit.
 - `API_RATE_LIMIT_MAX_REQUESTS` - максимум входящих запросов с одного IP за окно.

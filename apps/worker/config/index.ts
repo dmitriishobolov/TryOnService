@@ -132,6 +132,10 @@ export interface WildberriesMarketConfig {
   publicSort: string;
   publicSpp: number;
   publicUserAgent: string;
+  publicCacheTtlMs: number;
+  publicCacheStaleTtlMs: number;
+  publicCacheMaxEntries: number;
+  publicErrorCooldownMs: number;
 }
 
 export interface WorkerMarketConfig {
@@ -661,6 +665,22 @@ export function loadWorkerConfig(): WorkerConfig {
         publicUserAgent: readString(
           "WILDBERRIES_PUBLIC_USER_AGENT",
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        ),
+        publicCacheTtlMs: readNonNegativeInteger(
+          "WILDBERRIES_PUBLIC_CACHE_TTL_MS",
+          30 * 60 * 1_000,
+        ),
+        publicCacheStaleTtlMs: readNonNegativeInteger(
+          "WILDBERRIES_PUBLIC_CACHE_STALE_TTL_MS",
+          24 * 60 * 60 * 1_000,
+        ),
+        publicCacheMaxEntries: readNonNegativeInteger(
+          "WILDBERRIES_PUBLIC_CACHE_MAX_ENTRIES",
+          500,
+        ),
+        publicErrorCooldownMs: readNonNegativeInteger(
+          "WILDBERRIES_PUBLIC_ERROR_COOLDOWN_MS",
+          60_000,
         ),
       },
     },

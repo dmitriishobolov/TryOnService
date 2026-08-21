@@ -1,4 +1,8 @@
-import type { MarketProductRef } from "../../../shared/contracts/index.js";
+import type {
+  MarketProductRef,
+  MarketSearchSelection,
+} from "../../../shared/contracts/index.js";
+import { createLogger } from "../../../shared/logger.js";
 import type { WorkerConfig } from "../../config/index.js";
 import type { MarketplaceAdapter, MarketplaceSearchResult } from "../types.js";
 import {
@@ -10,11 +14,23 @@ import {
   isRecord,
   limitProducts,
   matchesSearchQuery,
+  MarketplaceError,
   numberFromUnknown,
   requireMarketCredential,
 } from "../utils.js";
 
 const provider = "wildberries";
+const logger = createLogger("worker");
+const publicSearchCache = new Map<string, WildberriesPublicCacheEntry>();
+const publicSearchInflight = new Map<string, Promise<MarketProductRef[]>>();
+let publicSearchCooldownUntilMs = 0;
+
+interface WildberriesPublicCacheEntry {
+  products: MarketProductRef[];
+  cachedAtMs: number;
+  expiresAtMs: number;
+  staleUntilMs: number;
+}
 
 export const wildberriesMarketplaceAdapter: MarketplaceAdapter = {
   provider,
@@ -106,6 +122,30 @@ async function searchPublicWildberries({
 }: Parameters<MarketplaceAdapter["search"]>[0]): Promise<MarketplaceSearchResult> {
   const marketConfig = config.market.wildberries;
   const limit = Math.min(selection.limit ?? config.market.searchLimit, 100);
+  const cacheKey = buildWildberriesPublicCacheKey(query, selection, config);
+  const products = (
+    await getCachedOrFetchWildberriesPublicProducts(cacheKey, config, () =>
+      fetchWildberriesPublicProducts(query, selection, config, signal),
+    )
+  )
+    .filter((product) => matchesSearchQuery(product, query))
+    .filter((product) =>
+      matchesPrice(product, selection.minPrice, selection.maxPrice),
+    );
+
+  return {
+    provider,
+    products: limitProducts(products, limit),
+  };
+}
+
+async function fetchWildberriesPublicProducts(
+  query: string,
+  selection: MarketSearchSelection,
+  config: WorkerConfig,
+  signal?: AbortSignal,
+): Promise<MarketProductRef[]> {
+  const marketConfig = config.market.wildberries;
   const url = new URL(
     `${marketConfig.publicSearchBaseUrl.replace(/\/+$/, "")}${marketConfig.publicSearchPath}`,
   );
@@ -139,19 +179,87 @@ async function searchPublicWildberries({
     config.tryOnModelHttpTimeoutMs,
     signal,
   );
-  const products = parseWildberriesPublicProducts(
-    response,
-    marketConfig.productUrlTemplate,
-  )
-    .filter((product) => matchesSearchQuery(product, query))
-    .filter((product) =>
-      matchesPrice(product, selection.minPrice, selection.maxPrice),
-    );
 
-  return {
-    provider,
-    products: limitProducts(products, limit),
-  };
+  return parseWildberriesPublicProducts(response, marketConfig.productUrlTemplate);
+}
+
+async function getCachedOrFetchWildberriesPublicProducts(
+  cacheKey: string,
+  config: WorkerConfig,
+  fetcher: () => Promise<MarketProductRef[]>,
+): Promise<MarketProductRef[]> {
+  const now = Date.now();
+  const freshEntry = getWildberriesPublicCacheEntry(cacheKey, now, "fresh");
+
+  if (freshEntry) {
+    logger.debug("Wildberries public search cache hit", {
+      cacheKey,
+      products: freshEntry.products.length,
+    });
+    return freshEntry.products;
+  }
+
+  const staleEntry = getWildberriesPublicCacheEntry(cacheKey, now, "stale");
+
+  if (now < publicSearchCooldownUntilMs) {
+    if (staleEntry) {
+      logger.warn("Wildberries public search cooldown used stale cache", {
+        cacheKey,
+        products: staleEntry.products.length,
+        cooldownMs: publicSearchCooldownUntilMs - now,
+      });
+      return staleEntry.products;
+    }
+
+    throw new MarketplaceError(
+      "wildberries_public_rate_limited",
+      "Wildberries public search is cooling down after rate limit",
+      true,
+    );
+  }
+
+  const inflight = publicSearchInflight.get(cacheKey);
+
+  if (inflight) {
+    logger.debug("Wildberries public search joined in-flight request", {
+      cacheKey,
+    });
+    return inflight;
+  }
+
+  const request = fetcher()
+    .then((products) => {
+      putWildberriesPublicCacheEntry(cacheKey, products, config);
+      logger.debug("Wildberries public search cache stored", {
+        cacheKey,
+        products: products.length,
+      });
+      return products;
+    })
+    .catch((error: unknown) => {
+      if (isWildberriesRateLimitError(error)) {
+        publicSearchCooldownUntilMs =
+          Date.now() + config.market.wildberries.publicErrorCooldownMs;
+      }
+
+      if (staleEntry && !isAbortError(error)) {
+        logger.warn("Wildberries public search failed, using stale cache", {
+          cacheKey,
+          products: staleEntry.products.length,
+          error,
+        });
+        return staleEntry.products;
+      }
+
+      throw error;
+    })
+    .finally(() => {
+      publicSearchInflight.delete(cacheKey);
+    });
+
+  publicSearchInflight.set(cacheKey, request);
+
+  return request;
 }
 
 function resolveWildberriesSearchMode(config: WorkerConfig): "seller" | "public" {
@@ -166,6 +274,110 @@ function resolveWildberriesSearchMode(config: WorkerConfig): "seller" | "public"
   }
 
   return config.market.wildberries.apiKey ? "seller" : "public";
+}
+
+function buildWildberriesPublicCacheKey(
+  query: string,
+  selection: MarketSearchSelection,
+  config: WorkerConfig,
+): string {
+  const marketConfig = config.market.wildberries;
+
+  return [
+    "v1",
+    normalizeCacheValue(marketConfig.publicSearchBaseUrl),
+    normalizeCacheValue(marketConfig.publicSearchPath),
+    normalizeCacheValue(query),
+    normalizeCacheValue(selection.currency ?? "rub"),
+    normalizeCacheValue(marketConfig.publicDest),
+    normalizeCacheValue(marketConfig.locale),
+    normalizeCacheValue(selection.sort ?? marketConfig.publicSort),
+    String(marketConfig.publicSpp),
+  ].join("|");
+}
+
+function getWildberriesPublicCacheEntry(
+  cacheKey: string,
+  now: number,
+  mode: "fresh" | "stale",
+): WildberriesPublicCacheEntry | undefined {
+  const entry = publicSearchCache.get(cacheKey);
+
+  if (!entry) {
+    return undefined;
+  }
+
+  if (now > entry.staleUntilMs) {
+    publicSearchCache.delete(cacheKey);
+    return undefined;
+  }
+
+  if (mode === "fresh" && now > entry.expiresAtMs) {
+    return undefined;
+  }
+
+  publicSearchCache.delete(cacheKey);
+  publicSearchCache.set(cacheKey, entry);
+
+  return entry;
+}
+
+function putWildberriesPublicCacheEntry(
+  cacheKey: string,
+  products: MarketProductRef[],
+  config: WorkerConfig,
+): void {
+  const maxEntries = config.market.wildberries.publicCacheMaxEntries;
+
+  if (maxEntries <= 0) {
+    return;
+  }
+
+  const now = Date.now();
+  const expiresAtMs = now + config.market.wildberries.publicCacheTtlMs;
+  const staleUntilMs =
+    expiresAtMs + config.market.wildberries.publicCacheStaleTtlMs;
+
+  publicSearchCache.delete(cacheKey);
+  publicSearchCache.set(cacheKey, {
+    products,
+    cachedAtMs: now,
+    expiresAtMs,
+    staleUntilMs,
+  });
+  pruneWildberriesPublicCache(maxEntries);
+}
+
+function pruneWildberriesPublicCache(maxEntries: number): void {
+  const now = Date.now();
+
+  for (const [cacheKey, entry] of publicSearchCache) {
+    if (now > entry.staleUntilMs) {
+      publicSearchCache.delete(cacheKey);
+    }
+  }
+
+  while (publicSearchCache.size > maxEntries) {
+    const oldestKey = publicSearchCache.keys().next().value;
+
+    if (!oldestKey) {
+      return;
+    }
+
+    publicSearchCache.delete(oldestKey);
+  }
+}
+
+function isWildberriesRateLimitError(error: unknown): boolean {
+  return error instanceof MarketplaceError && error.code === "wildberries_api_429";
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function normalizeCacheValue(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function parseWildberriesProducts(

@@ -67,6 +67,7 @@ Wildberries `public`-режим сделан как обычный catalog looku
 - использует обычные browser-like `Accept`, `Accept-Language`, `Referer` и `User-Agent`;
 - не использует captcha bypass, proxy rotation, stealth browser automation или авторизацию пользователя;
 - не ходит бесконечно по страницам: public endpoint WB может зацикливать выдачу, поэтому adapter берет первую страницу и дальше фильтрует локально;
+- кеширует выдачу в памяти worker-а по ключу query/currency/dest/locale/sort/path: fresh-cache отвечает без запроса в WB, stale-cache используется как fallback при `429`/ошибках, параллельные одинаковые запросы склеиваются в один in-flight request;
 - прямые image URL строятся по `nmId` через CDN `basket-XX.wbbasket.ru`, если поисковый JSON не вернул готовые изображения.
 
 Ozon public parser намеренно не добавлен как bypass-адаптер: публичный сайт Ozon часто отвечает антибот-страницей, а стабильный официальный канал для чужих товаров в текущем коде не подключен. Если появится легальный JSON/search API или выбран внешний provider поиска, его нужно добавить отдельным adapter-ом по этому же контракту.

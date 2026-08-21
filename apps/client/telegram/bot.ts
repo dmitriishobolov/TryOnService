@@ -1058,6 +1058,13 @@ export class TelegramBot {
       maxProducts: maxIdealProductCandidates(pending.outfit),
     });
     const missingItems = sanitizeIdealMissingItems(parsed.missingItems);
+    logger.info("Ideal outfit product search parsed", {
+      chatId: pending.chatId,
+      outfitId: pending.outfit.id,
+      rawProducts: Array.isArray(parsed.products) ? parsed.products.length : 0,
+      filteredCandidates: candidates.length,
+      missingItems: missingItems.length,
+    });
 
     if (candidates.length === 0) {
       await this.sendMessage(
@@ -1177,6 +1184,15 @@ export class TelegramBot {
       parsed.acceptedCandidates,
       pending.outfit.items,
     );
+    logger.info("Ideal outfit product validation parsed", {
+      chatId: pending.chatId,
+      outfitId: pending.outfit.id,
+      candidates: pending.candidates.length,
+      acceptedRaw: Array.isArray(parsed.acceptedCandidates)
+        ? parsed.acceptedCandidates.length
+        : 0,
+      acceptedProducts: products.length,
+    });
     const missingItems = mergeMissingItems(
       pending.missingItems,
       sanitizeIdealMissingItems(parsed.missingItems),
@@ -2039,7 +2055,7 @@ function createIdealProductValidationModelSelection(
     options: {
       imageDetail: "low",
       textVerbosity: "low",
-      reasoningEffort: "minimal",
+      reasoningEffort: "low",
       reasoningMode: "standard",
       maxOutputTokens: Math.min(900 + candidates.length * 45, 3_000),
       store: false,
@@ -2058,7 +2074,7 @@ function createIdealProductCardGenerationModelSelection(
     options: {
       imageDetail: "low",
       textVerbosity: "low",
-      reasoningEffort: "minimal",
+      reasoningEffort: "low",
       reasoningMode: "standard",
       maxOutputTokens: 300,
       store: false,
@@ -2095,6 +2111,11 @@ ${JSON.stringify(compactOutfitForPrompt(outfit))}
 - приоритет: цена в рублях, российская страница товара, доставка по России, Москва или Московский регион если это видно;
 - Ozon, Wildberries, AliExpress Russia и Яндекс Маркет хороши, но можно брать любой интернет-магазин, если товар реально продается онлайн;
 - до ${idealCandidatesPerOutfitItem} кандидатов на каждый item, всего не больше ${maxCandidates};
+- для каждого item сделай несколько разных поисковых формулировок: исходный searchQuery, "купить", "руб", "Москва", "доставка по России" и 2-3 приоритетных магазина;
+- стремись вернуть минимум 3-5 кандидатов на каждый item, если рынок вообще что-то дает;
+- не останавливайся после 1-2 товаров: сначала ищи альтернативные магазины и близкие формулировки;
+- точный цвет лучше, но если точных вариантов мало, можно брать близкий оттенок или нейтральный вариант, который подходит описанию;
+- slot в product должен совпадать с item.slot; category лучше копировать из item.category, даже если title содержит более подробное название;
 - productUrl должен быть карточкой товара, не категорией, поиском или рекламной страницей;
 - imageUrl должен быть прямой или доступной картинкой товара, не HTML-страницей;
 - в search query можно добавлять "купить", "руб", "Москва", "доставка по России";
@@ -2171,7 +2192,7 @@ ${JSON.stringify(compactCandidates)}
 - фон может быть любым, потому что следующий шаг перерисует белый фон;
 - reject, если предмет слишком закрыт, слишком мал, обрезан критично, смешан с несколькими похожими вещами, это не товар или невозможно понять, что продается.
 
-Верни не больше 1 accepted на категорию. Не повторяй title/url/imageUrl.
+Верни не больше 1 accepted на категорию/slot. Не повторяй title/url/imageUrl.
 
 Верни только строгий JSON без Markdown:
 {
@@ -2331,17 +2352,34 @@ function isFootwearText(value: string): boolean {
   return normalizeCategoryKey(value) === "shoes";
 }
 
+function idealMatchKeys(value: Pick<IdealOutfitItem, "slot" | "category">): string[] {
+  return Array.from(
+    new Set(
+      [value.category, value.slot]
+        .map((item) => normalizeCategoryKey(item))
+        .filter(Boolean),
+    ),
+  );
+}
+
+function buildAllowedIdealMatchKeys(items: IdealOutfitItem[]): Set<string> {
+  return new Set(items.flatMap(idealMatchKeys));
+}
+
+function findAllowedIdealMatchKey(
+  value: Pick<IdealOutfitItem, "slot" | "category">,
+  allowedKeys: Set<string>,
+): string | undefined {
+  return idealMatchKeys(value).find((key) => allowedKeys.has(key));
+}
+
 function selectAcceptedIdealProducts(
   candidates: IdealProduct[],
   acceptedCandidates: unknown,
   allowedItems: IdealOutfitItem[],
 ): IdealProduct[] {
   const accepted = sanitizeAcceptedCandidates(acceptedCandidates);
-  const allowedCategories = new Set(
-    allowedItems.map((item) =>
-      normalizeCategoryKey(item.category || item.slot),
-    ),
-  );
+  const allowedKeys = buildAllowedIdealMatchKeys(allowedItems);
   const seenCategories = new Set<string>();
   const products: IdealProduct[] = [];
 
@@ -2352,11 +2390,9 @@ function selectAcceptedIdealProducts(
       continue;
     }
 
-    const categoryKey = normalizeCategoryKey(
-      candidate.category || candidate.slot,
-    );
+    const categoryKey = findAllowedIdealMatchKey(candidate, allowedKeys);
 
-    if (!allowedCategories.has(categoryKey) || seenCategories.has(categoryKey)) {
+    if (!categoryKey || seenCategories.has(categoryKey)) {
       continue;
     }
 
@@ -2420,11 +2456,7 @@ function sanitizeIdealProducts(
 
   const seenCategories = new Set<string>();
   const seenUrls = new Set<string>();
-  const allowedCategories = new Set(
-    options.allowedItems.map((item) =>
-      normalizeCategoryKey(item.category || item.slot),
-    ),
-  );
+  const allowedKeys = buildAllowedIdealMatchKeys(options.allowedItems);
   const products: IdealProduct[] = [];
 
   for (const raw of value) {
@@ -2434,11 +2466,11 @@ function sanitizeIdealProducts(
       continue;
     }
 
-    const categoryKey = normalizeCategoryKey(product.category || product.slot);
+    const categoryKey = findAllowedIdealMatchKey(product, allowedKeys);
     const urlKey = product.productUrl.toLowerCase();
 
     if (
-      !allowedCategories.has(categoryKey) ||
+      !categoryKey ||
       (!options.allowMultiplePerCategory && seenCategories.has(categoryKey)) ||
       seenUrls.has(urlKey)
     ) {
@@ -2553,16 +2585,11 @@ function buildMissingItemsFromOutfit(
   outfit: IdealOutfit,
   products: IdealProduct[],
 ): IdealMissingItem[] {
-  const productCategories = new Set(
-    products.map((product) =>
-      normalizeCategoryKey(product.category || product.slot),
-    ),
-  );
+  const productKeys = new Set(products.flatMap(idealMatchKeys));
 
   return outfit.items
     .filter(
-      (item) =>
-        !productCategories.has(normalizeCategoryKey(item.category || item.slot)),
+      (item) => !idealMatchKeys(item).some((key) => productKeys.has(key)),
     )
     .map((item) => ({
       slot: item.slot,
@@ -2990,6 +3017,12 @@ function normalizeCategoryKey(value: string): string {
     .replace(/\s+/g, " ");
 
   const synonymGroups: Array<[string, RegExp]> = [
+    ["top", /^(top|верх|верхний слой)$/],
+    ["bottom", /^(bottom|низ)$/],
+    ["outerwear", /^(outerwear|верхняя одежда)$/],
+    ["polo", /(поло|\bpolo\b)/],
+    ["cardigan", /(кардиган|cardigan)/],
+    ["sweater", /(свитер|джемпер|пуловер|sweater|jumper|pullover)/],
     ["hoodie", /(худи|hoodie|толстовк|свитшот|sweatshirt)/],
     ["shirt", /(рубаш|сорочк|\bshirt\b)/],
     ["tshirt", /(футболк|лонгслив|t-?shirt|\btee\b|longsleeve)/],

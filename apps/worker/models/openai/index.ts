@@ -37,6 +37,7 @@ const reasoningEffortValues = [
   "medium",
   "high",
   "xhigh",
+  "max",
 ] as const satisfies readonly OpenAiReasoningEffort[];
 const toolChoiceValues = ["auto", "none", "required"] as const;
 
@@ -95,7 +96,7 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
       config.openai.storeResponse,
     );
     const tools = buildTools(options);
-    const reasoning = buildReasoningConfig(options, config, tools);
+    const reasoning = buildReasoningConfig(options, config, tools, model);
     const include = buildInclude(tools);
     const toolChoice = readToolChoice(options, tools);
     const extraInputImageUrls = readRemoteImageUrls(options);
@@ -365,6 +366,7 @@ function buildReasoningConfig(
   options: Record<string, unknown>,
   config: WorkerConfig,
   tools: OpenAiToolConfig[],
+  model: string,
 ): Record<string, string> {
   const reasoning: Record<string, string> = {
     effort: readEnumOption(
@@ -375,9 +377,13 @@ function buildReasoningConfig(
     ),
   };
   const hasWebSearch = tools.some((tool) => tool.type === "web_search");
+  const minimalUnsupported =
+    hasWebSearch || isMinimalReasoningUnsupportedModel(model);
 
-  if (hasWebSearch && reasoning.effort === "minimal") {
-    logger.warn("OpenAI web_search cannot use minimal reasoning, using low", {
+  if (minimalUnsupported && reasoning.effort === "minimal") {
+    logger.warn("OpenAI minimal reasoning is not supported here, using low", {
+      model,
+      hasWebSearch,
       configuredReasoningEffort: reasoning.effort,
     });
     reasoning.effort = "low";
@@ -394,6 +400,10 @@ function buildReasoningConfig(
   }
 
   return reasoning;
+}
+
+function isMinimalReasoningUnsupportedModel(model: string): boolean {
+  return model.trim().toLowerCase().startsWith("gpt-5.6-luna");
 }
 
 function buildTools(options: Record<string, unknown>): OpenAiToolConfig[] {

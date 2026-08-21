@@ -19,7 +19,8 @@ export type OpenAiReasoningEffort =
   | "low"
   | "medium"
   | "high"
-  | "xhigh";
+  | "xhigh"
+  | "max";
 
 export interface PrunaTryOnConfig {
   apiKey?: string;
@@ -310,10 +311,11 @@ function readOpenAiReasoningEffort(): OpenAiReasoningEffort {
     value !== "low" &&
     value !== "medium" &&
     value !== "high" &&
-    value !== "xhigh"
+    value !== "xhigh" &&
+    value !== "max"
   ) {
     throw new Error(
-      "OPENAI_REASONING_EFFORT must be none, minimal, low, medium, high or xhigh",
+      "OPENAI_REASONING_EFFORT must be none, minimal, low, medium, high, xhigh or max",
     );
   }
 

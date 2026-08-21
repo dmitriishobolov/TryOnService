@@ -116,7 +116,7 @@ Worker:
 - сообщает о готовности, capacity и поддерживаемых моделях/пайплайнах;
 - держит pending assignments, принимает jobs от клиентов по signed dispatch token, запускает runner и обновляет статус выполнения;
 - выбирает adapter из `apps/worker/models` через `payload.model.provider`: доступны `mock`, `pruna`, `pixelcut`, `tryoncloud`, `genlook`, `wearfits`, `openai`;
-- выбирает marketplace adapters через `payload.market.providers`: доступны `aliexpress`, `ozon`, `wildberries`; найденные товары возвращаются в `TryOnJobResult.marketProducts`;
+- выбирает marketplace adapters через `payload.market.providers`: доступны `aliexpress`, `ozon`, `wildberries`; Wildberries поддерживает public-поиск по каталогу WB без seller-token, найденные товары возвращаются в `TryOnJobResult.marketProducts`;
 - объявляет provider-specific capabilities только для настроенных API keys, чтобы coordinator не выдавал job на неподходящий worker;
 - для virtual try-on provider-ов ожидает в `payload.inputFiles` фото пользователя и фото одежды/товара, индексы задаются `TRYON_PERSON_IMAGE_INDEX` и `TRYON_GARMENT_IMAGE_INDEX`; OpenAI adapter использует фото пользователя для анализа внешности и wardrobe-рекомендаций, принимает `providerModel`/`options` из job, поддерживает `webSearch`, `inputImageUrls`, `imageGeneration` и `toolChoice`, а generated files сохраняет в storage и возвращает в `result.files`;
 - отправляет клиентский результат напрямую в callback URL из assignment;

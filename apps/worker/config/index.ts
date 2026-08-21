@@ -115,14 +115,23 @@ export interface OzonMarketConfig {
   productUrlTemplate: string;
 }
 
+export type WildberriesSearchMode = "auto" | "seller" | "public";
+
 export interface WildberriesMarketConfig {
   apiKey?: string;
+  searchMode: WildberriesSearchMode;
   baseUrl: string;
   cardsListPath: string;
   maxScanCards: number;
   locale: string;
   withPhoto: boolean;
   productUrlTemplate: string;
+  publicSearchBaseUrl: string;
+  publicSearchPath: string;
+  publicDest: string;
+  publicSort: string;
+  publicSpp: number;
+  publicUserAgent: string;
 }
 
 export interface WorkerMarketConfig {
@@ -332,6 +341,16 @@ function readAliExpressSignMethod(): AliExpressSignMethod {
   return value;
 }
 
+function readWildberriesSearchMode(): WildberriesSearchMode {
+  const value = readString("WILDBERRIES_SEARCH_MODE", "public").toLowerCase();
+
+  if (value !== "auto" && value !== "seller" && value !== "public") {
+    throw new Error("WILDBERRIES_SEARCH_MODE must be auto, seller or public");
+  }
+
+  return value;
+}
+
 function readMarketProviders(): MarketProvider[] {
   const raw = readString("MARKET_PROVIDERS", "aliexpress,ozon,wildberries");
   const providers = raw
@@ -380,7 +399,7 @@ function readCapabilities(): WorkerCapability[] {
     "ALIEXPRESS_APP_SECRET",
   ]);
   syncMarketCapability(names, "ozon", ["OZON_CLIENT_ID", "OZON_API_KEY"]);
-  syncMarketCapability(names, "wildberries", ["WILDBERRIES_API_KEY"]);
+  syncWildberriesMarketCapability(names);
 
   return [...names].map((name) => ({ name }));
 }
@@ -411,6 +430,26 @@ function syncMarketCapability(
     readBoolean("MARKET_ENABLED", true) &&
     readMarketProviders().includes(provider) &&
     requiredEnvNames.every((name) => readOptionalString(name))
+  ) {
+    names.add("market");
+    names.add(capability);
+    return;
+  }
+
+  names.delete(capability);
+}
+
+function syncWildberriesMarketCapability(names: Set<string>): void {
+  const capability = "market.wildberries";
+  const mode = readWildberriesSearchMode();
+  const hasSellerKey = Boolean(readOptionalString("WILDBERRIES_API_KEY"));
+  const canUsePublic = mode === "public" || mode === "auto";
+  const canUseSeller = hasSellerKey && (mode === "seller" || mode === "auto");
+
+  if (
+    readBoolean("MARKET_ENABLED", true) &&
+    readMarketProviders().includes("wildberries") &&
+    (canUsePublic || canUseSeller)
   ) {
     names.add("market");
     names.add(capability);
@@ -592,6 +631,7 @@ export function loadWorkerConfig(): WorkerConfig {
       },
       wildberries: {
         apiKey: readOptionalString("WILDBERRIES_API_KEY"),
+        searchMode: readWildberriesSearchMode(),
         baseUrl: readString(
           "WILDBERRIES_API_BASE_URL",
           "https://content-api.wildberries.ru",
@@ -606,6 +646,21 @@ export function loadWorkerConfig(): WorkerConfig {
         productUrlTemplate: readString(
           "WILDBERRIES_PRODUCT_URL_TEMPLATE",
           "https://www.wildberries.ru/catalog/{nmId}/detail.aspx",
+        ),
+        publicSearchBaseUrl: readString(
+          "WILDBERRIES_PUBLIC_SEARCH_BASE_URL",
+          "https://search.wb.ru",
+        ),
+        publicSearchPath: readString(
+          "WILDBERRIES_PUBLIC_SEARCH_PATH",
+          "/exactmatch/ru/common/v4/search",
+        ),
+        publicDest: readString("WILDBERRIES_PUBLIC_DEST", "-1257786"),
+        publicSort: readString("WILDBERRIES_PUBLIC_SORT", "popular"),
+        publicSpp: readNumber("WILDBERRIES_PUBLIC_SPP", 30),
+        publicUserAgent: readString(
+          "WILDBERRIES_PUBLIC_USER_AGENT",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
         ),
       },
     },

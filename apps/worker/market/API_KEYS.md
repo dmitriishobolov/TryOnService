@@ -34,15 +34,19 @@ curl.exe -s -X POST "https://api-seller.ozon.ru/v3/product/list" `
   --data '{"filter":{"visibility":"VISIBLE"},"limit":1}'
 ```
 
-## Wildberries Content API
+## Wildberries
 
-Worker использует:
+По умолчанию worker может искать товары Wildberries без ключа через `WILDBERRIES_SEARCH_MODE=public`: adapter обращается к публичной JSON-выдаче `search.wb.ru`, которую использует сайт, и возвращает ссылки/фото товаров всей площадки.
+
+Ключ нужен только для `WILDBERRIES_SEARCH_MODE=seller`, когда worker должен читать карточки конкретного кабинета продавца через Wildberries Content API.
+
+Для seller-режима worker использует:
 
 ```env
 WILDBERRIES_API_KEY=
 ```
 
-Как получить:
+Как получить seller token:
 
 1. Войдите в кабинет продавца WB Partners: `https://seller.wildberries.ru`.
 2. Откройте `Профиль -> Интеграции по API`.
@@ -110,7 +114,7 @@ ALIEXPRESS_TRACKING_ID=
 3. Убедитесь, что worker зарегистрировал capabilities:
    - `market.aliexpress`
    - `market.ozon`
-   - `market.wildberries`
+   - `market.wildberries` (`public`-режим доступен без `WILDBERRIES_API_KEY`)
 4. Если собираете deploy-пакет, запустите:
 
 ```bash
@@ -138,4 +142,3 @@ npm run build:dist
 - AliExpress retrieve App Key and App Secret: https://developer.alibaba.com/docs/doc.htm?articleId=120675&docType=1&treeId=727
 - AliExpress request API permission: https://developer.alibaba.com/docs/doc.htm?articleId=120676&docType=1&treeId=727
 - AliExpress signature algorithm: https://developer.alibaba.com/docs/doc.htm?articleId=120692&docType=1&treeId=727
-

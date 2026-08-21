@@ -27,9 +27,9 @@ Worker выполнит поиск перед AI-моделью, добавит 
 
 - `aliexpress` - AliExpress Open Platform / Affiliate product query. Требует `ALIEXPRESS_APP_KEY` и `ALIEXPRESS_APP_SECRET`; при наличии tracking/app signature worker добавит их в запрос.
 - `ozon` - Ozon Seller API. Adapter получает список товаров продавца, запрашивает подробности и фильтрует доступный seller-каталог по `query`.
-- `wildberries` - Wildberries Content API. Adapter читает карточки продавца с фото и фильтрует доступный seller-каталог по `query`.
+- `wildberries` - Wildberries public catalog search или Content API. В режиме `public` adapter читает публичную JSON-выдачу `search.wb.ru` по `query` и нормализует товары всей площадки; в режиме `seller` читает карточки продавца через Content API.
 
-Важно: `ozon` и `wildberries` используют seller API, поэтому они не являются глобальным поиском по всему marketplace. Они ищут среди товаров, доступных аккаунту/токену.
+Важно: `ozon` в текущей реализации использует Seller API, поэтому он не является глобальным поиском по всему marketplace. Wildberries по умолчанию работает в `public`-режиме без token; `seller`-режим WB ищет только среди товаров аккаунта/токена.
 
 ## Структура
 
@@ -38,7 +38,7 @@ Worker выполнит поиск перед AI-моделью, добавит 
 - `utils.ts` - HTTP, нормализация цен, ссылок и поиск по тексту.
 - `aliexpress/` - реализация AliExpress Affiliate API.
 - `ozon/` - реализация Ozon Seller API.
-- `wildberries/` - реализация Wildberries Content API.
+- `wildberries/` - реализация Wildberries public catalog search и Wildberries Content API fallback.
 
 ## Контракт
 
@@ -56,8 +56,20 @@ Worker автоматически объявляет:
 
 - `market.aliexpress`, если заполнены `ALIEXPRESS_APP_KEY` и `ALIEXPRESS_APP_SECRET`;
 - `market.ozon`, если заполнены `OZON_CLIENT_ID` и `OZON_API_KEY`;
-- `market.wildberries`, если заполнен `WILDBERRIES_API_KEY`;
+- `market.wildberries`, если `MARKET_PROVIDERS` включает `wildberries` и `WILDBERRIES_SEARCH_MODE=public`, либо если выбран `seller`/`auto` с заполненным `WILDBERRIES_API_KEY`;
 - `market`, если доступен хотя бы один marketplace provider.
+
+## Public parsing
+
+Wildberries `public`-режим сделан как обычный catalog lookup, а не как обход защиты сайта:
+
+- worker делает один JSON GET к `search.wb.ru/exactmatch/.../search` с `query`, `dest`, `curr=rub`, `sort` и `page=1`;
+- использует обычные browser-like `Accept`, `Accept-Language`, `Referer` и `User-Agent`;
+- не использует captcha bypass, proxy rotation, stealth browser automation или авторизацию пользователя;
+- не ходит бесконечно по страницам: public endpoint WB может зацикливать выдачу, поэтому adapter берет первую страницу и дальше фильтрует локально;
+- прямые image URL строятся по `nmId` через CDN `basket-XX.wbbasket.ru`, если поисковый JSON не вернул готовые изображения.
+
+Ozon public parser намеренно не добавлен как bypass-адаптер: публичный сайт Ozon часто отвечает антибот-страницей, а стабильный официальный канал для чужих товаров в текущем коде не подключен. Если появится легальный JSON/search API или выбран внешний provider поиска, его нужно добавить отдельным adapter-ом по этому же контракту.
 
 ## Добавление нового marketplace provider-а
 

@@ -3,6 +3,7 @@ import type {
   MarketSearchSelection,
 } from "../../../shared/contracts/index.js";
 import { createLogger } from "../../../shared/logger.js";
+import { sleep } from "../../../shared/http.js";
 import type { WorkerConfig } from "../../config/index.js";
 import type { MarketplaceAdapter, MarketplaceSearchResult } from "../types.js";
 import {
@@ -22,7 +23,10 @@ const provider = "wildberries";
 const logger = createLogger("worker");
 const publicSearchCache = new Map<string, WildberriesPublicCacheEntry>();
 const publicSearchInflight = new Map<string, Promise<MarketProductRef[]>>();
+const publicSearchMinIntervalMs = 1_200;
 let publicSearchCooldownUntilMs = 0;
+let publicSearchNextRequestAtMs = 0;
+let publicSearchThrottleQueue = Promise.resolve();
 
 interface WildberriesPublicCacheEntry {
   products: MarketProductRef[];
@@ -163,7 +167,8 @@ async function getCachedOrFetchWildberriesPublicProducts(
     return inflight;
   }
 
-  const request = fetcher()
+  const request = waitForWildberriesPublicSearchSlot()
+    .then(fetcher)
     .then((products) => {
       putWildberriesPublicCacheEntry(cacheKey, products, config);
       logger.debug("Wildberries public search cache stored", {
@@ -196,6 +201,28 @@ async function getCachedOrFetchWildberriesPublicProducts(
   publicSearchInflight.set(cacheKey, request);
 
   return request;
+}
+
+async function waitForWildberriesPublicSearchSlot(): Promise<void> {
+  let releaseQueue: () => void = () => {};
+  const previousQueue = publicSearchThrottleQueue;
+  publicSearchThrottleQueue = new Promise<void>((resolve) => {
+    releaseQueue = resolve;
+  });
+
+  await previousQueue;
+
+  try {
+    const waitMs = Math.max(0, publicSearchNextRequestAtMs - Date.now());
+
+    if (waitMs > 0) {
+      await sleep(waitMs);
+    }
+
+    publicSearchNextRequestAtMs = Date.now() + publicSearchMinIntervalMs;
+  } finally {
+    releaseQueue();
+  }
 }
 
 function buildWildberriesPublicCacheKey(

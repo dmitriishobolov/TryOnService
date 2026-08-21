@@ -3,6 +3,7 @@ import type {
   MarketProductRef,
   MarketSearchSelection,
 } from "../../../shared/contracts/index.js";
+import { sleep } from "../../../shared/http.js";
 import { createLogger } from "../../../shared/logger.js";
 import type { WorkerConfig } from "../../config/index.js";
 import type { MarketplaceAdapter, MarketplaceSearchResult } from "../types.js";
@@ -20,7 +21,10 @@ const provider = "ozon";
 const logger = createLogger("worker");
 const publicSearchCache = new Map<string, OzonPublicCacheEntry>();
 const publicSearchInflight = new Map<string, Promise<MarketProductRef[]>>();
+const publicSearchMinIntervalMs = 1_200;
 let publicSearchCooldownUntilMs = 0;
+let publicSearchNextRequestAtMs = 0;
+let publicSearchThrottleQueue = Promise.resolve();
 
 interface OzonPublicCacheEntry {
   products: MarketProductRef[];
@@ -35,6 +39,13 @@ interface OzonProductPageData {
   price?: MarketProductPrice;
   brand?: string;
   category?: string;
+}
+
+interface OzonSearchCandidate {
+  productUrl: string;
+  title?: string;
+  imageUrl?: string;
+  images?: string[];
 }
 
 export const ozonMarketplaceAdapter: MarketplaceAdapter = {
@@ -77,40 +88,46 @@ async function fetchOzonPublicProducts(
   signal?: AbortSignal,
 ): Promise<MarketProductRef[]> {
   const marketConfig = config.market.ozon;
-  const productUrls = new Set<string>();
+  const candidates = new Map<string, OzonSearchCandidate>();
 
   for (let page = 1; page <= marketConfig.publicSearchPages; page += 1) {
     const searchHtml = await fetchOzonSearchPage(query, page, config, signal);
-    const links = extractOzonProductLinks(
+    const pageCandidates = extractOzonSearchCandidates(
       searchHtml,
       marketConfig.publicProductBaseUrl,
     );
 
-    for (const link of links) {
-      productUrls.add(link);
+    for (const candidate of pageCandidates) {
+      candidates.set(candidate.productUrl, candidate);
 
-      if (productUrls.size >= marketConfig.maxScanProducts) {
+      if (candidates.size >= marketConfig.maxScanProducts) {
         break;
       }
     }
 
-    if (productUrls.size >= marketConfig.maxScanProducts || links.length === 0) {
+    if (
+      candidates.size >= marketConfig.maxScanProducts ||
+      pageCandidates.length === 0
+    ) {
       break;
     }
   }
 
   const products: MarketProductRef[] = [];
 
-  for (const productUrl of productUrls) {
-    const product = await fetchOzonProduct(productUrl, config, signal).catch(
-      (error: unknown) => {
-        logger.warn("Ozon public product page parse failed", {
-          productUrl,
-          error,
-        });
-        return undefined;
-      },
-    );
+  for (const candidate of candidates.values()) {
+    const product = await fetchOzonProduct(
+      candidate.productUrl,
+      config,
+      signal,
+      candidate,
+    ).catch((error: unknown) => {
+      logger.warn("Ozon public product page parse failed", {
+        productUrl: candidate.productUrl,
+        error,
+      });
+      return normalizeOzonSearchCandidate(candidate, config);
+    });
 
     if (product) {
       products.push(product);
@@ -147,11 +164,18 @@ async function fetchOzonProduct(
   productUrl: string,
   config: WorkerConfig,
   signal?: AbortSignal,
+  fallback?: OzonSearchCandidate,
 ): Promise<MarketProductRef | undefined> {
   const html = await fetchOzonHtml(productUrl, config, signal);
   const data = parseOzonProductPage(html);
   const productId = extractOzonProductId(productUrl);
-  const title = data.title?.trim();
+  const title = data.title?.trim() ?? fallback?.title;
+  const images = uniqueStrings([
+    ...(data.images ?? []),
+    data.imageUrl,
+    ...(fallback?.images ?? []),
+    fallback?.imageUrl,
+  ].filter(isNonEmptyString));
 
   if (!productId || !title) {
     return undefined;
@@ -166,11 +190,39 @@ async function fetchOzonProduct(
         productId,
         sku: productId,
       }) ?? productUrl,
-    imageUrl: data.imageUrl,
-    images: data.images,
+    imageUrl: images[0],
+    images: images.length ? images : undefined,
     price: data.price,
     brand: data.brand,
     category: data.category,
+  };
+}
+
+function normalizeOzonSearchCandidate(
+  candidate: OzonSearchCandidate,
+  config: WorkerConfig,
+): MarketProductRef | undefined {
+  const productId = extractOzonProductId(candidate.productUrl);
+  const title = candidate.title ?? titleFromOzonProductUrl(candidate.productUrl);
+  const images = uniqueStrings(
+    [candidate.imageUrl, ...(candidate.images ?? [])].filter(isNonEmptyString),
+  );
+
+  if (!productId || !title || images.length === 0) {
+    return undefined;
+  }
+
+  return {
+    provider,
+    productId,
+    title,
+    productUrl:
+      formatProductUrl(config.market.ozon.productUrlTemplate, {
+        productId,
+        sku: productId,
+      }) ?? candidate.productUrl,
+    imageUrl: images[0],
+    images,
   };
 }
 
@@ -246,7 +298,8 @@ async function getCachedOrFetchOzonPublicProducts(
     return inflight;
   }
 
-  const request = fetcher()
+  const request = waitForOzonPublicSearchSlot()
+    .then(fetcher)
     .then((products) => {
       putOzonPublicCacheEntry(cacheKey, products, config);
       logger.debug("Ozon public search cache stored", {
@@ -279,6 +332,28 @@ async function getCachedOrFetchOzonPublicProducts(
   publicSearchInflight.set(cacheKey, request);
 
   return request;
+}
+
+async function waitForOzonPublicSearchSlot(): Promise<void> {
+  let releaseQueue: () => void = () => {};
+  const previousQueue = publicSearchThrottleQueue;
+  publicSearchThrottleQueue = new Promise<void>((resolve) => {
+    releaseQueue = resolve;
+  });
+
+  await previousQueue;
+
+  try {
+    const waitMs = Math.max(0, publicSearchNextRequestAtMs - Date.now());
+
+    if (waitMs > 0) {
+      await sleep(waitMs);
+    }
+
+    publicSearchNextRequestAtMs = Date.now() + publicSearchMinIntervalMs;
+  } finally {
+    releaseQueue();
+  }
 }
 
 function buildOzonPublicCacheKey(
@@ -370,8 +445,35 @@ function pruneOzonPublicCache(maxEntries: number): void {
   }
 }
 
+function extractOzonSearchCandidates(
+  html: string,
+  productBaseUrl: string,
+): OzonSearchCandidate[] {
+  const normalizedHtml = normalizeOzonHtml(html);
+  const links = extractOzonProductLinks(normalizedHtml, productBaseUrl);
+
+  return links.map((productUrl) => {
+    const chunk = extractOzonProductSearchChunk(
+      normalizedHtml,
+      productUrl,
+      productBaseUrl,
+    );
+    const images = uniqueStrings(extractOzonImageUrls(chunk));
+    const title =
+      extractOzonSearchCandidateTitle(chunk) ??
+      titleFromOzonProductUrl(productUrl);
+
+    return {
+      productUrl,
+      title,
+      imageUrl: images[0],
+      images: images.length ? images : undefined,
+    };
+  });
+}
+
 function extractOzonProductLinks(html: string, productBaseUrl: string): string[] {
-  const normalizedHtml = html.replace(/\\u002F/g, "/").replace(/\\\//g, "/");
+  const normalizedHtml = normalizeOzonHtml(html);
   const links = new Set<string>();
   const patterns = [
     /href=["']([^"']*\/product\/[^"']+)["']/gi,
@@ -390,6 +492,74 @@ function extractOzonProductLinks(html: string, productBaseUrl: string): string[]
   }
 
   return [...links];
+}
+
+function extractOzonProductSearchChunk(
+  html: string,
+  productUrl: string,
+  productBaseUrl: string,
+): string {
+  const url = new URL(productUrl, productBaseUrl);
+  const needles = [
+    url.toString(),
+    url.pathname,
+    url.pathname.replace(/^\//, ""),
+    url.pathname.replace(/\//g, "\\/"),
+  ];
+  const index = needles
+    .map((needle) => html.indexOf(needle))
+    .find((position) => position >= 0);
+
+  if (index === undefined) {
+    return html.slice(0, 12_000);
+  }
+
+  return html.slice(Math.max(0, index - 4_000), index + 8_000);
+}
+
+function extractOzonSearchCandidateTitle(chunk: string): string | undefined {
+  const titleFromAttributes = [
+    readAttributeValue(chunk, "title"),
+    readAttributeValue(chunk, "alt"),
+    readAttributeValue(chunk, "aria-label"),
+  ].find(isMeaningfulOzonTitle);
+
+  if (titleFromAttributes) {
+    return titleFromAttributes;
+  }
+
+  const text = stripTags(chunk);
+  const compactText = decodeHtmlEntities(text).replace(/\s+/g, " ").trim();
+  const productLikeText = compactText
+    .split(/(?:₽|В корзину|Отзывы|Рассрочка|Ozon)/i)
+    .map((part) => part.trim())
+    .find(isMeaningfulOzonTitle);
+
+  return productLikeText ? productLikeText.slice(0, 160) : undefined;
+}
+
+function readAttributeValue(html: string, attributeName: string): string | undefined {
+  const pattern = new RegExp(`${attributeName}=["']([^"']+)["']`, "i");
+  const match = html.match(pattern);
+
+  return match?.[1]
+    ? decodeHtmlEntities(stripTags(match[1])).replace(/\s+/g, " ").trim()
+    : undefined;
+}
+
+function isMeaningfulOzonTitle(value: string | undefined): value is string {
+  if (!value) {
+    return false;
+  }
+
+  const normalized = value.trim();
+
+  return (
+    normalized.length >= 4 &&
+    !/^https?:\/\//i.test(normalized) &&
+    !/\.(?:jpg|jpeg|png|webp)(?:\?|$)/i.test(normalized) &&
+    !/^(image|фото|картинка|товар)$/i.test(normalized)
+  );
 }
 
 function normalizeOzonProductUrl(
@@ -412,6 +582,10 @@ function normalizeOzonProductUrl(
   } catch {
     return undefined;
   }
+}
+
+function normalizeOzonHtml(html: string): string {
+  return html.replace(/\\u002F/g, "/").replace(/\\\//g, "/");
 }
 
 function parseOzonProductPage(html: string): OzonProductPageData {
@@ -596,7 +770,7 @@ function readTagText(html: string, tagName: string): string | undefined {
 
 function extractOzonImageUrls(html: string): string[] {
   const urls = new Set<string>();
-  const normalizedHtml = html.replace(/\\u002F/g, "/").replace(/\\\//g, "/");
+  const normalizedHtml = normalizeOzonHtml(html);
   const pattern = /https?:\/\/[^"'\s<>]+?\.(?:jpg|jpeg|png|webp)(?:\?[^"'\s<>]*)?/gi;
 
   for (const match of normalizedHtml.matchAll(pattern)) {
@@ -608,6 +782,23 @@ function extractOzonImageUrls(html: string): string[] {
   }
 
   return [...urls];
+}
+
+function titleFromOzonProductUrl(productUrl: string): string | undefined {
+  try {
+    const url = new URL(productUrl);
+    const slug = url.pathname
+      .split("/")
+      .filter(Boolean)
+      .at(-1)
+      ?.replace(/-\d+$/, "")
+      .replace(/[-_]+/g, " ")
+      .trim();
+
+    return slug && slug.length >= 4 ? slug : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function extractOzonProductId(productUrl: string): string | undefined {

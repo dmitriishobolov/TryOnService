@@ -132,7 +132,7 @@ type PendingJob =
       outfit: IdealOutfit;
       inputFiles: StorageObjectRef[];
       item: IdealOutfitItem;
-      marketProvider: MarketProvider;
+      marketProviders: MarketProvider[];
       searchState: IdealMarketSearchState;
     }
   | {
@@ -228,10 +228,7 @@ const legacyAppearanceAnalysisButtonText = "Разбор внешности";
 const idealOutfitButtonText = "Идеальный образ";
 const cancelButtonText = "Отмена";
 const idealCandidatesPerOutfitItem = 10;
-const idealMarketProviders = ["ozon", "wildberries"] as const;
-const idealCandidatesPerMarketProvider = Math.ceil(
-  idealCandidatesPerOutfitItem / idealMarketProviders.length,
-);
+const idealMarketProviders: MarketProvider[] = ["ozon", "wildberries"];
 
 const appearanceAnalysisPrompt = `
 Ты выполняешь разбор внешности только по фотографии реального человека.
@@ -1439,7 +1436,7 @@ export class TelegramBot {
       chatId,
       outfit,
       inputFiles: session.inputFiles,
-      totalJobs: outfit.items.length * idealMarketProviders.length,
+      totalJobs: outfit.items.length,
       completedJobs: 0,
       candidates: [],
       missingItems: [],
@@ -1470,80 +1467,78 @@ export class TelegramBot {
 
       let launchedJobs = 0;
 
-      for (const [index, item] of outfit.items.entries()) {
-        for (const marketProvider of idealMarketProviders) {
-          try {
-            const assignment = await this.coordinator.createRequestJob({
-              chatId,
-              username: session.username,
-              text: createIdealMarketSearchText(outfit, item, marketProvider),
-              model: createIdealMarketSearchModelSelection(),
-              market: createIdealMarketSearchSelection(item, marketProvider),
-            });
-            const jobId = getResponseJobId(assignment);
-            pendingJobIds.push(jobId);
-            launchedJobs += 1;
+      for (const item of outfit.items) {
+        try {
+          const assignment = await this.coordinator.createRequestJob({
+            chatId,
+            username: session.username,
+            text: createIdealMarketSearchText(outfit, item, idealMarketProviders),
+            model: createIdealMarketSearchModelSelection(),
+            market: createIdealMarketSearchSelection(item, idealMarketProviders),
+          });
+          const jobId = getResponseJobId(assignment);
+          pendingJobIds.push(jobId);
+          launchedJobs += 1;
 
-            this.pendingJobs.set(jobId, {
-              flow: "ideal-products",
-              chatId,
-              outfit,
-              inputFiles: session.inputFiles,
-              item,
-              marketProvider,
-              searchState,
-            });
+          this.pendingJobs.set(jobId, {
+            flow: "ideal-products",
+            chatId,
+            outfit,
+            inputFiles: session.inputFiles,
+            item,
+            marketProviders: idealMarketProviders,
+            searchState,
+          });
 
-            if (isQueuedJobResponse(assignment)) {
-              await this.updateIdealProgressMessage(
-                chatId,
-                formatIdealProductProgress({
-                  lookTitle: outfit.title,
-                  search: `в очереди ${launchedJobs}/${searchState.totalJobs}: ${marketplaceName(marketProvider)}, ${item.category}`,
-                  validation: "ожидает",
-                  generation: "ожидает",
-                }),
-              );
-              void this.waitForAssignmentAndDispatch(
-                chatId,
-                assignment.job.id,
-                assignment.retryAfterMs,
-              );
-              continue;
-            }
-
-            await this.worker.dispatchJob(assignment);
-            logger.info("Ideal outfit market products job dispatched", {
+          if (isQueuedJobResponse(assignment)) {
+            await this.updateIdealProgressMessage(
               chatId,
-              jobId: assignment.job.id,
-              workerId: assignment.worker.workerId,
-              outfitId: outfit.id,
-              marketProvider,
-              slot: item.slot,
-              category: item.category,
-            });
-          } catch (error) {
-            searchState.completedJobs += 1;
-            logger.error("Failed to create ideal market product search job", {
+              formatIdealProductProgress({
+                lookTitle: outfit.title,
+                search: `в очереди ${launchedJobs}/${searchState.totalJobs}: ${marketplaceNames(idealMarketProviders)}, ${item.category}`,
+                validation: "ожидает",
+                generation: "ожидает",
+              }),
+            );
+            void this.waitForAssignmentAndDispatch(
               chatId,
-              outfitId: outfit.id,
-              marketProvider,
-              slot: item.slot,
-              category: item.category,
-              error,
-            });
+              assignment.job.id,
+              assignment.retryAfterMs,
+            );
+            continue;
           }
 
-          await this.updateIdealProgressMessage(
+          await this.worker.dispatchJob(assignment);
+          logger.info("Ideal outfit market products job dispatched", {
             chatId,
-            formatIdealProductProgress({
-              lookTitle: outfit.title,
-              search: `запущено ${Math.min(launchedJobs, searchState.totalJobs)}/${searchState.totalJobs}`,
-              validation: "ожидает",
-              generation: "ожидает",
-            }),
-          );
+            jobId: assignment.job.id,
+            workerId: assignment.worker.workerId,
+            outfitId: outfit.id,
+            marketProviders: idealMarketProviders,
+            slot: item.slot,
+            category: item.category,
+          });
+        } catch (error) {
+          searchState.completedJobs += 1;
+          logger.error("Failed to create ideal market product search job", {
+            chatId,
+            outfitId: outfit.id,
+            marketProviders: idealMarketProviders,
+            slot: item.slot,
+            category: item.category,
+            error,
+          });
         }
+
+        await this.updateIdealProgressMessage(
+          chatId,
+          formatIdealProductProgress({
+            lookTitle: outfit.title,
+            search: `запущено ${Math.min(launchedJobs, searchState.totalJobs)}/${searchState.totalJobs}`,
+            validation: "ожидает",
+            generation: "ожидает",
+          }),
+        );
       }
 
       if (pendingJobIds.length === 0 || searchState.completedJobs >= searchState.totalJobs) {
@@ -1555,7 +1550,7 @@ export class TelegramBot {
         chatId,
         formatIdealProductProgress({
           lookTitle: outfit.title,
-          search: `выполняется через API Ozon/Wildberries: 0/${searchState.totalJobs}`,
+          search: `выполняется через парсеры Ozon/Wildberries: 0/${searchState.totalJobs}`,
           validation: "ожидает",
           generation: "ожидает",
         }),
@@ -1597,7 +1592,7 @@ export class TelegramBot {
       chatId: pending.chatId,
       outfitId: pending.outfit.id,
       jobId: callback.jobId,
-      marketProvider: pending.marketProvider,
+      marketProviders: pending.marketProviders,
       slot: pending.item.slot,
       category: pending.item.category,
       rawProducts: callback.result.marketProducts?.length ?? 0,
@@ -1610,7 +1605,7 @@ export class TelegramBot {
       pending.chatId,
       formatIdealProductProgress({
         lookTitle: pending.outfit.title,
-        search: `выполняется через API Ozon/Wildberries: ${Math.min(searchState.completedJobs, searchState.totalJobs)}/${searchState.totalJobs}, найдено ${formatCandidateCount(searchState.candidates.length)}`,
+        search: `выполняется через парсеры Ozon/Wildberries: ${Math.min(searchState.completedJobs, searchState.totalJobs)}/${searchState.totalJobs}, найдено ${formatCandidateCount(searchState.candidates.length)}`,
         validation: "ожидает",
         generation: "ожидает",
       }),
@@ -1650,7 +1645,7 @@ export class TelegramBot {
         searchState.chatId,
         formatIdealProductProgress({
           lookTitle: searchState.outfit.title,
-          search: "готово, API Ozon/Wildberries не дали подходящих кандидатов",
+          search: "готово, парсеры Ozon/Wildberries не дали подходящих кандидатов",
           validation: "не запускалась",
           generation: "не запускалась",
         }),
@@ -1662,7 +1657,7 @@ export class TelegramBot {
           searchState.outfit,
           [],
           missingItems,
-          "Не нашел кандидаты товаров через API Ozon/Wildberries для этого образа.",
+          "Не нашел кандидаты товаров через Ozon/Wildberries для этого образа.",
         ),
         mainMenuMarkup(),
       );
@@ -1673,7 +1668,7 @@ export class TelegramBot {
       searchState.chatId,
       formatIdealProductProgress({
         lookTitle: searchState.outfit.title,
-        search: `готово, найдено ${formatCandidateCount(candidates.length)} через API Ozon/Wildberries`,
+        search: `готово, найдено ${formatCandidateCount(candidates.length)} через Ozon/Wildberries`,
         validation: "создаю запрос проверки",
         generation: "ожидает",
       }),
@@ -2452,7 +2447,7 @@ export class TelegramBot {
         chatId,
         jobId,
         outfitId: pending.outfit.id,
-        marketProvider: pending.marketProvider,
+        marketProviders: pending.marketProviders,
         slot: pending.item.slot,
         category: pending.item.category,
       });
@@ -2497,7 +2492,7 @@ export class TelegramBot {
         chatId,
         formatIdealProductProgress({
           lookTitle: pending.outfit.title,
-          search: `выполняется через ${marketplaceName(pending.marketProvider)}: ${pending.searchState.completedJobs}/${pending.searchState.totalJobs}, товар: ${pending.item.category}`,
+          search: `выполняется через ${marketplaceNames(pending.marketProviders)}: ${pending.searchState.completedJobs}/${pending.searchState.totalJobs}, товар: ${pending.item.category}`,
           validation: "ожидает",
           generation: "ожидает",
         }),
@@ -2568,7 +2563,7 @@ export class TelegramBot {
         jobId,
         workerId,
         outfitId: pending.outfit.id,
-        marketProvider: pending.marketProvider,
+        marketProviders: pending.marketProviders,
         slot: pending.item.slot,
         category: pending.item.category,
       });
@@ -2953,28 +2948,28 @@ function createIdealMarketSearchModelSelection(): TryOnModelSelection {
 
 function createIdealMarketSearchSelection(
   item: IdealOutfitItem,
-  provider: MarketProvider,
+  providers: MarketProvider[],
 ): MarketSearchSelection {
   return {
-    providers: [provider],
+    providers,
     query: createIdealMarketSearchQuery(item),
     category: createIdealMarketCategory(item),
-    limit: idealCandidatesPerMarketProvider,
+    limit: idealCandidatesPerOutfitItem,
     currency: "RUB",
     locale: "ru-RU",
     country: "RU",
-    required: true,
+    required: false,
   };
 }
 
 function createIdealMarketSearchText(
   outfit: IdealOutfit,
   item: IdealOutfitItem,
-  provider: MarketProvider,
+  providers: MarketProvider[],
 ): string {
   return [
     `Market search for outfit: ${outfit.title}`,
-    `Provider: ${provider}`,
+    `Providers: ${providers.join(", ")}`,
     `Slot: ${item.slot}`,
     `Category: ${item.category}`,
     `Description: ${item.description}`,
@@ -2983,7 +2978,20 @@ function createIdealMarketSearchText(
 }
 
 function createIdealMarketSearchQuery(item: IdealOutfitItem): string {
-  return createIdealMarketCategory(item);
+  const category = item.category.trim();
+  const searchQuery = item.searchQuery.trim();
+  const fallbackTerm = idealMarketSearchTerm(item);
+  const baseQuery =
+    category && !isGenericIdealCategory(category)
+      ? category
+      : searchQuery || fallbackTerm || category || item.description.trim();
+  const color = item.color?.trim();
+  const query =
+    color && !baseQuery.toLowerCase().includes(color.toLowerCase())
+      ? `${color} ${baseQuery}`
+      : baseQuery;
+
+  return truncateText(query, 80);
 }
 
 function createIdealMarketCategory(item: IdealOutfitItem): string {
@@ -3025,6 +3033,12 @@ function idealMarketSearchTerm(item: IdealOutfitItem): string | undefined {
   };
 
   return terms[key];
+}
+
+function isGenericIdealCategory(category: string): boolean {
+  return ["top", "bottom", "layer", "outerwear", "верх", "низ", "слой"].includes(
+    category.trim().toLowerCase(),
+  );
 }
 
 function createIdealProductValidationModelSelection(
@@ -3635,6 +3649,10 @@ function marketplaceName(provider: MarketProductRef["provider"]): string {
   }
 
   return "AliExpress";
+}
+
+function marketplaceNames(providers: MarketProvider[]): string {
+  return providers.map(marketplaceName).join("/");
 }
 
 function formatMarketPrice(price: NonNullable<MarketProductRef["price"]>): string {

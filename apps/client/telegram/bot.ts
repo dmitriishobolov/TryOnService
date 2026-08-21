@@ -1170,11 +1170,22 @@ export class TelegramBot {
     );
 
     if (!parsed || parsed.ok !== true) {
-      await this.sendMessage(
+      logger.warn("Ideal outfit product validation failed, using fallback candidates", {
+        chatId: pending.chatId,
+        outfitId: pending.outfit.id,
+        candidates: pending.candidates.length,
+        responseStart: callback.result.message.slice(0, 300),
+      });
+      await this.startIdealProductCardGeneration(
         pending.chatId,
-        parsed?.errorMessage ??
-          "Не получилось проверить изображения товаров. Попробуйте другой образ.",
-        mainMenuMarkup(),
+        pending.outfit,
+        selectFallbackIdealProducts(pending.candidates, pending.outfit.items),
+        mergeMissingItems(
+          pending.missingItems,
+          sanitizeIdealMissingItems(parsed?.missingItems),
+        ),
+        pending.inputFiles,
+        "Не получилось проверить изображения товаров пачкой, поэтому пробую собрать карточки по найденным кандидатам.",
       );
       return;
     }
@@ -1200,26 +1211,65 @@ export class TelegramBot {
     );
 
     if (products.length === 0) {
-      await this.sendMessage(
+      logger.warn("Ideal outfit product validation accepted no products, using fallback candidates", {
+        chatId: pending.chatId,
+        outfitId: pending.outfit.id,
+        candidates: pending.candidates.length,
+      });
+      await this.startIdealProductCardGeneration(
         pending.chatId,
+        pending.outfit,
+        selectFallbackIdealProducts(pending.candidates, pending.outfit.items),
+        missingItems,
+        pending.inputFiles,
+        "Проверка фото не приняла кандидаты уверенно, поэтому пробую собрать карточки по лучшим найденным товарам.",
+      );
+      return;
+    }
+
+    await this.startIdealProductCardGeneration(
+      pending.chatId,
+      pending.outfit,
+      products,
+      missingItems,
+      pending.inputFiles,
+    );
+  }
+
+  private async startIdealProductCardGeneration(
+    chatId: string,
+    outfit: IdealOutfit,
+    products: IdealProduct[],
+    missingItems: IdealMissingItem[],
+    inputFiles: StorageObjectRef[],
+    fallbackMessage?: string,
+  ): Promise<void> {
+    if (products.length === 0) {
+      await this.sendMessage(
+        chatId,
         formatMissingProductsMessage(
-          pending.outfit,
+          outfit,
           products,
           missingItems,
-          "Не осталось товаров после проверки фото: не нашлось кандидатов, из которых можно надежно сделать чистую карточку товара.",
+          fallbackMessage ??
+            "Не осталось товаров после проверки фото: не нашлось кандидатов, из которых можно надежно сделать чистую карточку товара.",
         ),
         mainMenuMarkup(),
       );
       return;
     }
 
+    if (fallbackMessage) {
+      await this.sendMessage(chatId, fallbackMessage, processingMarkup());
+    }
+
     const [firstProduct, ...remainingProducts] = products;
 
     if (!firstProduct) {
       await this.sendMessage(
-        pending.chatId,
+        chatId,
         formatMissingProductsMessage(
-          pending.outfit,
+          outfit,
           [],
           missingItems,
           "Не осталось товаров после проверки фото.",
@@ -1230,13 +1280,13 @@ export class TelegramBot {
     }
 
     await this.createIdealProductCardGenerationRequest(
-      pending.chatId,
-      pending.outfit,
+      chatId,
+      outfit,
       firstProduct,
       remainingProducts,
       [],
       missingItems,
-      pending.inputFiles,
+      inputFiles,
     );
   }
 
@@ -2061,6 +2111,7 @@ function createIdealProductValidationModelSelection(
       store: false,
       inputImageUrls: candidates.map((candidate) => candidate.imageUrl),
       maxInputImageUrls: candidates.length,
+      allowInputImagePlaceholders: true,
     },
   };
 }
@@ -2190,6 +2241,7 @@ ${JSON.stringify(compactCandidates)}
 - фото с человеком, моделью или манекеном допустимо, если целевой предмет можно отделить от тела и фона;
 - другие элементы одежды допустимы только если они не мешают понять целевой предмет;
 - фон может быть любым, потому что следующий шаг перерисует белый фон;
+- если вместо товара пустое/однотонное placeholder-изображение или ошибка загрузки картинки, reject;
 - reject, если предмет слишком закрыт, слишком мал, обрезан критично, смешан с несколькими похожими вещами, это не товар или невозможно понять, что продается.
 
 Верни не больше 1 accepted на категорию/slot. Не повторяй title/url/imageUrl.
@@ -2405,6 +2457,28 @@ function selectAcceptedIdealProducts(
       ...candidate,
       whyFits: acceptedCandidate.whyFits ?? candidate.whyFits,
     });
+  }
+
+  return products.slice(0, 6);
+}
+
+function selectFallbackIdealProducts(
+  candidates: IdealProduct[],
+  allowedItems: IdealOutfitItem[],
+): IdealProduct[] {
+  const allowedKeys = buildAllowedIdealMatchKeys(allowedItems);
+  const seenCategories = new Set<string>();
+  const products: IdealProduct[] = [];
+
+  for (const candidate of candidates) {
+    const categoryKey = findAllowedIdealMatchKey(candidate, allowedKeys);
+
+    if (!categoryKey || seenCategories.has(categoryKey)) {
+      continue;
+    }
+
+    seenCategories.add(categoryKey);
+    products.push(candidate);
   }
 
   return products.slice(0, 6);

@@ -1,6 +1,7 @@
 import {
   downloadInputImage,
   fetchJson,
+  fetchWithTimeout,
   findStringByKeys,
   isRecord,
   joinUrl,
@@ -20,6 +21,9 @@ import type { TryOnModelAdapter } from "../types.js";
 
 const logger = createLogger("worker");
 const provider = "openai";
+const maxOpenAiRemoteInputImageBytes = 8 * 1024 * 1024;
+const blankInputImageDataUrl =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 const imageDetailValues = [
   "low",
   "auto",
@@ -100,6 +104,18 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
     const include = buildInclude(tools);
     const toolChoice = readToolChoice(options, tools);
     const extraInputImageUrls = readRemoteImageUrls(options);
+    const allowInputImagePlaceholders = readBooleanOption(
+      options,
+      "allowInputImagePlaceholders",
+      false,
+    );
+    const extraInputImages = await prepareRemoteInputImages({
+      jobId: job.jobId,
+      urls: extraInputImageUrls,
+      config,
+      allowPlaceholders: allowInputImagePlaceholders,
+      signal,
+    });
     logger.info("OpenAI Responses request started", {
       jobId: job.jobId,
       model,
@@ -115,7 +131,10 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
       promptLength: prompt.length,
       tools: tools.map((tool) => tool.type),
       toolChoice,
-      extraInputImages: extraInputImageUrls.length,
+      extraInputImages: extraInputImages.length,
+      extraInputImagePlaceholders: extraInputImages.filter(
+        (image) => image.placeholder,
+      ).length,
     });
     const response = await fetchJson<unknown>(
       provider,
@@ -142,7 +161,7 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
                 personImage.buffer,
                 inputContentType,
                 imageDetail,
-                extraInputImageUrls,
+                extraInputImages,
               ),
             },
           ],
@@ -237,6 +256,13 @@ type OpenAiInputContent =
       detail: OpenAiImageDetail;
     };
 
+interface OpenAiPreparedInputImage {
+  imageUrl: string;
+  sourceUrl: string;
+  contentType: string;
+  placeholder: boolean;
+}
+
 function openAiHeaders(
   apiKey: string,
   config: WorkerConfig,
@@ -262,7 +288,7 @@ function buildUserContent(
   personImageBuffer: Buffer,
   inputContentType: string,
   imageDetail: OpenAiImageDetail,
-  extraInputImageUrls: string[],
+  extraInputImages: OpenAiPreparedInputImage[],
 ): OpenAiInputContent[] {
   return [
     {
@@ -274,12 +300,135 @@ function buildUserContent(
       image_url: toDataUrl(personImageBuffer, inputContentType),
       detail: imageDetail,
     },
-    ...extraInputImageUrls.map((imageUrl) => ({
+    ...extraInputImages.map((image) => ({
       type: "input_image" as const,
-      image_url: imageUrl,
+      image_url: image.imageUrl,
       detail: imageDetail,
     })),
   ];
+}
+
+async function prepareRemoteInputImages(params: {
+  jobId: string;
+  urls: string[];
+  config: WorkerConfig;
+  allowPlaceholders: boolean;
+  signal?: AbortSignal;
+}): Promise<OpenAiPreparedInputImage[]> {
+  const images: OpenAiPreparedInputImage[] = [];
+
+  for (const [index, url] of params.urls.entries()) {
+    try {
+      images.push(await downloadRemoteInputImage(params, url, index + 1));
+    } catch (error) {
+      logger.warn("OpenAI remote input image download failed", {
+        jobId: params.jobId,
+        imageIndex: index + 1,
+        url,
+        allowPlaceholders: params.allowPlaceholders,
+        error,
+      });
+
+      if (!params.allowPlaceholders) {
+        if (error instanceof TryOnModelError) {
+          throw error;
+        }
+
+        throw new TryOnModelError(
+          "openai_input_image_download_failed",
+          "Failed to download remote OpenAI input image before request",
+          true,
+        );
+      }
+
+      images.push({
+        imageUrl: blankInputImageDataUrl,
+        sourceUrl: url,
+        contentType: "image/png",
+        placeholder: true,
+      });
+    }
+  }
+
+  return images;
+}
+
+async function downloadRemoteInputImage(
+  params: {
+    jobId: string;
+    config: WorkerConfig;
+    signal?: AbortSignal;
+  },
+  url: string,
+  imageIndex: number,
+): Promise<OpenAiPreparedInputImage> {
+  logger.info("OpenAI remote input image download started", {
+    jobId: params.jobId,
+    imageIndex,
+    url,
+  });
+  const response = await fetchWithTimeout(
+    url,
+    {
+      method: "GET",
+      headers: {
+        Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "User-Agent":
+          "Mozilla/5.0 (compatible; TryOnService/0.1; +https://github.com/dmitriishobolov/TryOnService)",
+      },
+    },
+    params.config.tryOnModelHttpTimeoutMs,
+    params.signal,
+  );
+
+  if (!response.ok) {
+    throw new TryOnModelError(
+      "openai_input_image_download_failed",
+      `Remote OpenAI input image ${imageIndex} failed with status ${response.status}`,
+      response.status === 429 || response.status >= 500,
+    );
+  }
+
+  const contentLength = response.headers.get("content-length");
+
+  if (contentLength && Number(contentLength) > maxOpenAiRemoteInputImageBytes) {
+    throw new TryOnModelError(
+      "openai_input_image_too_large",
+      `Remote OpenAI input image ${imageIndex} is larger than ${maxOpenAiRemoteInputImageBytes} bytes`,
+      false,
+    );
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+
+  if (buffer.length > maxOpenAiRemoteInputImageBytes) {
+    throw new TryOnModelError(
+      "openai_input_image_too_large",
+      `Remote OpenAI input image ${imageIndex} is larger than ${maxOpenAiRemoteInputImageBytes} bytes`,
+      false,
+    );
+  }
+
+  const contentType = resolveOpenAiImageContentType(
+    response.headers.get("content-type") ?? undefined,
+    "",
+    buffer,
+  );
+
+  logger.info("OpenAI remote input image download finished", {
+    jobId: params.jobId,
+    imageIndex,
+    url,
+    contentType,
+    sizeBytes: buffer.length,
+  });
+
+  return {
+    imageUrl: toDataUrl(buffer, contentType),
+    sourceUrl: url,
+    contentType,
+    placeholder: false,
+  };
 }
 
 function resolveOpenAiImageContentType(
@@ -287,8 +436,18 @@ function resolveOpenAiImageContentType(
   key: string,
   buffer: Buffer,
 ): string {
-  if (contentType?.toLowerCase().startsWith("image/")) {
-    return contentType;
+  const normalizedContentType = contentType?.split(";")[0]?.trim().toLowerCase();
+  const fromBytes = imageContentTypeFromBytes(buffer);
+
+  if (fromBytes) {
+    return fromBytes;
+  }
+
+  if (
+    normalizedContentType &&
+    isSupportedOpenAiImageContentType(normalizedContentType)
+  ) {
+    return normalizedContentType;
   }
 
   const fromKey = imageContentTypeFromKey(key);
@@ -297,16 +456,19 @@ function resolveOpenAiImageContentType(
     return fromKey;
   }
 
-  const fromBytes = imageContentTypeFromBytes(buffer);
-
-  if (fromBytes) {
-    return fromBytes;
-  }
-
   throw new TryOnModelError(
     "openai_image_content_type_unsupported",
     `OpenAI image input must have an image MIME type; got ${contentType ?? "unknown"}`,
     false,
+  );
+}
+
+function isSupportedOpenAiImageContentType(contentType: string): boolean {
+  return (
+    contentType === "image/jpeg" ||
+    contentType === "image/png" ||
+    contentType === "image/webp" ||
+    contentType === "image/gif"
   );
 }
 

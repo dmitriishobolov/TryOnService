@@ -84,7 +84,6 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
       textVerbosityValues,
       config.openai.textVerbosity,
     );
-    const reasoning = buildReasoningConfig(options, config);
     const maxOutputTokens = readNumberOption(
       options,
       "maxOutputTokens",
@@ -96,6 +95,7 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
       config.openai.storeResponse,
     );
     const tools = buildTools(options);
+    const reasoning = buildReasoningConfig(options, config, tools);
     const include = buildInclude(tools);
     const toolChoice = readToolChoice(options, tools);
     const extraInputImageUrls = readRemoteImageUrls(options);
@@ -364,6 +364,7 @@ function imageContentTypeFromBytes(buffer: Buffer): string | undefined {
 function buildReasoningConfig(
   options: Record<string, unknown>,
   config: WorkerConfig,
+  tools: OpenAiToolConfig[],
 ): Record<string, string> {
   const reasoning: Record<string, string> = {
     effort: readEnumOption(
@@ -373,6 +374,15 @@ function buildReasoningConfig(
       config.openai.reasoningEffort,
     ),
   };
+  const hasWebSearch = tools.some((tool) => tool.type === "web_search");
+
+  if (hasWebSearch && reasoning.effort === "minimal") {
+    logger.warn("OpenAI web_search cannot use minimal reasoning, using low", {
+      configuredReasoningEffort: reasoning.effort,
+    });
+    reasoning.effort = "low";
+  }
+
   const mode = readStringOption(
     options,
     "reasoningMode",

@@ -305,7 +305,7 @@ async function deliverFailureCallback(
     jobId: job.jobId,
     client: job.client,
     result: {
-      message: failureMessage(update),
+      message: failureMessage(job, update),
     },
   };
 
@@ -341,7 +341,10 @@ async function deliverFailureCallback(
   }
 }
 
-function failureMessage(update: JobResultUpdateRequest): string {
+function failureMessage(
+  job: WorkerJobRequest,
+  update: JobResultUpdateRequest,
+): string {
   if (update.status === "cancelled") {
     return "Обработка запроса была отменена. Попробуйте отправить фото заново.";
   }
@@ -352,6 +355,10 @@ function failureMessage(update: JobResultUpdateRequest): string {
 
   if (update.error?.code.startsWith("market_")) {
     return "Не удалось подобрать товары в маркетплейсах. Попробуйте изменить описание одежды или повторить запрос позже.";
+  }
+
+  if (job.payload.model?.task === "wardrobe-recommendation") {
+    return "Не удалось выполнить подбор образа или товаров. Попробуйте повторить запрос чуть позже.";
   }
 
   return "Не удалось выполнить разбор внешности. Попробуйте отправить другое четкое фото с видимым лицом чуть позже.";

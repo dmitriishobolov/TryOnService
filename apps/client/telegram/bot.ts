@@ -363,7 +363,7 @@ export class TelegramBot {
     }
 
     if (pending.flow === "ideal-products") {
-      await this.handleIdealProductsCallback(pending, callback.result.message);
+      await this.handleIdealProductsCallback(pending, callback);
       return;
     }
 
@@ -1008,11 +1008,27 @@ export class TelegramBot {
 
   private async handleIdealProductsCallback(
     pending: Extract<PendingJob, { flow: "ideal-products" }>,
-    message: string,
+    callback: TelegramJobCallbackRequest,
   ): Promise<void> {
+    const message = callback.result.message;
     const parsed = parseJsonFromOpenAiMessage<IdealProductsResponse>(message);
 
-    if (!parsed || parsed.ok !== true) {
+    if (!parsed) {
+      logger.warn("Ideal outfit product search returned non-json response", {
+        chatId: pending.chatId,
+        outfitId: pending.outfit.id,
+        jobId: callback.jobId,
+        responseStart: message.slice(0, 300),
+      });
+      await this.sendMessage(
+        pending.chatId,
+        "Поиск товаров временно не выполнился из-за ошибки обработки. Попробуйте выбрать образ еще раз через минуту.",
+        mainMenuMarkup(),
+      );
+      return;
+    }
+
+    if (parsed.ok !== true) {
       await this.sendMessage(
         pending.chatId,
         parsed?.errorMessage ??
@@ -1970,7 +1986,7 @@ function createIdealProductSearchModelSelection(
     options: {
       imageDetail: "low",
       textVerbosity: "low",
-      reasoningEffort: "minimal",
+      reasoningEffort: "low",
       reasoningMode: "standard",
       maxOutputTokens: Math.min(2_000 + maxCandidates * 180, 9_000),
       store: false,

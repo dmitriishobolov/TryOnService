@@ -198,10 +198,23 @@ const legacyAppearanceAnalysisButtonText = "Разбор внешности";
 const idealOutfitButtonText = "Идеальный образ";
 const cancelButtonText = "Отмена";
 const idealCandidatesPerOutfitItem = 10;
-const idealMarketplaceSearchDomains = [
+const idealProductSearchPriorityDomains = [
   "ozon.ru",
   "wildberries.ru",
   "aliexpress.ru",
+  "market.yandex.ru",
+  "lamoda.ru",
+  "rendez-vous.ru",
+  "sportmaster.ru",
+  "henderson.ru",
+  "kanzler-style.ru",
+  "lime-shop.com",
+  "befree.ru",
+  "gloria-jeans.ru",
+  "sela.ru",
+  "zarina.ru",
+  "stockmann.ru",
+  "brandshop.ru",
 ];
 
 const appearanceAnalysisPrompt = `
@@ -1991,8 +2004,7 @@ function createIdealProductSearchModelSelection(
       maxOutputTokens: Math.min(2_000 + maxCandidates * 180, 9_000),
       store: false,
       webSearch: {
-        searchContextSize: "medium",
-        allowedDomains: idealMarketplaceSearchDomains,
+        searchContextSize: "high",
       },
     },
   };
@@ -2067,31 +2079,31 @@ function createIdealProductCardGenerationModelSelection(
 
 function createIdealProductSearchPrompt(outfit: IdealOutfit): string {
   const maxCandidates = maxIdealProductCandidates(outfit);
+  const priorityDomains = idealProductSearchPriorityDomains.join(", ");
 
   return `
-Найди кандидаты товарных карточек для образа.
+Найди кандидаты товарных карточек для образа в российских или доставляющих в РФ интернет-магазинах.
 
-Сайты только:
-- ozon.ru
-- wildberries.ru
-- aliexpress.ru
+Приоритетные источники, но НЕ жесткое ограничение:
+${priorityDomains}
 
 Образ compact JSON:
 ${JSON.stringify(compactOutfitForPrompt(outfit))}
 
 Правила:
-- используй web search только по указанным сайтам;
+- используй широкий web search, не ограничивайся маркетплейсами;
+- приоритет: цена в рублях, российская страница товара, доставка по России, Москва или Московский регион если это видно;
+- Ozon, Wildberries, AliExpress Russia и Яндекс Маркет хороши, но можно брать любой интернет-магазин, если товар реально продается онлайн;
 - до ${idealCandidatesPerOutfitItem} кандидатов на каждый item, всего не больше ${maxCandidates};
 - productUrl должен быть карточкой товара, не категорией, поиском или рекламной страницей;
-- imageUrl должен быть прямой или доступной картинкой товара;
-- приоритет: цена в рублях, доставка или наличие в России, Москва или Московский регион если это видно;
+- imageUrl должен быть прямой или доступной картинкой товара, не HTML-страницей;
 - в search query можно добавлять "купить", "руб", "Москва", "доставка по России";
 - не добавляй категории, которых нет в outfit.items;
 - не выдумывай url, цену, магазин;
 - если фото уже на белом/однотонном фоне и с одним товаром, такой кандидат лучше;
 - если товар на человеке/манекене/в lookbook, кандидат можно брать только когда сам предмет хорошо виден и его реально изолировать в отдельную чистую карточку;
 - если в фото много одинаковых товаров, товар закрыт телом/руками, видна только малая часть вещи или непонятно, какой предмет относится к item, не бери;
-- если сомневаешься в фото, кандидат можно оставить: следующий шаг проверит изображение vision-моделью;
+- если сомневаешься в фото, кандидат можно оставить: следующий шаг проверит изображение vision-моделью и затем сгенерирует clean card;
 - если по item нет кандидатов, добавь missingItems.
 
 Верни только строгий JSON без Markdown:
@@ -2123,7 +2135,7 @@ ${JSON.stringify(compactOutfitForPrompt(outfit))}
 Если надежных товаров нет, верни:
 {
   "ok": false,
-  "errorMessage": "Не удалось найти кандидаты товарных карточек на Ozon, Wildberries или AliExpress."
+  "errorMessage": "Не удалось найти кандидаты товарных карточек в российских интернет-магазинах."
 }
 `.trim();
 }

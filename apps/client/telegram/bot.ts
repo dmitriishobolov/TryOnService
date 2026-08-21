@@ -119,6 +119,7 @@ interface IdealOutfit {
 interface IdealPlanResponse {
   ok: boolean;
   errorMessage?: string;
+  footwearVisible?: boolean;
   summary?: string;
   outfits?: IdealOutfit[];
 }
@@ -140,6 +141,10 @@ interface IdealProductsResponse {
   errorMessage?: string;
   lookTitle?: string;
   products?: IdealProduct[];
+}
+
+interface IdealOutfitSanitizeOptions {
+  allowFootwear: boolean;
 }
 
 const appearanceAnalysisButtonText = "Анализ внешности";
@@ -189,19 +194,22 @@ const idealOutfitPlanPrompt = `
 Сначала проверь изображение:
 - это должна быть фотография реального человека;
 - человек должен быть виден примерно в полный рост: голова, корпус и большая часть ног;
+- стопы или обувь могут быть не видны из-за кадрирования, такое фото всё равно подходит;
 - поза, освещение и одежда должны позволять оценить пропорции фигуры и общий силуэт;
 - если это селфи только лица, портрет по пояс, рисунок, рендер, аватар, мем, скриншот, фото со спины или человек плохо виден, образ не подбирай.
 
 Если фото не подходит, верни строгий JSON:
 {
   "ok": false,
-  "errorMessage": "Для подбора идеального образа нужно фото в полный рост: человек должен быть хорошо виден с головы до ног. Пришлите, пожалуйста, подходящее фото."
+  "errorMessage": "Для подбора идеального образа нужно фото почти в полный рост: должны быть хорошо видны голова, корпус и большая часть ног. Обувь может не попадать в кадр. Пришлите, пожалуйста, подходящее фото."
 }
 
 Если фото подходит, подбери максимум 3 разных комбинации одежды. Они должны подходить человеку по видимым пропорциям, контрасту, цветам и общей подаче. Не делай выводы о личности, здоровье, этничности, религии, сексуальности или точном возрасте.
 
 Правила комбинаций:
 - в одном образе не должно быть дублей одной категории: не добавляй два худи, две куртки, две рубашки, две пары брюк и так далее;
+- если стопы или обувь не видны, установи "footwearVisible": false и не добавляй обувь, ботинки, кроссовки, туфли, лоферы или другую footwear-категорию в items;
+- если стопы и обувь видны достаточно ясно, установи "footwearVisible": true, обувь можно добавить только если она действительно важна для образа;
 - образ должен быть собираемым из понятных товарных категорий;
 - каждый item должен иметь отдельный slot, category, description и searchQuery;
 - searchQuery должен быть хорошим запросом для поиска товара в интернет-магазинах на русском языке;
@@ -210,6 +218,7 @@ const idealOutfitPlanPrompt = `
 Верни только строгий JSON без Markdown:
 {
   "ok": true,
+  "footwearVisible": true,
   "summary": "1-2 короткие фразы о подходящем направлении образов",
   "outfits": [
     {
@@ -440,7 +449,7 @@ export class TelegramBot {
         "Привет! Я помогу подобрать одежду под внешность и собрать товарную подборку для будущей виртуальной примерки.",
         "",
         "**Анализ внешности**: пришлите фото с лицом, я дам компактный стилистический разбор.",
-        "**Идеальный образ**: пришлите фото в полный рост, я предложу до 3 образов, а после выбора найду похожие товары с подходящими фото.",
+        "**Идеальный образ**: пришлите фото почти в полный рост, я предложу до 3 образов, а после выбора найду похожие товары с подходящими фото. Если обувь не видна, искать обувь не буду.",
       ].join("\n"),
       mainMenuMarkup(),
     );
@@ -471,7 +480,7 @@ export class TelegramBot {
 
     return this.sendMessage(
       chatId,
-      "Отправьте фото в полный рост: человек должен быть хорошо виден с головы до ног.",
+      "Отправьте фото почти в полный рост: должны быть хорошо видны голова, корпус и большая часть ног. Если обувь не попала в кадр, это нормально.",
       cancelMarkup(),
     );
   }
@@ -507,7 +516,7 @@ export class TelegramBot {
       });
       await this.sendMessage(
         chatId,
-        "Нужно фото в полный рост. Пришлите подходящее изображение или нажмите «Отмена».",
+        "Нужно фото почти в полный рост: голова, корпус и большая часть ног. Обувь может не попадать в кадр. Пришлите подходящее изображение или нажмите «Отмена».",
         cancelMarkup(),
       );
       return;
@@ -722,13 +731,15 @@ export class TelegramBot {
       await this.sendMessage(
         pending.chatId,
         parsed?.errorMessage ??
-          "Не получилось надежно понять фото. Пришлите фото в полный рост, где человек хорошо виден с головы до ног.",
+          "Не получилось надежно понять фото. Пришлите фото почти в полный рост, где хорошо видны голова, корпус и большая часть ног.",
         cancelMarkup(),
       );
       return;
     }
 
-    const outfits = sanitizeIdealOutfits(parsed.outfits);
+    const outfits = sanitizeIdealOutfits(parsed.outfits, {
+      allowFootwear: parsed.footwearVisible !== false,
+    });
 
     if (outfits.length === 0) {
       this.sessions.set(pending.chatId, {
@@ -736,7 +747,7 @@ export class TelegramBot {
       });
       await this.sendMessage(
         pending.chatId,
-        "Не удалось собрать достаточно внятные варианты. Пришлите другое фото в полный рост.",
+        "Не удалось собрать достаточно внятные варианты. Пришлите другое фото почти в полный рост.",
         cancelMarkup(),
       );
       return;
@@ -751,7 +762,9 @@ export class TelegramBot {
 
     await this.sendMessage(
       pending.chatId,
-      formatIdealOutfitOptions(parsed.summary, outfits),
+      formatIdealOutfitOptions(parsed.summary, outfits, {
+        footwearVisible: parsed.footwearVisible !== false,
+      }),
       idealOutfitChoiceMarkup(outfits),
     );
   }
@@ -1449,27 +1462,38 @@ function parseIdealOutfitChoice(text: string, outfits: IdealOutfit[]): number {
     : -1;
 }
 
-function sanitizeIdealOutfits(value: unknown): IdealOutfit[] {
+function sanitizeIdealOutfits(
+  value: unknown,
+  options: IdealOutfitSanitizeOptions,
+): IdealOutfit[] {
   if (!Array.isArray(value)) {
     return [];
   }
 
   return value
-    .map((item, index) => sanitizeIdealOutfit(item, index))
+    .map((item, index) => sanitizeIdealOutfit(item, index, options))
     .filter((item): item is IdealOutfit => Boolean(item))
     .slice(0, 3);
 }
 
-function sanitizeIdealOutfit(value: unknown, index: number): IdealOutfit | undefined {
+function sanitizeIdealOutfit(
+  value: unknown,
+  index: number,
+  options: IdealOutfitSanitizeOptions,
+): IdealOutfit | undefined {
   if (!isPlainObject(value)) {
     return undefined;
   }
 
   const rawItems = Array.isArray(value.items) ? value.items : [];
+  const sanitizedItems = rawItems
+    .map(sanitizeIdealOutfitItem)
+    .filter((item): item is IdealOutfitItem => Boolean(item));
+  const visibleItems = options.allowFootwear
+    ? sanitizedItems
+    : sanitizedItems.filter((item) => !isFootwearItem(item));
   const items = dedupeIdealOutfitItems(
-    rawItems
-      .map(sanitizeIdealOutfitItem)
-      .filter((item): item is IdealOutfitItem => Boolean(item)),
+    visibleItems,
   );
 
   if (items.length === 0) {
@@ -1523,6 +1547,16 @@ function dedupeIdealOutfitItems(items: IdealOutfitItem[]): IdealOutfitItem[] {
   }
 
   return result;
+}
+
+function isFootwearItem(item: IdealOutfitItem): boolean {
+  return [item.slot, item.category, item.description, item.searchQuery].some(
+    isFootwearText,
+  );
+}
+
+function isFootwearText(value: string): boolean {
+  return normalizeCategoryKey(value) === "shoes";
 }
 
 function sanitizeIdealProducts(value: unknown): IdealProduct[] {
@@ -1595,12 +1629,16 @@ function sanitizeIdealProduct(value: unknown): IdealProduct | undefined {
 function formatIdealOutfitOptions(
   summary: string | undefined,
   outfits: IdealOutfit[],
+  options: { footwearVisible: boolean },
 ): string {
   const lines = [
     summary ?? "Я собрал несколько вариантов, которые должны хорошо лечь на вашу внешность.",
+    options.footwearVisible
+      ? undefined
+      : "Обувь не добавляю в подборку, потому что ботинки или стопы не видны на фото.",
     "",
     "Выберите образ:",
-  ];
+  ].filter((line): line is string => line !== undefined);
 
   for (const [index, outfit] of outfits.entries()) {
     lines.push("");
@@ -1958,7 +1996,7 @@ function normalizeCategoryKey(value: string): string {
     ["shorts", /(шорт|shorts)/],
     ["skirt", /(юбк|skirt)/],
     ["dress", /(плать|dress)/],
-    ["shoes", /(кроссов|кеды|ботин|туфл|лофер|обув|sneakers|shoes|boots|loafers)/],
+    ["shoes", /(кроссов|кеды|ботин|сапог|туфл|лофер|обув|сандал|босонож|мокасин|sneakers|shoes|boots|loafers|footwear|sandals|moccasins)/],
     ["bag", /(сумк|рюкзак|bag|backpack)/],
     ["accessory", /(ремень|очки|шапк|кепк|шарф|перчат|belt|glasses|cap|scarf|accessor)/],
   ];

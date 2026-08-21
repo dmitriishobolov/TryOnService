@@ -175,6 +175,20 @@ interface IdealProductsResponse {
   missingItems?: IdealMissingItem[];
 }
 
+interface IdealProductValidationResponse {
+  ok: boolean;
+  errorMessage?: string;
+  lookTitle?: string;
+  acceptedCandidates?: IdealAcceptedCandidate[];
+  missingItems?: IdealMissingItem[];
+}
+
+interface IdealAcceptedCandidate {
+  imageIndex: number;
+  whyFits?: string;
+  imageCheck?: IdealProductImageCheck;
+}
+
 interface IdealOutfitSanitizeOptions {
   allowFootwear: boolean;
 }
@@ -183,6 +197,12 @@ const appearanceAnalysisButtonText = "Анализ внешности";
 const legacyAppearanceAnalysisButtonText = "Разбор внешности";
 const idealOutfitButtonText = "Идеальный образ";
 const cancelButtonText = "Отмена";
+const idealCandidatesPerOutfitItem = 10;
+const idealMarketplaceSearchDomains = [
+  "ozon.ru",
+  "wildberries.ru",
+  "best.aliexpress.com",
+];
 
 const appearanceAnalysisPrompt = `
 Ты выполняешь разбор внешности только по фотографии реального человека.
@@ -927,7 +947,7 @@ export class TelegramBot {
         chatId,
         username: session.username,
         text: createIdealProductSearchPrompt(outfit),
-        model: createIdealProductSearchModelSelection(),
+        model: createIdealProductSearchModelSelection(outfit),
         inputFiles: session.inputFiles,
       });
       const jobId = getResponseJobId(assignment);
@@ -1004,7 +1024,7 @@ export class TelegramBot {
       allowedItems: pending.outfit.items,
       requireImageCheck: false,
       allowMultiplePerCategory: true,
-      maxProducts: 12,
+      maxProducts: maxIdealProductCandidates(pending.outfit),
     });
     const missingItems = sanitizeIdealMissingItems(parsed.missingItems);
 
@@ -1106,7 +1126,9 @@ export class TelegramBot {
     pending: Extract<PendingJob, { flow: "ideal-products-validation" }>,
     message: string,
   ): Promise<void> {
-    const parsed = parseJsonFromOpenAiMessage<IdealProductsResponse>(message);
+    const parsed = parseJsonFromOpenAiMessage<IdealProductValidationResponse>(
+      message,
+    );
 
     if (!parsed || parsed.ok !== true) {
       await this.sendMessage(
@@ -1118,12 +1140,11 @@ export class TelegramBot {
       return;
     }
 
-    const products = sanitizeIdealProducts(parsed.products, {
-      allowedItems: pending.outfit.items,
-      requireImageCheck: true,
-      allowMultiplePerCategory: false,
-      maxProducts: 6,
-    });
+    const products = selectAcceptedIdealProducts(
+      pending.candidates,
+      parsed.acceptedCandidates,
+      pending.outfit.items,
+    );
     const missingItems = mergeMissingItems(
       pending.missingItems,
       sanitizeIdealMissingItems(parsed.missingItems),
@@ -1726,21 +1747,46 @@ function createIdealOutfitPlanModelSelection(): TryOnModelSelection {
   };
 }
 
-function createIdealProductSearchModelSelection(): TryOnModelSelection {
+function createIdealProductSearchModelSelection(
+  outfit: IdealOutfit,
+): TryOnModelSelection {
+  const maxCandidates = maxIdealProductCandidates(outfit);
+
   return {
     provider: "openai",
     task: "wardrobe-recommendation",
     options: {
-      imageDetail: "high",
+      imageDetail: "low",
       textVerbosity: "low",
-      reasoningEffort: "low",
+      reasoningEffort: "minimal",
       reasoningMode: "standard",
-      maxOutputTokens: 3_500,
+      maxOutputTokens: Math.min(2_000 + maxCandidates * 180, 9_000),
       store: false,
       webSearch: {
-        searchContextSize: "high",
+        searchContextSize: "medium",
+        allowedDomains: idealMarketplaceSearchDomains,
       },
     },
+  };
+}
+
+function maxIdealProductCandidates(outfit: IdealOutfit): number {
+  return Math.min(
+    Math.max(1, outfit.items.length * idealCandidatesPerOutfitItem),
+    80,
+  );
+}
+
+function compactOutfitForPrompt(outfit: IdealOutfit): Record<string, unknown> {
+  return {
+    title: outfit.title,
+    items: outfit.items.map((item) => ({
+      slot: item.slot,
+      category: item.category,
+      color: item.color,
+      description: item.description,
+      searchQuery: item.searchQuery,
+    })),
   };
 }
 
@@ -1751,38 +1797,42 @@ function createIdealProductValidationModelSelection(
     provider: "openai",
     task: "wardrobe-recommendation",
     options: {
-      imageDetail: "high",
+      imageDetail: "low",
       textVerbosity: "low",
-      reasoningEffort: "low",
+      reasoningEffort: "minimal",
       reasoningMode: "standard",
-      maxOutputTokens: 3_000,
+      maxOutputTokens: Math.min(900 + candidates.length * 45, 3_000),
       store: false,
       inputImageUrls: candidates.map((candidate) => candidate.imageUrl),
+      maxInputImageUrls: candidates.length,
     },
   };
 }
 
 function createIdealProductSearchPrompt(outfit: IdealOutfit): string {
+  const maxCandidates = maxIdealProductCandidates(outfit);
+
   return `
-Нужно найти в интернете кандидаты товарных карточек для выбранного образа.
+Найди кандидаты товарных карточек для образа.
 
-Выбранный образ:
-${JSON.stringify(outfit, null, 2)}
+Сайты только:
+- ozon.ru
+- wildberries.ru
+- best.aliexpress.com
 
-Задача:
-- используй web search;
-- ищи реальные товары, которые сейчас продаются в интернет-магазинах или маркетплейсах;
-- для каждого item из образа найди до 3 кандидатов, чтобы следующий шаг смог выбрать лучший товар;
-- кандидаты должны соответствовать item.category, item.color, item.description и item.searchQuery;
-- не добавляй кандидаты для категорий, которых нет в выбранном образе;
-- товар должен совпадать по категории, цвету, фасону и смыслу searchQuery;
-- товар должен иметь рабочую ссылку на карточку товара;
-- у товара должен быть прямой imageUrl или доступная картинка товара;
-- старайся брать только карточки, где основное фото показывает вещь отдельно на белом, светлом или однотонном контрастном фоне;
-- не бери карточки, если уже видно, что фото на человеке, на модели, на манекене, в образе/лукбуке, в коллаже, с водяными знаками, с текстом поверх, плохо обрезано, размыто или рядом лежат другие вещи;
-- не выдумывай productUrl, imageUrl, цену или магазин;
-- если по какому-то item нет надежных кандидатов, добавь его в missingItems и объясни причину;
-- верни максимум 12 кандидатов суммарно.
+Образ compact JSON:
+${JSON.stringify(compactOutfitForPrompt(outfit))}
+
+Правила:
+- используй web search только по указанным сайтам;
+- до ${idealCandidatesPerOutfitItem} кандидатов на каждый item, всего не больше ${maxCandidates};
+- productUrl должен быть карточкой товара, не категорией, поиском или рекламной страницей;
+- imageUrl должен быть прямой или доступной картинкой товара;
+- не добавляй категории, которых нет в outfit.items;
+- не выдумывай url, цену, магазин;
+- если видно, что фото на человеке/манекене/в коллаже/с другими вещами, не бери;
+- если сомневаешься в фото, кандидат можно оставить: следующий шаг проверит изображение vision-моделью;
+- если по item нет кандидатов, добавь missingItems.
 
 Верни только строгий JSON без Markdown:
 {
@@ -1793,12 +1843,12 @@ ${JSON.stringify(outfit, null, 2)}
       "slot": "top",
       "category": "рубашка",
       "title": "Название товара",
-      "shortDescription": "Коротко что это и почему подходит",
+      "shortDescription": "до 80 символов",
       "productUrl": "https://...",
       "imageUrl": "https://...",
       "price": "если найдено",
       "source": "магазин или marketplace",
-      "whyFits": "1 короткая причина"
+      "whyFits": "до 60 символов"
     }
   ],
   "missingItems": [
@@ -1813,7 +1863,7 @@ ${JSON.stringify(outfit, null, 2)}
 Если надежных товаров нет, верни:
 {
   "ok": false,
-  "errorMessage": "Не удалось найти надежные товарные карточки с подходящими фото. Лучше попробовать другой образ или более базовые вещи."
+  "errorMessage": "Не удалось найти кандидаты товарных карточек на Ozon, Wildberries или AliExpress."
 }
 `.trim();
 }
@@ -1823,59 +1873,44 @@ function createIdealProductValidationPrompt(
   candidates: IdealProduct[],
 ): string {
   const compactCandidates = candidates.map((candidate, index) => ({
-    imageIndex: index + 1,
-    slot: candidate.slot,
-    category: candidate.category,
-    title: candidate.title,
-    shortDescription: candidate.shortDescription,
-    productUrl: candidate.productUrl,
-    imageUrl: candidate.imageUrl,
-    price: candidate.price,
-    source: candidate.source,
-    whyFits: candidate.whyFits,
+    i: index + 1,
+    s: candidate.slot,
+    c: candidate.category,
+    t: truncateText(candidate.title, 90),
+    src: candidate.source,
   }));
 
   return `
-Ты проверяешь изображения товаров для Telegram-подборки одежды.
+Быстро проверь product images.
+Image 0 = фото пользователя, игнорируй.
+Дальше images идут по candidate.i: 1,2,3...
 
-Первое изображение в сообщении - фото пользователя, его игнорируй.
-Дальше идут изображения кандидатов в порядке candidate.imageIndex:
-1 -> первое товарное изображение после фото пользователя,
-2 -> второе товарное изображение после фото пользователя и так далее.
+Outfit:
+${JSON.stringify(compactOutfitForPrompt(outfit))}
 
-Выбранный образ:
-${JSON.stringify(outfit, null, 2)}
+Candidates:
+${JSON.stringify(compactCandidates)}
 
-Кандидаты:
-${JSON.stringify(compactCandidates, null, 2)}
+Прими candidate только если ВСЁ true:
+- один основной товар нужной категории;
+- нет человека, частей тела, модели, манекена;
+- нет другой одежды/обуви/аксессуаров рядом;
+- не коллаж, не lookbook, не flat lay из нескольких вещей;
+- фон белый/светлый/однотонный/контрастный;
+- товар виден почти целиком;
+- нет текста/водяных знаков поверх.
 
-Нужно оставить только товары, которые проходят ВСЕ правила:
-- на изображении один основной товар из нужной категории;
-- нет человека, лица, тела, рук, ног, модели, манекена или надетой на кого-то вещи;
-- нет других элементов одежды, обуви, аксессуаров или лишних товаров рядом;
-- нет готового образа, лукбука, flat lay композиции из нескольких вещей или коллажа;
-- фон чистый белый, светлый, однотонный или контрастный, без интерьера и шумных деталей;
-- товар виден целиком или почти целиком, не размытый, не перекрытый текстом, без водяных знаков;
-- ссылка productUrl ведет на товарную карточку, а не на категорию, подборку, рекламную страницу или картинку;
-- товар соответствует category/description выбранного item.
-
-Если есть сомнение по фото, отклоняй кандидат. Особенно строго отклоняй фото на человеке или фото, где кроме основного товара видна другая одежда.
+Сомнение = reject.
+Верни не больше 1 accepted на категорию. Не повторяй title/url/imageUrl.
 
 Верни только строгий JSON без Markdown:
 {
   "ok": true,
   "lookTitle": "${escapeJsonString(outfit.title)}",
-  "products": [
+  "acceptedCandidates": [
     {
-      "slot": "top",
-      "category": "рубашка",
-      "title": "Название товара",
-      "shortDescription": "Коротко что это и почему подходит",
-      "productUrl": "https://...",
-      "imageUrl": "https://...",
-      "price": "если найдено",
-      "source": "магазин или marketplace",
-      "whyFits": "1 короткая причина",
+      "imageIndex": 1,
+      "whyFits": "до 60 символов",
       "imageCheck": {
         "approved": true,
         "productOnly": true,
@@ -1892,12 +1927,12 @@ ${JSON.stringify(compactCandidates, null, 2)}
     {
       "slot": "outerwear",
       "category": "куртка",
-      "reason": "Все найденные кандидаты отклонены: фото на человеке или вместе с другой одеждой"
+      "reason": "все кандидаты отклонены: человек/манекен/лишняя одежда/плохой фон"
     }
   ]
 }
 
-Если после проверки не осталось ни одного товара, верни ok=true, products=[] и missingItems по всем категориям образа.
+Если accepted нет, верни ok=true, acceptedCandidates=[] и missingItems по всем категориям outfit.
 `.trim();
 }
 
@@ -2011,6 +2046,83 @@ function isFootwearItem(item: IdealOutfitItem): boolean {
 
 function isFootwearText(value: string): boolean {
   return normalizeCategoryKey(value) === "shoes";
+}
+
+function selectAcceptedIdealProducts(
+  candidates: IdealProduct[],
+  acceptedCandidates: unknown,
+  allowedItems: IdealOutfitItem[],
+): IdealProduct[] {
+  const accepted = sanitizeAcceptedCandidates(acceptedCandidates);
+  const allowedCategories = new Set(
+    allowedItems.map((item) =>
+      normalizeCategoryKey(item.category || item.slot),
+    ),
+  );
+  const seenCategories = new Set<string>();
+  const products: IdealProduct[] = [];
+
+  for (const acceptedCandidate of accepted) {
+    const candidate = candidates[acceptedCandidate.imageIndex - 1];
+
+    if (!candidate) {
+      continue;
+    }
+
+    const categoryKey = normalizeCategoryKey(
+      candidate.category || candidate.slot,
+    );
+
+    if (!allowedCategories.has(categoryKey) || seenCategories.has(categoryKey)) {
+      continue;
+    }
+
+    const imageCheck = acceptedCandidate.imageCheck;
+
+    if (!imageCheck?.approved) {
+      continue;
+    }
+
+    seenCategories.add(categoryKey);
+    products.push({
+      ...candidate,
+      whyFits: acceptedCandidate.whyFits ?? candidate.whyFits,
+      imageCheck,
+    });
+  }
+
+  return products.slice(0, 6);
+}
+
+function sanitizeAcceptedCandidates(value: unknown): IdealAcceptedCandidate[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map(sanitizeAcceptedCandidate)
+    .filter((item): item is IdealAcceptedCandidate => Boolean(item));
+}
+
+function sanitizeAcceptedCandidate(
+  value: unknown,
+): IdealAcceptedCandidate | undefined {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+
+  const imageIndex = readPositiveInteger(value.imageIndex);
+  const imageCheck = sanitizeIdealProductImageCheck(value.imageCheck);
+
+  if (!imageIndex || !imageCheck?.approved) {
+    return undefined;
+  }
+
+  return {
+    imageIndex,
+    whyFits: readOptionalString(value.whyFits),
+    imageCheck,
+  };
 }
 
 function sanitizeIdealProducts(
@@ -2607,6 +2719,17 @@ function readString(value: unknown, fallback: string): string {
 
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readPositiveInteger(value: unknown): number | undefined {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value.trim())
+        : Number.NaN;
+
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function normalizeCategoryKey(value: string): string {

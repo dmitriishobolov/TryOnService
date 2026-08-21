@@ -432,6 +432,10 @@ function readRemoteImageUrls(options: Record<string, unknown>): string[] {
     options.inputImageUrls ?? options.remoteImageUrls,
     "inputImageUrls",
   );
+  const maxUrls = Math.min(
+    readNumberOption(options, "maxInputImageUrls", 12),
+    80,
+  );
 
   for (const url of urls) {
     if (!isHttpUrl(url)) {
@@ -443,7 +447,7 @@ function readRemoteImageUrls(options: Record<string, unknown>): string[] {
     }
   }
 
-  return urls.slice(0, 12);
+  return urls.slice(0, maxUrls);
 }
 
 function isHttpUrl(value: string): boolean {

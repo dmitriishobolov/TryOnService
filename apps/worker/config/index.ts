@@ -105,26 +105,20 @@ export interface AliExpressMarketConfig {
 }
 
 export interface OzonMarketConfig {
-  clientId?: string;
-  apiKey?: string;
-  baseUrl: string;
-  productListPath: string;
-  productInfoListPath: string;
-  visibility: string;
+  publicSearchBaseUrl: string;
+  publicProductBaseUrl: string;
+  publicSearchPages: number;
+  publicUserAgent: string;
+  publicCacheTtlMs: number;
+  publicCacheStaleTtlMs: number;
+  publicCacheMaxEntries: number;
+  publicErrorCooldownMs: number;
   maxScanProducts: number;
   productUrlTemplate: string;
 }
 
-export type WildberriesSearchMode = "auto" | "seller" | "public";
-
 export interface WildberriesMarketConfig {
-  apiKey?: string;
-  searchMode: WildberriesSearchMode;
-  baseUrl: string;
-  cardsListPath: string;
-  maxScanCards: number;
   locale: string;
-  withPhoto: boolean;
   productUrlTemplate: string;
   publicSearchBaseUrl: string;
   publicSearchPath: string;
@@ -345,16 +339,6 @@ function readAliExpressSignMethod(): AliExpressSignMethod {
   return value;
 }
 
-function readWildberriesSearchMode(): WildberriesSearchMode {
-  const value = readString("WILDBERRIES_SEARCH_MODE", "public").toLowerCase();
-
-  if (value !== "auto" && value !== "seller" && value !== "public") {
-    throw new Error("WILDBERRIES_SEARCH_MODE must be auto, seller or public");
-  }
-
-  return value;
-}
-
 function readMarketProviders(): MarketProvider[] {
   const raw = readString("MARKET_PROVIDERS", "aliexpress,ozon,wildberries");
   const providers = raw
@@ -402,8 +386,8 @@ function readCapabilities(): WorkerCapability[] {
     "ALIEXPRESS_APP_KEY",
     "ALIEXPRESS_APP_SECRET",
   ]);
-  syncMarketCapability(names, "ozon", ["OZON_CLIENT_ID", "OZON_API_KEY"]);
-  syncWildberriesMarketCapability(names);
+  syncPublicMarketCapability(names, "ozon");
+  syncPublicMarketCapability(names, "wildberries");
 
   return [...names].map((name) => ({ name }));
 }
@@ -443,17 +427,15 @@ function syncMarketCapability(
   names.delete(capability);
 }
 
-function syncWildberriesMarketCapability(names: Set<string>): void {
-  const capability = "market.wildberries";
-  const mode = readWildberriesSearchMode();
-  const hasSellerKey = Boolean(readOptionalString("WILDBERRIES_API_KEY"));
-  const canUsePublic = mode === "public" || mode === "auto";
-  const canUseSeller = hasSellerKey && (mode === "seller" || mode === "auto");
+function syncPublicMarketCapability(
+  names: Set<string>,
+  provider: MarketProvider,
+): void {
+  const capability = `market.${provider}`;
 
   if (
     readBoolean("MARKET_ENABLED", true) &&
-    readMarketProviders().includes("wildberries") &&
-    (canUsePublic || canUseSeller)
+    readMarketProviders().includes(provider)
   ) {
     names.add("market");
     names.add(capability);
@@ -618,35 +600,43 @@ export function loadWorkerConfig(): WorkerConfig {
         platformProductType: readOptionalString("ALIEXPRESS_PLATFORM_PRODUCT_TYPE"),
       },
       ozon: {
-        clientId: readOptionalString("OZON_CLIENT_ID"),
-        apiKey: readOptionalString("OZON_API_KEY"),
-        baseUrl: readString("OZON_API_BASE_URL", "https://api-seller.ozon.ru"),
-        productListPath: readString("OZON_PRODUCT_LIST_PATH", "/v3/product/list"),
-        productInfoListPath: readString(
-          "OZON_PRODUCT_INFO_LIST_PATH",
-          "/v3/product/info/list",
+        publicSearchBaseUrl: readString(
+          "OZON_PUBLIC_SEARCH_BASE_URL",
+          "https://www.ozon.ru/search/",
         ),
-        visibility: readString("OZON_VISIBILITY", "VISIBLE"),
-        maxScanProducts: readNumber("OZON_MAX_SCAN_PRODUCTS", 100),
+        publicProductBaseUrl: readString(
+          "OZON_PUBLIC_PRODUCT_BASE_URL",
+          "https://www.ozon.ru",
+        ),
+        publicSearchPages: readNumber("OZON_PUBLIC_SEARCH_PAGES", 1),
+        publicUserAgent: readString(
+          "OZON_PUBLIC_USER_AGENT",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        ),
+        publicCacheTtlMs: readNonNegativeInteger(
+          "OZON_PUBLIC_CACHE_TTL_MS",
+          30 * 60 * 1_000,
+        ),
+        publicCacheStaleTtlMs: readNonNegativeInteger(
+          "OZON_PUBLIC_CACHE_STALE_TTL_MS",
+          24 * 60 * 60 * 1_000,
+        ),
+        publicCacheMaxEntries: readNonNegativeInteger(
+          "OZON_PUBLIC_CACHE_MAX_ENTRIES",
+          500,
+        ),
+        publicErrorCooldownMs: readNonNegativeInteger(
+          "OZON_PUBLIC_ERROR_COOLDOWN_MS",
+          60_000,
+        ),
+        maxScanProducts: readNumber("OZON_MAX_SCAN_PRODUCTS", 12),
         productUrlTemplate: readString(
           "OZON_PRODUCT_URL_TEMPLATE",
-          "https://www.ozon.ru/product/{sku}",
+          "https://www.ozon.ru/product/{productId}",
         ),
       },
       wildberries: {
-        apiKey: readOptionalString("WILDBERRIES_API_KEY"),
-        searchMode: readWildberriesSearchMode(),
-        baseUrl: readString(
-          "WILDBERRIES_API_BASE_URL",
-          "https://content-api.wildberries.ru",
-        ),
-        cardsListPath: readString(
-          "WILDBERRIES_CARDS_LIST_PATH",
-          "/content/v2/get/cards/list",
-        ),
-        maxScanCards: readNumber("WILDBERRIES_MAX_SCAN_CARDS", 100),
         locale: readString("WILDBERRIES_LOCALE", "ru"),
-        withPhoto: readBoolean("WILDBERRIES_WITH_PHOTO", true),
         productUrlTemplate: readString(
           "WILDBERRIES_PRODUCT_URL_TEMPLATE",
           "https://www.wildberries.ru/catalog/{nmId}/detail.aspx",
@@ -657,7 +647,7 @@ export function loadWorkerConfig(): WorkerConfig {
         ),
         publicSearchPath: readString(
           "WILDBERRIES_PUBLIC_SEARCH_PATH",
-          "/exactmatch/ru/common/v4/search",
+          "/exactmatch/ru/common/v18/search",
         ),
         publicDest: readString("WILDBERRIES_PUBLIC_DEST", "-1257786"),
         publicSort: readString("WILDBERRIES_PUBLIC_SORT", "popular"),

@@ -1,73 +1,33 @@
-# Marketplace API Keys
+# Marketplace Credentials
 
-Эта инструкция описывает, где получить ключи для marketplace adapters worker-а и какие значения внести в `.env`.
+Эта инструкция описывает, где нужны ключи для marketplace adapters worker-а и какие значения внести в `.env`.
 
 Секреты не хранятся в git. Заполняйте локальный `.env`, secret manager или env-файл окружения, из которого собирается deploy-пакет через `BUILD_ENV_FILE`.
 
-## Ozon Seller API
+## Ozon
 
-Worker использует:
+Текущий Ozon adapter больше не использует Seller API keys. Он работает как public page parser:
 
 ```env
-OZON_CLIENT_ID=
-OZON_API_KEY=
+OZON_PUBLIC_SEARCH_BASE_URL=https://www.ozon.ru/search/
+OZON_PUBLIC_PRODUCT_BASE_URL=https://www.ozon.ru
+OZON_PUBLIC_SEARCH_PAGES=1
+OZON_MAX_SCAN_PRODUCTS=12
 ```
 
-Как получить:
-
-1. Войдите в личный кабинет продавца Ozon: `https://seller.ozon.ru`.
-2. Откройте раздел `Настройки -> Seller API` или `Настройки -> API ключи -> Seller API`.
-3. Скопируйте `Client ID` и внесите его в `OZON_CLIENT_ID`.
-4. Нажмите `Сгенерировать ключ`.
-5. Задайте понятное название, например `TryOnService worker`.
-6. Выберите права, которые дают чтение товарного каталога. Для текущего adapter-а нужны методы списка товаров и информации о товарах (`/v3/product/list`, `/v3/product/info/list`). Если кабинет не показывает точную роль для product read-only, для первого dev-подключения можно использовать `Admin read only`, а затем сузить права.
-7. Сгенерируйте ключ, сразу скопируйте его и внесите в `OZON_API_KEY`. Обычно ключ показывается только один раз.
-8. Поставьте напоминание на ротацию ключа. По сообщению Ozon for dev, новые Seller API keys с 13.02.2026 имеют срок действия 180 дней.
-
-Проверка:
-
-```powershell
-curl.exe -s -X POST "https://api-seller.ozon.ru/v3/product/list" `
-  -H "Client-Id: <OZON_CLIENT_ID>" `
-  -H "Api-Key: <OZON_API_KEY>" `
-  -H "Content-Type: application/json" `
-  --data '{"filter":{"visibility":"VISIBLE"},"limit":1}'
-```
+Parser открывает HTML страницы поиска, извлекает ссылки `/product/`, затем читает карточки товара из HTML/JSON-LD/meta. Ozon может возвращать redirect-loop или anti-bot страницу; worker не использует stealth, proxy rotation или captcha bypass, а вместо этого включает cooldown и использует stale-cache, если он уже есть.
 
 ## Wildberries
 
-По умолчанию worker может искать товары Wildberries без ключа через `WILDBERRIES_SEARCH_MODE=public`: adapter обращается к публичной JSON-выдаче `search.wb.ru`, которую использует сайт, и возвращает ссылки/фото товаров всей площадки.
-
-Ключ нужен только для `WILDBERRIES_SEARCH_MODE=seller`, когда worker должен читать карточки конкретного кабинета продавца через Wildberries Content API.
-
-Для seller-режима worker использует:
+Текущий Wildberries adapter больше не использует Content API token. Он работает как public catalog parser:
 
 ```env
-WILDBERRIES_API_KEY=
+WILDBERRIES_PUBLIC_SEARCH_BASE_URL=https://search.wb.ru
+WILDBERRIES_PUBLIC_SEARCH_PATH=/exactmatch/ru/common/v18/search
+WILDBERRIES_PUBLIC_DEST=-1257786
 ```
 
-Как получить seller token:
-
-1. Войдите в кабинет продавца WB Partners: `https://seller.wildberries.ru`.
-2. Откройте `Профиль -> Интеграции по API`.
-3. Нажмите `+ Создать токен`.
-4. Для собственного worker-а выберите вкладку `Для интеграции вручную`.
-5. Выберите тип токена:
-   - `Персональный токен` - рекомендуемый вариант для собственного сервера/worker-а.
-   - `Базовый токен` - можно использовать для ограниченных тестов, если ему хватает категории данных.
-   - `Тестовый токен` - только для песочницы, не даст доступ к реальным карточкам магазина.
-6. Выберите категорию API `Контент` и уровень доступа `Только чтение`. Текущий adapter читает список карточек через Content API.
-7. Создайте токен, сразу скопируйте его и внесите в `WILDBERRIES_API_KEY`. WB показывает токен только один раз.
-8. Поставьте напоминание на ротацию. В справке WB указано, что токены действуют 180 дней.
-
-Проверка:
-
-```powershell
-curl.exe -s -X POST "https://content-api.wildberries.ru/content/v2/get/cards/list" `
-  -H "Authorization: <WILDBERRIES_API_KEY>" `
-  -H "Content-Type: application/json" `
-  --data '{"settings":{"cursor":{"limit":1},"filter":{"withPhoto":1}}}'
-```
+Parser получает JSON выдачу, нормализует `id`, `name`, `brand`, `sizes[0].price.product`, `rating`, `feedbacks`, строит ссылку на товар и image URL через WB basket CDN. Ключ WB seller кабинета для этого сценария не нужен.
 
 ## AliExpress Open Platform / Affiliate API
 
@@ -113,8 +73,8 @@ ALIEXPRESS_TRACKING_ID=
 2. Перезапустите worker.
 3. Убедитесь, что worker зарегистрировал capabilities:
    - `market.aliexpress`
-   - `market.ozon`
-   - `market.wildberries` (`public`-режим доступен без `WILDBERRIES_API_KEY`)
+   - `market.ozon` (ключи не нужны)
+   - `market.wildberries` (ключи не нужны)
 4. Если собираете deploy-пакет, запустите:
 
 ```bash
@@ -125,18 +85,16 @@ npm run build:dist
 
 ## Безопасность
 
-- Не передавайте marketplace keys клиентам. Они должны жить только в worker env.
-- Для Ozon и Wildberries по возможности используйте read-only права, потому что текущий worker только читает карточки и фото.
+- Не передавайте marketplace keys клиентам. Если provider требует keys, они должны жить только в worker env.
+- Для Ozon/Wildberries текущие public parsers не используют seller keys.
 - Храните ключи в secret manager или защищенном `.env` на сервере.
 - Сразу ротируйте ключ при подозрении на утечку.
 - Не отправляйте реальные ключи в чат, issue tracker или git.
 
 ## Полезные ссылки
 
-- Ozon Seller API docs: https://docs.ozon.ru/api/seller/
-- Ozon Seller API key rotation news: https://dev.ozon.ru/news/649-Obnovlenie-pravil-raboty-s-API-kliuchami-Vazhnye-izmeneniia-v-rabote-s-Ozon-Seller-API/
-- Wildberries token guide: https://seller.wildberries.ru/instructions/ru/by/material/how-to-create-update-or-delete-a-wb-api-token
-- Wildberries API information: https://dev.wildberries.ru/ru/openapi/api-information
+- Ozon public parsing article: https://habr.com/ru/companies/amvera/articles/960280/
+- Wildberries public parsing article: https://habr.com/ru/companies/amvera/articles/948988/
 - AliExpress Open Platform getting started: https://developer.alibaba.com/docs/doc.htm?articleId=120672&docType=1&treeId=727
 - AliExpress register application: https://developer.alibaba.com/docs/doc.htm?articleId=120674&docType=1&treeId=727
 - AliExpress retrieve App Key and App Secret: https://developer.alibaba.com/docs/doc.htm?articleId=120675&docType=1&treeId=727

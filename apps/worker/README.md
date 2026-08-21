@@ -38,7 +38,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 
 Если клиент не указал `payload.model.provider`, runner использует `mock` и возвращает текст `Ответ от сервера.`. Клиент может запросить `pruna`, `pixelcut`, `tryoncloud`, `genlook`, `wearfits` или `openai`; worker примет job только если у него есть соответствующая capability. Если `providerModel` не передан, adapter использует свой fallback из config. Подробности в [models](models/README.md) и [config](config/README.md).
 
-Marketplace lookup включается только если клиент передал `payload.market`. Сейчас доступны `aliexpress`, `ozon` и `wildberries`; worker примет provider в поиск только если он включен в `MARKET_PROVIDERS` и доступен выбранный режим provider-а. Wildberries умеет `public`-поиск по публичной выдаче WB без seller-token, Ozon пока использует Seller API. Подробности и инструкция по добавлению новых marketplace provider-ов находятся в [market](market/README.md).
+Marketplace lookup включается только если клиент передал `payload.market`. Сейчас доступны `aliexpress`, `ozon` и `wildberries`; worker примет provider в поиск только если он включен в `MARKET_PROVIDERS` и доступен выбранный adapter. Ozon и Wildberries работают через public parsers без seller-token; AliExpress использует Open Platform / Affiliate API. Подробности и инструкция по добавлению новых marketplace provider-ов находятся в [market](market/README.md).
 
 ## Расширение worker-а
 

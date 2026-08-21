@@ -11,7 +11,7 @@ TryOnService - сервис примерки на базе AI API. Проект 
 - coordinator регистрирует worker'ы и service clients, получает heartbeat, ведет очередь jobs, выбирает worker по capacity/capabilities, готовит assignment на worker-е и возвращает клиенту выбранный worker;
 - object storage node регистрируется в coordinator по отдельному ключу, отправляет heartbeat и принимает streaming upload/download от клиентов и worker'ов по короткоживущему signed storage token;
 - worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat с учетом running jobs и pending assignments, принимает jobs напрямую от клиентов только после prepare от coordinator, выбирает AI provider из `payload.model.provider` конкретной job и при наличии `payload.market` подтягивает товары/фото из marketplace adapters;
-- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, по `/start` показывает меню `Анализ внешности` и `Идеальный образ`, умеет отменять сценарии, получает assignment или `queued`-ответ, polling-ом дожидается свободного worker'а, отправляет job worker'у напрямую и продолжает сценарий после callback; `Идеальный образ` получает товарные кандидаты через marketplace API Ozon/Wildberries, затем отдает OpenAI только vision-проверку изображений и генерацию clean-card на белом фоне; длинные ответы режутся на несколько сообщений и Markdown отображается форматированно; фото с подписью `/request openai:gpt-5.6-luna` также отправляется на OpenAI/ChatGPT vision adapter с выбранной моделью из запроса;
+- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, по `/start` показывает меню `Анализ внешности` и `Идеальный образ`, умеет отменять сценарии, получает assignment или `queued`-ответ, polling-ом дожидается свободного worker'а, отправляет job worker'у напрямую и продолжает сценарий после callback; `Идеальный образ` получает товарные кандидаты через marketplace adapters Ozon/Wildberries, затем отдает OpenAI только vision-проверку изображений и генерацию clean-card на белом фоне; длинные ответы режутся на несколько сообщений и Markdown отображается форматированно; фото с подписью `/request openai:gpt-5.6-luna` также отправляется на OpenAI/ChatGPT vision adapter с выбранной моделью из запроса;
 - coordinator защищает регистрацию worker'ов, service clients и storage-node от перебора ключа: после достижения лимита неверных попыток IP блокируется; при `COORDINATOR_PERSISTENCE=postgres` ban сохраняется в БД и переживает restart;
 - registration, service-to-service, dispatch token, client callback, storage access и admin/debug доступ используют разные ключи;
 - clients, worker и storage-node регистрируются по общим registration keys для быстрого горизонтального масштабирования;
@@ -116,8 +116,8 @@ Worker:
 - сообщает о готовности, capacity и поддерживаемых моделях/пайплайнах;
 - держит pending assignments, принимает jobs от клиентов по signed dispatch token, запускает runner и обновляет статус выполнения;
 - выбирает adapter из `apps/worker/models` через `payload.model.provider`: доступны `mock`, `pruna`, `pixelcut`, `tryoncloud`, `genlook`, `wearfits`, `openai`;
-- выбирает marketplace adapters через `payload.market.providers`: доступны `aliexpress`, `ozon`, `wildberries`; Wildberries поддерживает public-поиск по каталогу WB без seller-token, найденные товары возвращаются в `TryOnJobResult.marketProducts`;
-- объявляет provider-specific capabilities только для настроенных API keys, чтобы coordinator не выдавал job на неподходящий worker;
+- выбирает marketplace adapters через `payload.market.providers`: доступны `aliexpress`, `ozon`, `wildberries`; Ozon/Wildberries поддерживают public parsing без seller-token, найденные товары возвращаются в `TryOnJobResult.marketProducts`;
+- объявляет provider-specific capabilities по доступным provider settings, чтобы coordinator не выдавал job на неподходящий worker;
 - для virtual try-on provider-ов ожидает в `payload.inputFiles` фото пользователя и фото одежды/товара, индексы задаются `TRYON_PERSON_IMAGE_INDEX` и `TRYON_GARMENT_IMAGE_INDEX`; OpenAI adapter использует фото пользователя для анализа внешности и wardrobe-рекомендаций, принимает `providerModel`/`options` из job, поддерживает `webSearch`, `inputImageUrls`, `imageGeneration` и `toolChoice`, а generated files сохраняет в storage и возвращает в `result.files`;
 - отправляет клиентский результат напрямую в callback URL из assignment;
 - изолирует конкретные AI API в `apps/worker/models`.
@@ -379,7 +379,7 @@ npm run build:dist
 
 - Новый AI provider добавляйте в [apps/worker/models](apps/worker/models/README.md).
 - Новый marketplace provider добавляйте в [apps/worker/market](apps/worker/market/README.md).
-- Инструкция по получению marketplace API keys: [apps/worker/market/API_KEYS.md](apps/worker/market/API_KEYS.md).
+- Инструкция по marketplace credentials/settings: [apps/worker/market/API_KEYS.md](apps/worker/market/API_KEYS.md).
 - Новый сценарий обработки данных клиента добавляйте в [apps/worker/runner](apps/worker/runner/README.md).
 - Новый endpoint coordinator добавляйте в [apps/coordinator/api](apps/coordinator/api/README.md).
 - Новое состояние job или worker сначала описывайте в [apps/shared/contracts](apps/shared/contracts/README.md).
@@ -390,6 +390,6 @@ npm run build:dist
 - Contracts first: общие DTO и статусы должны жить в `apps/shared`.
 - Worker'ы должны быть максимально stateless: локально допустимы только временные файлы обработки.
 - Все внешние AI API должны быть закрыты адаптерами в `models`, чтобы runner не зависел от конкретного провайдера.
-- Все внешние marketplace API должны быть закрыты адаптерами в `market`, чтобы runner работал с единым `MarketProductRef`.
+- Все внешние marketplace API/parsers должны быть закрыты адаптерами в `market`, чтобы runner работал с единым `MarketProductRef`.
 - Jobs должны быть идемпотентными там, где это возможно: повторная обработка не должна ломать состояние клиента.
 - Секреты, API keys и токены не хранятся в git. Используйте `.env` или секрет-хранилище окружения.

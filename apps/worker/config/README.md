@@ -9,7 +9,7 @@
 - `WORKER_PUBLIC_PROTOCOL` - протокол endpoint, который coordinator соберет по IP registration-запроса.
 - `WORKER_PUBLIC_URL` - опциональный ручной override публичного endpoint worker'а.
 - `WORKER_CAPACITY` - количество jobs, которые worker может выполнять параллельно.
-- `WORKER_CAPABILITIES` - ручные дополнительные capabilities. Worker автоматически добавляет `try-on`, `try-on.mock` и `try-on.<provider>` для provider-ов, чьи API keys заполнены.
+- `WORKER_CAPABILITIES` - ручные дополнительные capabilities. Worker автоматически добавляет `try-on`, `try-on.mock`, `try-on.<provider>` для AI provider-ов с API keys и `market.<provider>` для доступных marketplace adapters.
 - `TRYON_PERSON_IMAGE_INDEX` - индекс фото пользователя в `payload.inputFiles`.
 - `TRYON_GARMENT_IMAGE_INDEX` - индекс фото одежды/товара в `payload.inputFiles`.
 - `TRYON_MODEL_POLL_INTERVAL_MS` - интервал polling-а async providers.
@@ -30,10 +30,9 @@
 - `OPENAI_API_KEY`, `OPENAI_API_BASE_URL`, `OPENAI_MODEL`, `OPENAI_IMAGE_DETAIL`, `OPENAI_TEXT_VERBOSITY`, `OPENAI_REASONING_EFFORT`, `OPENAI_REASONING_MODE`, `OPENAI_MAX_OUTPUT_TOKENS`, `OPENAI_STORE_RESPONSE`, `OPENAI_ORGANIZATION`, `OPENAI_PROJECT`, `OPENAI_SYSTEM_PROMPT`, `OPENAI_WARDROBE_PROMPT` - настройки OpenAI/ChatGPT vision adapter для анализа внешности и подбора гардероба. `OPENAI_MODEL` используется только как fallback, если клиент не передал `payload.model.providerModel`.
 - `MARKET_ENABLED`, `MARKET_PROVIDERS`, `MARKET_SEARCH_LIMIT` - общие настройки marketplace lookup. Поиск запускается только если client передал `payload.market`.
 - `ALIEXPRESS_APP_KEY`, `ALIEXPRESS_APP_SECRET`, `ALIEXPRESS_APP_SIGNATURE`, `ALIEXPRESS_TRACKING_ID`, `ALIEXPRESS_API_BASE_URL`, `ALIEXPRESS_SIGN_METHOD`, `ALIEXPRESS_TARGET_LANGUAGE`, `ALIEXPRESS_TARGET_CURRENCY`, `ALIEXPRESS_SHIP_TO_COUNTRY`, `ALIEXPRESS_FIELDS`, `ALIEXPRESS_SORT`, `ALIEXPRESS_DELIVERY_DAYS`, `ALIEXPRESS_PLATFORM_PRODUCT_TYPE` - настройки AliExpress Open Platform / Affiliate API.
-- `OZON_CLIENT_ID`, `OZON_API_KEY`, `OZON_API_BASE_URL`, `OZON_PRODUCT_LIST_PATH`, `OZON_PRODUCT_INFO_LIST_PATH`, `OZON_VISIBILITY`, `OZON_MAX_SCAN_PRODUCTS`, `OZON_PRODUCT_URL_TEMPLATE` - настройки Ozon Seller API. Adapter ищет среди товаров продавца, доступных этому кабинету.
-- `WILDBERRIES_SEARCH_MODE` - режим поиска Wildberries: `public` ищет по публичной выдаче `search.wb.ru` без token, `seller` ищет только seller-карточки через Content API, `auto` использует seller при наличии `WILDBERRIES_API_KEY`, иначе public.
-- `WILDBERRIES_API_KEY`, `WILDBERRIES_API_BASE_URL`, `WILDBERRIES_CARDS_LIST_PATH`, `WILDBERRIES_MAX_SCAN_CARDS`, `WILDBERRIES_WITH_PHOTO` - настройки Wildberries Content API для `seller`-режима. Adapter ищет среди карточек продавца, доступных этому token.
-- `WILDBERRIES_LOCALE`, `WILDBERRIES_PRODUCT_URL_TEMPLATE`, `WILDBERRIES_PUBLIC_SEARCH_BASE_URL`, `WILDBERRIES_PUBLIC_SEARCH_PATH`, `WILDBERRIES_PUBLIC_DEST`, `WILDBERRIES_PUBLIC_SORT`, `WILDBERRIES_PUBLIC_SPP`, `WILDBERRIES_PUBLIC_USER_AGENT` - настройки публичного поиска Wildberries. `public`-режим ходит в JSON endpoint, который использует сайт, с browser-like заголовками, но без captcha/proxy/stealth обхода.
+- `OZON_PUBLIC_SEARCH_BASE_URL`, `OZON_PUBLIC_PRODUCT_BASE_URL`, `OZON_PUBLIC_SEARCH_PAGES`, `OZON_MAX_SCAN_PRODUCTS`, `OZON_PRODUCT_URL_TEMPLATE`, `OZON_PUBLIC_USER_AGENT` - настройки Ozon public parser. Adapter ищет ссылки `/product/` на HTML-странице поиска и читает карточки из HTML/JSON-LD/meta без Seller API keys.
+- `OZON_PUBLIC_CACHE_TTL_MS`, `OZON_PUBLIC_CACHE_STALE_TTL_MS`, `OZON_PUBLIC_CACHE_MAX_ENTRIES`, `OZON_PUBLIC_ERROR_COOLDOWN_MS` - in-memory cache публичного поиска Ozon на worker-е: fresh TTL, fallback stale TTL, максимум cache entries и пауза новых miss-запросов после rate-limit/redirect-loop.
+- `WILDBERRIES_LOCALE`, `WILDBERRIES_PRODUCT_URL_TEMPLATE`, `WILDBERRIES_PUBLIC_SEARCH_BASE_URL`, `WILDBERRIES_PUBLIC_SEARCH_PATH`, `WILDBERRIES_PUBLIC_DEST`, `WILDBERRIES_PUBLIC_SORT`, `WILDBERRIES_PUBLIC_SPP`, `WILDBERRIES_PUBLIC_USER_AGENT` - настройки публичного поиска Wildberries. Adapter ходит в JSON endpoint `search.wb.ru`, который использует сайт, с browser-like заголовками, но без captcha/proxy/stealth обхода.
 - `WILDBERRIES_PUBLIC_CACHE_TTL_MS`, `WILDBERRIES_PUBLIC_CACHE_STALE_TTL_MS`, `WILDBERRIES_PUBLIC_CACHE_MAX_ENTRIES`, `WILDBERRIES_PUBLIC_ERROR_COOLDOWN_MS` - in-memory cache публичной выдачи WB на worker-е: fresh TTL, fallback stale TTL после fresh TTL, максимум cache entries и пауза новых miss-запросов после 429.
 - Где получить marketplace credentials и какие права выбрать, описано в [market/API_KEYS.md](../market/API_KEYS.md).
 - `API_RATE_LIMIT_WINDOW_MS` - окно входящего rate limit.
@@ -42,7 +41,7 @@
 - `HTTP_CLIENT_RETRIES` - количество повторов исходящих HTTP-вызовов worker.
 - `MAX_JSON_BODY_BYTES` - максимальный размер JSON body входящего запроса.
 
-Production API keys не хранятся в git. Для `npm run build:dist` значения API keys подтягиваются из `BUILD_ENV_FILE` и попадают в готовый пакет worker-а в `dist/packages/worker/.env`. Конкретный AI provider и provider model выбирает клиент в `payload.model`, marketplace lookup - в `payload.market`; worker env задает только доступные credentials, defaults и capabilities.
+Production API keys не хранятся в git. Для `npm run build:dist` значения API keys и public parser settings подтягиваются из `BUILD_ENV_FILE` и попадают в готовый пакет worker-а в `dist/packages/worker/.env`. Конкретный AI provider и provider model выбирает клиент в `payload.model`, marketplace lookup - в `payload.market`; worker env задает только доступные credentials, defaults и capabilities.
 
 ## Правила
 

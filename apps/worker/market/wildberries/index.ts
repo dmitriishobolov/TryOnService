@@ -16,7 +16,6 @@ import {
   matchesSearchQuery,
   MarketplaceError,
   numberFromUnknown,
-  requireMarketCredential,
 } from "../utils.js";
 
 const provider = "wildberries";
@@ -27,7 +26,6 @@ let publicSearchCooldownUntilMs = 0;
 
 interface WildberriesPublicCacheEntry {
   products: MarketProductRef[];
-  cachedAtMs: number;
   expiresAtMs: number;
   staleUntilMs: number;
 }
@@ -36,24 +34,14 @@ export const wildberriesMarketplaceAdapter: MarketplaceAdapter = {
   provider,
   displayName: "Wildberries",
   isConfigured: (config) =>
-    resolveWildberriesSearchMode(config) === "public" ||
-    Boolean(config.market.wildberries.apiKey),
+    Boolean(config.market.wildberries.publicSearchBaseUrl),
   search: async ({
     query,
     selection,
     config,
     signal,
   }): Promise<MarketplaceSearchResult> => {
-    if (resolveWildberriesSearchMode(config) === "public") {
-      return searchPublicWildberries({
-        query,
-        selection,
-        config,
-        signal,
-      });
-    }
-
-    return searchSellerWildberries({
+    return searchPublicWildberries({
       query,
       selection,
       config,
@@ -61,58 +49,6 @@ export const wildberriesMarketplaceAdapter: MarketplaceAdapter = {
     });
   },
 };
-
-async function searchSellerWildberries({
-  query,
-  selection,
-  config,
-  signal,
-}: Parameters<MarketplaceAdapter["search"]>[0]): Promise<MarketplaceSearchResult> {
-  const marketConfig = config.market.wildberries;
-  const apiKey = requireMarketCredential(
-    provider,
-    "WILDBERRIES_API_KEY",
-    marketConfig.apiKey,
-  );
-  const limit = Math.min(selection.limit ?? config.market.searchLimit, 100);
-  const response = await fetchMarketJson<unknown>(
-    provider,
-    `${marketConfig.baseUrl.replace(/\/+$/, "")}${marketConfig.cardsListPath}`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: apiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        settings: {
-          cursor: {
-            limit: marketConfig.maxScanCards,
-          },
-          filter: {
-            textSearch: selection.category,
-            withPhoto: marketConfig.withPhoto ? 1 : -1,
-          },
-        },
-      }),
-    },
-    config.tryOnModelHttpTimeoutMs,
-    signal,
-  );
-  const products = parseWildberriesProducts(
-    response,
-    marketConfig.productUrlTemplate,
-  )
-    .filter((product) => matchesSearchQuery(product, query))
-    .filter((product) =>
-      matchesPrice(product, selection.minPrice, selection.maxPrice),
-    );
-
-  return {
-    provider,
-    products: limitProducts(products, limit),
-  };
-}
 
 async function searchPublicWildberries({
   query,
@@ -262,20 +198,6 @@ async function getCachedOrFetchWildberriesPublicProducts(
   return request;
 }
 
-function resolveWildberriesSearchMode(config: WorkerConfig): "seller" | "public" {
-  const mode = config.market.wildberries.searchMode;
-
-  if (mode === "seller") {
-    return "seller";
-  }
-
-  if (mode === "public") {
-    return "public";
-  }
-
-  return config.market.wildberries.apiKey ? "seller" : "public";
-}
-
 function buildWildberriesPublicCacheKey(
   query: string,
   selection: MarketSearchSelection,
@@ -341,7 +263,6 @@ function putWildberriesPublicCacheEntry(
   publicSearchCache.delete(cacheKey);
   publicSearchCache.set(cacheKey, {
     products,
-    cachedAtMs: now,
     expiresAtMs,
     staleUntilMs,
   });
@@ -378,57 +299,6 @@ function isAbortError(error: unknown): boolean {
 
 function normalizeCacheValue(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function parseWildberriesProducts(
-  response: unknown,
-  productUrlTemplate: string,
-): MarketProductRef[] {
-  const cards = findNestedRecordsByKeys(response, ["cards"]) ?? [];
-
-  return cards
-    .map((card) => normalizeWildberriesCard(card, productUrlTemplate))
-    .filter((product): product is MarketProductRef => Boolean(product));
-}
-
-function normalizeWildberriesCard(
-  card: Record<string, unknown>,
-  productUrlTemplate: string,
-): MarketProductRef | undefined {
-  const productId = findStringByKeys(card, ["nmID", "nmId", "imtID", "imtId"]);
-  const title = findStringByKeys(card, ["title", "name"]);
-
-  if (!productId || !title) {
-    return undefined;
-  }
-
-  const images = collectNestedStringsByKeys(card, [
-    "big",
-    "c516x688",
-    "c246x328",
-    "square",
-    "tm",
-    "url",
-  ]).filter(isHttpUrl);
-  const price = resolveWildberriesPrice(card);
-
-  return {
-    provider,
-    productId,
-    title,
-    productUrl: formatProductUrl(productUrlTemplate, {
-      nmId: productId,
-      nmID: productId,
-      imtId: findStringByKeys(card, ["imtID", "imtId"]),
-    }),
-    imageUrl: images[0],
-    images: images.length ? images : undefined,
-    price,
-    brand: findStringByKeys(card, ["brand"]),
-    category:
-      findStringByKeys(card, ["subjectName"]) ??
-      findStringByKeys(card, ["object", "parentName"]),
-  };
 }
 
 function parseWildberriesPublicProducts(
@@ -489,32 +359,6 @@ function normalizeWildberriesPublicProduct(
       "kindName",
       "entity",
     ]),
-  };
-}
-
-function resolveWildberriesPrice(
-  card: Record<string, unknown>,
-): MarketProductRef["price"] {
-  const price =
-    findNestedStringByKeys(card, ["price"]) ??
-    findNestedStringByKeys(card, ["priceU"]) ??
-    findNestedStringByKeys(card, ["discountedPrice"]);
-
-  if (!price) {
-    return undefined;
-  }
-
-  const parsed = Number(price);
-
-  if (!Number.isFinite(parsed)) {
-    return undefined;
-  }
-
-  const amount = price.endsWith("00") && parsed > 10_000 ? parsed / 100 : parsed;
-
-  return {
-    amount,
-    currency: "RUB",
   };
 }
 

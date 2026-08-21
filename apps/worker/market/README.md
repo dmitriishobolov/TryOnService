@@ -1,8 +1,8 @@
 # Worker Market
 
-`market` содержит adapters к marketplace API, через которые worker может подобрать товары одежды по текстовому описанию и вернуть ссылки на карточки и выставочные фото.
+`market` содержит adapters к marketplace-провайдерам, через которые worker может подобрать товары одежды по текстовому описанию и вернуть ссылки на карточки и выставочные фото.
 
-Как получить marketplace credentials для `.env`, описано в [API_KEYS.md](API_KEYS.md).
+Какие провайдеры требуют credentials для `.env`, описано в [API_KEYS.md](API_KEYS.md).
 
 Поиск не запускается сам по себе. Клиент должен передать `payload.market` в job:
 
@@ -26,10 +26,10 @@ Worker выполнит поиск перед AI-моделью, добавит 
 ## Провайдеры
 
 - `aliexpress` - AliExpress Open Platform / Affiliate product query. Требует `ALIEXPRESS_APP_KEY` и `ALIEXPRESS_APP_SECRET`; при наличии tracking/app signature worker добавит их в запрос.
-- `ozon` - Ozon Seller API. Adapter получает список товаров продавца, запрашивает подробности и фильтрует доступный seller-каталог по `query`.
-- `wildberries` - Wildberries public catalog search или Content API. В режиме `public` adapter читает публичную JSON-выдачу `search.wb.ru` по `query` и нормализует товары всей площадки; в режиме `seller` читает карточки продавца через Content API.
+- `ozon` - public page parser. Adapter открывает HTML поиска Ozon, извлекает ссылки `/product/`, затем читает карточки товара из HTML/JSON-LD/meta и нормализует `title`, `price`, `imageUrl`.
+- `wildberries` - public catalog parser. Adapter читает публичную JSON-выдачу `search.wb.ru` по `query` и нормализует товары всей площадки.
 
-Важно: `ozon` в текущей реализации использует Seller API, поэтому он не является глобальным поиском по всему marketplace. Wildberries по умолчанию работает в `public`-режиме без token; `seller`-режим WB ищет только среди товаров аккаунта/токена.
+Важно: Ozon жёстче относится к автоматизированному доступу и может отдавать redirect-loop/anti-bot вместо HTML. Adapter не использует stealth, proxy rotation или captcha bypass; при ошибках включается cooldown и stale-cache fallback, если такой cache уже есть.
 
 ## Структура
 
@@ -37,8 +37,8 @@ Worker выполнит поиск перед AI-моделью, добавит 
 - `types.ts` - интерфейсы `MarketplaceAdapter`, `MarketplaceSearchInput`, `MarketplaceSearchResult`.
 - `utils.ts` - HTTP, нормализация цен, ссылок и поиск по тексту.
 - `aliexpress/` - реализация AliExpress Affiliate API.
-- `ozon/` - реализация Ozon Seller API.
-- `wildberries/` - реализация Wildberries public catalog search и Wildberries Content API fallback.
+- `ozon/` - реализация Ozon public page parser.
+- `wildberries/` - реализация Wildberries public catalog parser.
 
 ## Контракт
 
@@ -55,22 +55,21 @@ Worker выполнит поиск перед AI-моделью, добавит 
 Worker автоматически объявляет:
 
 - `market.aliexpress`, если заполнены `ALIEXPRESS_APP_KEY` и `ALIEXPRESS_APP_SECRET`;
-- `market.ozon`, если заполнены `OZON_CLIENT_ID` и `OZON_API_KEY`;
-- `market.wildberries`, если `MARKET_PROVIDERS` включает `wildberries` и `WILDBERRIES_SEARCH_MODE=public`, либо если выбран `seller`/`auto` с заполненным `WILDBERRIES_API_KEY`;
+- `market.ozon`, если `MARKET_PROVIDERS` включает `ozon`;
+- `market.wildberries`, если `MARKET_PROVIDERS` включает `wildberries`;
 - `market`, если доступен хотя бы один marketplace provider.
 
 ## Public parsing
 
-Wildberries `public`-режим сделан как обычный catalog lookup, а не как обход защиты сайта:
+Ozon/Wildberries public parsers сделаны как обычный lookup по публичным страницам/JSON, а не как обход защиты сайта:
 
-- worker делает один JSON GET к `search.wb.ru/exactmatch/.../search` с `query`, `dest`, `curr=rub`, `sort` и `page=1`;
+- Wildberries делает один JSON GET к `search.wb.ru/exactmatch/.../search` с `query`, `dest`, `curr=rub`, `sort` и `page=1`;
+- Ozon делает HTML GET к странице поиска, извлекает ссылки на товары и читает ограниченное число карточек;
 - использует обычные browser-like `Accept`, `Accept-Language`, `Referer` и `User-Agent`;
 - не использует captcha bypass, proxy rotation, stealth browser automation или авторизацию пользователя;
-- не ходит бесконечно по страницам: public endpoint WB может зацикливать выдачу, поэтому adapter берет первую страницу и дальше фильтрует локально;
-- кеширует выдачу в памяти worker-а по ключу query/currency/dest/locale/sort/path: fresh-cache отвечает без запроса в WB, stale-cache используется как fallback при `429`/ошибках, параллельные одинаковые запросы склеиваются в один in-flight request;
-- прямые image URL строятся по `nmId` через CDN `basket-XX.wbbasket.ru`, если поисковый JSON не вернул готовые изображения.
-
-Ozon public parser намеренно не добавлен как bypass-адаптер: публичный сайт Ozon часто отвечает антибот-страницей, а стабильный официальный канал для чужих товаров в текущем коде не подключен. Если появится легальный JSON/search API или выбран внешний provider поиска, его нужно добавить отдельным adapter-ом по этому же контракту.
+- не ходит бесконечно по страницам: WB берёт первую страницу, Ozon ограничен `OZON_PUBLIC_SEARCH_PAGES` и `OZON_MAX_SCAN_PRODUCTS`;
+- кеширует выдачу в памяти worker-а: fresh-cache отвечает без внешнего запроса, stale-cache используется как fallback при `429`/ошибках, параллельные одинаковые запросы склеиваются в один in-flight request;
+- WB image URL строятся по `nmId` через CDN `basket-XX.wbbasket.ru`, если поисковый JSON не вернул готовые изображения.
 
 ## Добавление нового marketplace provider-а
 
@@ -78,7 +77,7 @@ Ozon public parser намеренно не добавлен как bypass-ада
 2. Создайте папку `apps/worker/market/<provider>/index.ts`. Adapter должен реализовать `MarketplaceAdapter`: `provider`, `displayName`, `isConfigured(config)` и `search(input)`.
 3. Подключите adapter в [market/index.ts](index.ts): импортируйте его и добавьте в массив `adapters`.
 4. Добавьте provider-specific config в [worker config](../config/index.ts): interface, чтение env в `loadWorkerConfig`, defaults и валидацию.
-5. Добавьте автоматическую capability в `readCapabilities()` через `syncMarketCapability`. Для provider-а должна появляться capability `market.<provider>`, а общая capability `market` должна появляться, если доступен хотя бы один marketplace provider.
+5. Добавьте автоматическую capability в `readCapabilities()` через `syncMarketCapability` для credential-based provider-а или `syncPublicMarketCapability` для public parser-а. Для provider-а должна появляться capability `market.<provider>`, а общая capability `market` должна появляться, если доступен хотя бы один marketplace provider.
 6. Добавьте provider в `MARKET_PROVIDERS` default, если он должен участвовать в поиске по умолчанию.
 7. Добавьте env-параметры в [.env.example](../../../.env.example) отдельным блоком `Worker marketplace provider: <Provider>`. Секреты оставляйте пустыми.
 8. Добавьте эти env keys в `worker.envKeys` в [scripts/build-dist.mjs](../../../scripts/build-dist.mjs) и в env whitelist [scripts/devtest.mjs](../../../scripts/devtest.mjs), чтобы deploy/devtest пакеты получали настройки.

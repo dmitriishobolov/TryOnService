@@ -2,6 +2,8 @@
 
 `market` содержит adapters к marketplace API, через которые worker может подобрать товары одежды по текстовому описанию и вернуть ссылки на карточки и выставочные фото.
 
+Как получить marketplace credentials для `.env`, описано в [API_KEYS.md](API_KEYS.md).
+
 Поиск не запускается сам по себе. Клиент должен передать `payload.market` в job:
 
 ```json

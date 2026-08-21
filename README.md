@@ -379,6 +379,7 @@ npm run build:dist
 
 - Новый AI provider добавляйте в [apps/worker/models](apps/worker/models/README.md).
 - Новый marketplace provider добавляйте в [apps/worker/market](apps/worker/market/README.md).
+- Инструкция по получению marketplace API keys: [apps/worker/market/API_KEYS.md](apps/worker/market/API_KEYS.md).
 - Новый сценарий обработки данных клиента добавляйте в [apps/worker/runner](apps/worker/runner/README.md).
 - Новый endpoint coordinator добавляйте в [apps/coordinator/api](apps/coordinator/api/README.md).
 - Новое состояние job или worker сначала описывайте в [apps/shared/contracts](apps/shared/contracts/README.md).

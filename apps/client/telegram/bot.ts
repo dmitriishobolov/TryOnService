@@ -1,3 +1,4 @@
+import { Blob } from "node:buffer";
 import { randomUUID } from "node:crypto";
 
 import { sleep } from "../../shared/http.js";
@@ -22,6 +23,13 @@ interface TelegramApiResponse<T> {
   ok: boolean;
   result?: T;
   description?: string;
+}
+
+interface TelegramPhotoUpload {
+  blob: Blob;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
 }
 
 interface TelegramUser {
@@ -419,19 +427,73 @@ export class TelegramBot {
     return result;
   }
 
-  private sendPhoto(
+  private async sendPhoto(
     chatId: string,
     photoUrl: string,
     caption: string,
     replyMarkup?: TelegramReplyMarkup,
   ): Promise<unknown> {
-    return this.callApi("sendPhoto", {
-      chat_id: chatId,
-      photo: photoUrl,
-      caption: markdownToTelegramHtml(truncateText(caption, telegramCaptionLimit)),
-      parse_mode: "HTML",
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    const upload = await this.downloadPhotoForTelegramUpload(photoUrl);
+    const form = new FormData();
+    form.append("chat_id", chatId);
+    form.append("photo", upload.blob, upload.filename);
+    form.append(
+      "caption",
+      markdownToTelegramHtml(truncateText(caption, telegramCaptionLimit)),
+    );
+    form.append("parse_mode", "HTML");
+
+    if (replyMarkup) {
+      form.append("reply_markup", JSON.stringify(replyMarkup));
+    }
+
+    logger.info("Uploading product photo to Telegram", {
+      chatId,
+      filename: upload.filename,
+      contentType: upload.contentType,
+      sizeBytes: upload.sizeBytes,
+      sourceUrl: redactUrlQuery(photoUrl),
     });
+
+    return this.callMultipartApi("sendPhoto", form);
+  }
+
+  private async downloadPhotoForTelegramUpload(
+    photoUrl: string,
+  ): Promise<TelegramPhotoUpload> {
+    const response = await fetchWithTimeout(
+      photoUrl,
+      {
+        method: "GET",
+        headers: {
+          Accept: "image/*,*/*;q=0.8",
+        },
+      },
+      this.config.httpClientTimeoutMs,
+    );
+
+    if (!response.ok) {
+      throw new Error(`Photo download failed with ${response.status}`);
+    }
+
+    const contentType = resolveTelegramPhotoContentType(
+      telegramPhotoFilenameFromUrl(photoUrl),
+      response.headers.get("content-type"),
+    );
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const filename = ensureFilenameExtension(
+      telegramPhotoFilenameFromUrl(photoUrl),
+      contentType,
+    );
+
+    return {
+      blob: new Blob([new Uint8Array(buffer)], {
+        type: contentType,
+      }),
+      filename,
+      contentType,
+      sizeBytes: buffer.length,
+    };
   }
 
   private async handleUpdate(update: TelegramUpdate): Promise<void> {
@@ -1121,7 +1183,7 @@ export class TelegramBot {
       if (isQueuedJobResponse(assignment)) {
         await this.sendMessage(
           pending.chatId,
-          `Нашёл ${candidates.length} кандидатов. Запрос ${assignment.job.id} поставлен в очередь, проверяю фото товаров.`,
+          `Нашёл ${formatCandidateCount(candidates.length)}. Запрос ${assignment.job.id} поставлен в очередь, проверяю фото товаров.`,
           processingMarkup(),
         );
         void this.waitForAssignmentAndDispatch(
@@ -1141,7 +1203,7 @@ export class TelegramBot {
       });
       await this.sendMessage(
         pending.chatId,
-        `Нашёл ${candidates.length} кандидатов. Проверяю, какие товары можно аккуратно превратить в чистые карточки.`,
+        `Нашёл ${formatCandidateCount(candidates.length)}. Проверяю, какие товары можно аккуратно превратить в чистые карточки.`,
         processingMarkup(),
       );
     } catch (error) {
@@ -1495,7 +1557,7 @@ export class TelegramBot {
         logger.warn("Failed to send product photo, product skipped", {
           chatId,
           title: product.title,
-          imageUrl: product.imageUrl,
+          imageUrl: redactUrlQuery(product.imageUrl),
           productUrl: product.productUrl,
           error,
         });
@@ -1785,6 +1847,27 @@ export class TelegramBot {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(payload),
+      },
+    );
+
+    const data = (await response.json()) as TelegramApiResponse<T>;
+
+    if (!response.ok || !data.ok) {
+      throw new Error(data.description ?? `Telegram API ${method} failed`);
+    }
+
+    return data.result as T;
+  }
+
+  private async callMultipartApi<T = unknown>(
+    method: string,
+    form: FormData,
+  ): Promise<T> {
+    const response = await fetch(
+      `https://api.telegram.org/bot${this.config.botToken}/${method}`,
+      {
+        method: "POST",
+        body: form,
       },
     );
 
@@ -2712,6 +2795,19 @@ function formatProductCaption(product: IdealProduct): string {
     .join("\n");
 }
 
+function formatCandidateCount(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  const word =
+    mod10 === 1 && mod100 !== 11
+      ? "кандидат"
+      : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)
+        ? "кандидата"
+        : "кандидатов";
+
+  return `${count} ${word}`;
+}
+
 function formatProductSelectionIntro(
   lookTitle: string,
   products: IdealProduct[],
@@ -2915,6 +3011,25 @@ function sanitizeStorageFilename(path: string): string {
   );
 }
 
+function telegramPhotoFilenameFromUrl(photoUrl: string): string {
+  try {
+    return sanitizeStorageFilename(new URL(photoUrl).pathname);
+  } catch {
+    return sanitizeStorageFilename(photoUrl);
+  }
+}
+
+function redactUrlQuery(value: string): string {
+  try {
+    const url = new URL(value);
+    url.search = "";
+
+    return url.toString();
+  } catch {
+    return value.split("?")[0] ?? value;
+  }
+}
+
 function contentTypeFromFilename(filename: string): string {
   const extension = filename.split(".").pop()?.toLowerCase();
 
@@ -2931,6 +3046,32 @@ function contentTypeFromFilename(filename: string): string {
   }
 
   return "image/jpeg";
+}
+
+function extensionFromContentType(contentType: string): string {
+  const normalized = contentType.split(";")[0]?.trim().toLowerCase();
+
+  if (normalized === "image/png") {
+    return ".png";
+  }
+
+  if (normalized === "image/webp") {
+    return ".webp";
+  }
+
+  if (normalized === "image/gif") {
+    return ".gif";
+  }
+
+  return ".jpg";
+}
+
+function ensureFilenameExtension(filename: string, contentType: string): string {
+  if (/\.[a-z0-9]{2,5}$/i.test(filename)) {
+    return filename;
+  }
+
+  return `${filename}${extensionFromContentType(contentType)}`;
 }
 
 function resolveTelegramPhotoContentType(
@@ -3093,7 +3234,9 @@ function normalizeCategoryKey(value: string): string {
   const synonymGroups: Array<[string, RegExp]> = [
     ["top", /^(top|верх|верхний слой)$/],
     ["bottom", /^(bottom|низ)$/],
+    ["layer", /^(layer|слой|средний слой)$/],
     ["outerwear", /^(outerwear|верхняя одежда)$/],
+    ["vest", /(жилет|безрукавк|vest|bodywarmer|sleeveless jacket)/],
     ["polo", /(поло|\bpolo\b)/],
     ["cardigan", /(кардиган|cardigan)/],
     ["sweater", /(свитер|джемпер|пуловер|sweater|jumper|pullover)/],

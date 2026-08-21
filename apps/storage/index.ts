@@ -41,6 +41,11 @@ const server = createStorageServer({
 await listen(server, config.port);
 
 console.log(`[storage] Listening on ${config.localUrl}`);
+console.log(
+  `[storage] Storage ID: ${config.storageId}${
+    config.storageIdPath ? ` (${config.storageIdPath})` : ""
+  }`,
+);
 
 if (config.publicUrl) {
   console.log(`[storage] Public URL override: ${config.publicUrl}`);

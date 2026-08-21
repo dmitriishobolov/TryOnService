@@ -125,6 +125,8 @@ async function buildDevtestEnv() {
     COORDINATOR_PERSISTENCE: "memory",
     REQUIRE_HTTPS_ENDPOINTS: "false",
     STORAGE_PORT: String(storagePorts[0]),
+    STORAGE_ID: merged.STORAGE_ID?.trim() || "",
+    STORAGE_ID_PATH: "runtime/storage/storage-id",
     STORAGE_PUBLIC_PROTOCOL: "http",
     STORAGE_PUBLIC_URL: "",
     STORAGE_DRIVER: "local",
@@ -334,6 +336,7 @@ Selected services: \`${services}\`
 - \`app/\` - compiled JavaScript
 - \`.env\` - generated runtime env
 - \`runtime/storage/objects/\` - local object storage data
+- \`runtime/storage*/storage-id\` - generated stable storage-node identities
 - \`runtime/storage*/catalog.json\` - local storage catalog index files
 - \`logs/\` - service logs
 `,
@@ -391,6 +394,7 @@ function buildEnvFile(env) {
     "MAX_JSON_BODY_BYTES",
     "STORAGE_PORT",
     "STORAGE_ID",
+    "STORAGE_ID_PATH",
     "STORAGE_PUBLIC_PROTOCOL",
     "STORAGE_PUBLIC_URL",
     "STORAGE_DRIVER",
@@ -599,10 +603,7 @@ function readServices(rawValue) {
 function createStorageServices(env) {
   const count = readPositiveInteger(env.DEVTEST_STORAGE_COUNT, 1);
   const ports = splitCsv(env.DEVTEST_STORAGE_PORTS);
-  const baseStorageId = (env.STORAGE_ID?.trim() || "local-storage-1").replace(
-    /-\d+$/,
-    "",
-  );
+  const explicitStorageId = env.STORAGE_ID?.trim();
 
   return Array.from({ length: count }, (_value, index) => {
     const number = index + 1;
@@ -616,10 +617,12 @@ function createStorageServices(env) {
       title: `storage${titleSuffix}`,
       entry: "app/apps/storage/index.js",
       env: {
-        STORAGE_ID:
-          number === 1 && env.STORAGE_ID?.trim()
-            ? env.STORAGE_ID
-            : `${baseStorageId}-${number}`,
+        STORAGE_ID: explicitStorageId
+          ? number === 1
+            ? explicitStorageId
+            : `${explicitStorageId}-${number}`
+          : "",
+        STORAGE_ID_PATH: `${rootPrefix}/storage-id`,
         STORAGE_PORT: ports[index] ?? env.STORAGE_PORT,
         STORAGE_LOCAL_ROOT: `${rootPrefix}/objects`,
         STORAGE_METADATA_PATH: `${rootPrefix}/metadata.json`,

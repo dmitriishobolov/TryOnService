@@ -15,14 +15,19 @@ export interface StorageRegistryStore {
   markOffline(storageId: string): Promise<RegisteredStorageNode | undefined>;
   list(): Promise<RegisteredStorageNode[]>;
   get(storageId: string): Promise<RegisteredStorageNode | undefined>;
-  findAvailable(heartbeatTimeoutMs: number): Promise<RegisteredStorageNode | undefined>;
+  findAvailable(
+    heartbeatTimeoutMs: number,
+  ): Promise<RegisteredStorageNode | undefined>;
   markStaleStorageOffline(
     heartbeatTimeoutMs: number,
   ): Promise<RegisteredStorageNode[]>;
 }
 
+const LOAD_SCORE_EPSILON = 0.000_001;
+
 export class StorageRegistry implements StorageRegistryStore {
   private readonly nodes = new Map<string, RegisteredStorageNode>();
+  private selectionCursor = 0;
 
   async register(
     request: StorageRegistrationRequest,
@@ -97,17 +102,27 @@ export class StorageRegistry implements StorageRegistryStore {
     heartbeatTimeoutMs: number,
   ): Promise<RegisteredStorageNode | undefined> {
     const now = Date.now();
+    const available = (await this.list())
+      .filter((node) => isAvailableStorageNode(node, now, heartbeatTimeoutMs))
+      .sort(compareStorageNodesByLoad);
 
-    return (await this.list()).find((node) => {
-      const lastHeartbeatAt = new Date(node.lastHeartbeatAt).getTime();
-      const isFresh = now - lastHeartbeatAt <= heartbeatTimeoutMs;
-      const hasSpace =
-        node.capacityBytes === undefined ||
-        node.usedBytes === undefined ||
-        node.usedBytes < node.capacityBytes;
+    if (available.length === 0) {
+      return undefined;
+    }
 
-      return isFresh && node.status !== "offline" && hasSpace;
-    });
+    const bestLoadScore = calculateStorageLoadScore(available[0]);
+    const bestCandidates = available.filter(
+      (node) =>
+        Math.abs(calculateStorageLoadScore(node) - bestLoadScore) <=
+        LOAD_SCORE_EPSILON,
+    );
+    const selected =
+      bestCandidates[this.selectionCursor % bestCandidates.length];
+
+    this.selectionCursor =
+      (this.selectionCursor + 1) % Number.MAX_SAFE_INTEGER;
+
+    return selected;
   }
 
   async markStaleStorageOffline(
@@ -133,4 +148,51 @@ export class StorageRegistry implements StorageRegistryStore {
 
     return changed;
   }
+}
+
+function isAvailableStorageNode(
+  node: RegisteredStorageNode,
+  now: number,
+  heartbeatTimeoutMs: number,
+): boolean {
+  const lastHeartbeatAt = new Date(node.lastHeartbeatAt).getTime();
+  const isFresh =
+    Number.isFinite(lastHeartbeatAt) &&
+    now - lastHeartbeatAt <= heartbeatTimeoutMs;
+  const hasSpace =
+    node.capacityBytes === undefined ||
+    node.usedBytes === undefined ||
+    node.usedBytes < node.capacityBytes;
+
+  return isFresh && node.status !== "offline" && hasSpace;
+}
+
+function compareStorageNodesByLoad(
+  left: RegisteredStorageNode,
+  right: RegisteredStorageNode,
+): number {
+  const loadDelta =
+    calculateStorageLoadScore(left) - calculateStorageLoadScore(right);
+
+  if (Math.abs(loadDelta) > LOAD_SCORE_EPSILON) {
+    return loadDelta;
+  }
+
+  return left.storageId.localeCompare(right.storageId);
+}
+
+function calculateStorageLoadScore(node: RegisteredStorageNode): number {
+  if (
+    node.capacityBytes !== undefined &&
+    node.capacityBytes > 0 &&
+    node.usedBytes !== undefined
+  ) {
+    return node.usedBytes / node.capacityBytes;
+  }
+
+  if (node.usedBytes !== undefined) {
+    return node.usedBytes / Number.MAX_SAFE_INTEGER;
+  }
+
+  return 0;
 }

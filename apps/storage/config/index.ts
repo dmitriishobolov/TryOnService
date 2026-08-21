@@ -1,4 +1,6 @@
-import { hostname } from "node:os";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 import {
   STORAGE_HEARTBEAT_INTERVAL_MS,
@@ -9,6 +11,7 @@ import {
 export interface StorageConfig {
   port: number;
   storageId: string;
+  storageIdPath?: string;
   localUrl: string;
   publicProtocol: PublicProtocol;
   publicUrl?: string;
@@ -115,10 +118,54 @@ function readDriver(): StorageObjectDriver {
   return value;
 }
 
+function resolveStorageId(options: {
+  explicitStorageId?: string;
+  localRoot: string;
+  storageIdPath?: string;
+}): { storageId: string; storageIdPath?: string } {
+  if (options.explicitStorageId) {
+    return { storageId: options.explicitStorageId };
+  }
+
+  const storageIdPath = options.storageIdPath
+    ? resolve(process.cwd(), options.storageIdPath)
+    : resolve(process.cwd(), options.localRoot, ".tryon-storage-id");
+  const persistedStorageId = readPersistedStorageId(storageIdPath);
+
+  if (persistedStorageId) {
+    return { storageId: persistedStorageId, storageIdPath };
+  }
+
+  const generatedStorageId = `storage-${randomUUID()}`;
+  mkdirSync(dirname(storageIdPath), { recursive: true });
+  writeFileSync(storageIdPath, `${generatedStorageId}\n`);
+
+  return { storageId: generatedStorageId, storageIdPath };
+}
+
+function readPersistedStorageId(storageIdPath: string): string | undefined {
+  if (!existsSync(storageIdPath)) {
+    return undefined;
+  }
+
+  const storageId = readFileSync(storageIdPath, "utf8").trim();
+
+  if (!storageId) {
+    return undefined;
+  }
+
+  return storageId;
+}
+
 export function loadStorageConfig(): StorageConfig {
   const port = readNumber("STORAGE_PORT", 4200);
-  const storageId = readString("STORAGE_ID", `${hostname()}-${port}`);
   const driver = readDriver();
+  const localRoot = readString("STORAGE_LOCAL_ROOT", "tmp/storage");
+  const identity = resolveStorageId({
+    explicitStorageId: readOptionalString("STORAGE_ID"),
+    localRoot,
+    storageIdPath: readOptionalString("STORAGE_ID_PATH"),
+  });
   const s3Endpoint = readOptionalString("STORAGE_S3_ENDPOINT");
   const s3Bucket = readOptionalString("STORAGE_S3_BUCKET");
   const s3AccessKeyId = readOptionalString("STORAGE_S3_ACCESS_KEY_ID");
@@ -135,7 +182,8 @@ export function loadStorageConfig(): StorageConfig {
 
   return {
     port,
-    storageId,
+    storageId: identity.storageId,
+    storageIdPath: identity.storageIdPath,
     localUrl: `http://localhost:${port}`,
     publicProtocol: readPublicProtocol(),
     publicUrl: readOptionalString("STORAGE_PUBLIC_URL"),
@@ -154,7 +202,7 @@ export function loadStorageConfig(): StorageConfig {
       "dev-v1",
     ),
     driver,
-    localRoot: readString("STORAGE_LOCAL_ROOT", "tmp/storage"),
+    localRoot,
     metadataPath: readOptionalString("STORAGE_METADATA_PATH"),
     catalogPath: readOptionalString("STORAGE_CATALOG_PATH"),
     s3Endpoint,

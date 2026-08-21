@@ -2,7 +2,7 @@
 
 Coordinator - центральный сервис TryOnService. Он принимает запросы клиентов на assignment, создает jobs, хранит их состояние, знает о доступных worker'ах, service clients и storage-node, а затем возвращает клиенту подходящие endpoints и signed tokens.
 
-Coordinator не выполняет AI-обработку сам, не проксирует клиентские результаты и не гоняет большие файлы. Его задача - matchmaking между client, worker и storage-node, легкое security prepare на выбранном worker-е, выдача scoped storage-access, lookup distributed storage catalog, учет состояния, защита регистрации и управление масштабированием через registry.
+Coordinator не выполняет AI-обработку сам, не проксирует клиентские результаты и не гоняет большие файлы. Его задача - matchmaking между client, worker и storage-node, легкое security prepare на выбранном worker-е, выдача scoped storage-access, lookup distributed storage catalog, учет состояния, защита регистрации и управление масштабированием через registry. Для новых записей storage-node выбирается по свежести heartbeat, свободному месту и текущей доле заполнения; при одинаковой загрузке запросы распределяются между подходящими узлами.
 
 ## Запуск
 
@@ -29,7 +29,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 1. API принимает запрос на создание примерки.
 2. Request валидируется через контракты из `apps/shared`.
 3. Coordinator находит callback URL зарегистрированного service client, если запрос пришел с `sourceClientId`.
-4. Coordinator создает job со статусом `queued`, затем пытается выбрать доступный worker и storage-node из `registry`.
+4. Coordinator создает job со статусом `queued`, затем пытается выбрать доступный worker и load-aware storage-node из `registry`.
 5. Если capacity есть, coordinator резервирует worker slot, переводит job в `assigned` и вызывает `POST /assignments` выбранного worker'а по общему `WORKER_SERVICE_KEY`.
 6. API возвращает клиенту `job`, `worker`, `storage` и готовый `workerRequest` с signed dispatch token. Callback token клиенту не возвращается.
 7. Если capacity нет, API возвращает `202 queued`; client polling-ом вызывает `GET /jobs/:id/assignment`.

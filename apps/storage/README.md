@@ -2,7 +2,7 @@
 
 `apps/storage` - отдельный storage-сервис TryOnService. Он хранит изображения, файлы и локальный catalog index cache-объектов, сам регистрируется в coordinator и принимает прямой upload/download от clients и worker'ов.
 
-Coordinator не проксирует файлы через себя: он выбирает подходящий storage-node, выдает `StorageAccessAssignment` с `objectBaseUrl`, scoped `accessToken`, TTL и опциональным `keyPrefix`, а для cache lookup опрашивает зарегистрированные storage-node и возвращает locations найденных объектов.
+Coordinator не проксирует файлы через себя: он выбирает подходящий storage-node по heartbeat, свободному месту и текущей загрузке, выдает `StorageAccessAssignment` с `objectBaseUrl`, scoped `accessToken`, TTL и опциональным `keyPrefix`, а для cache lookup опрашивает зарегистрированные storage-node и возвращает locations найденных объектов.
 
 ## Запуск
 
@@ -22,16 +22,17 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 ## Жизненный цикл
 
 1. Storage-node стартует, выбирает порт и backend `local` или `s3`.
-2. Storage-node вызывает `POST /storage/register` coordinator-а с `x-storage-registration-key`.
-3. Coordinator проверяет общий registration key, определяет публичный endpoint по IP registration-запроса + port или берет `STORAGE_PUBLIC_URL`.
-4. Storage-node отправляет heartbeat каждые `STORAGE_HEARTBEAT_INTERVAL_MS`.
-5. Client или worker запрашивает у coordinator `POST /storage/access`.
-6. Client или worker вызывает storage-node напрямую:
+2. Если `STORAGE_ID` пустой, storage-node читает auto-id из `STORAGE_ID_PATH` или `STORAGE_LOCAL_ROOT/.tryon-storage-id`; если файла нет, генерирует новый id и сохраняет его.
+3. Storage-node вызывает `POST /storage/register` coordinator-а с `x-storage-registration-key`.
+4. Coordinator проверяет общий registration key, определяет публичный endpoint по IP registration-запроса + port или берет `STORAGE_PUBLIC_URL`.
+5. Storage-node отправляет heartbeat каждые `STORAGE_HEARTBEAT_INTERVAL_MS`.
+6. Client или worker запрашивает у coordinator `POST /storage/access`.
+7. Client или worker вызывает storage-node напрямую:
    - `PUT /objects/<key>` для записи файла.
    - `GET /objects/<key>` для чтения файла.
    - `POST /catalog/entries` для регистрации связи `cacheKey -> objectKey`.
-7. Storage-node проверяет `x-storage-access-token`, scope, storageId, TTL, signing key version и keyPrefix.
-8. Для cache lookup client/worker вызывает coordinator `POST /storage/catalog/lookup`, coordinator опрашивает все свежие storage-node через `POST /catalog/lookup` и возвращает один или несколько найденных locations с read-token на конкретный prefix.
+8. Storage-node проверяет `x-storage-access-token`, scope, storageId, TTL, signing key version и keyPrefix.
+9. Для cache lookup client/worker вызывает coordinator `POST /storage/catalog/lookup`, coordinator опрашивает все свежие storage-node через `POST /catalog/lookup` и возвращает один или несколько найденных locations с read-token на конкретный prefix.
 
 ## Правила
 
@@ -43,6 +44,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - Storage-node доверяет `keyPrefix` только из token coordinator-а; client/worker не могут расширить scope на стороне storage-node.
 - `STORAGE_DRIVER=local` пишет файлы в `STORAGE_LOCAL_ROOT`.
 - `STORAGE_DRIVER=s3` пишет файлы в S3-compatible backend напрямую из request stream.
+- Один и тот же deploy-пакет storage можно закинуть на новую машину и запустить без ручного `STORAGE_ID`: узел сам создаст стабильную identity в runtime-файле и зарегистрируется в coordinator.
 - PUT/GET работают streaming-ом и не собирают объект целиком в память storage-node.
 - `usedBytes` берется из metadata index (`STORAGE_METADATA_PATH` или файл рядом с storage root) и обновляется при PUT/DELETE без рекурсивного обхода папки.
 - Catalog index хранится отдельно (`STORAGE_CATALOG_PATH` или файл рядом с storage root), переживает restart storage-node и при lookup проверяет, что referenced object ещё существует.

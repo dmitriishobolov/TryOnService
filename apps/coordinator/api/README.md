@@ -19,7 +19,7 @@ API для клиентов и интеграций должен отвечат�
 
 `GET /jobs/:jobId/assignment?sourceClientId=<clientId>` позволяет клиенту polling-ом дождаться assignment-а для своей queued job. Endpoint требует `x-client-key` и не выдает assignment для чужого `sourceClientId`.
 
-`POST /storage/access` выдает клиенту или worker'у подходящий storage-node и scoped signed token. После этого файлы загружаются и читаются напрямую через storage-node, а coordinator получает только `StorageObjectRef` в payload/result.
+`POST /storage/access` выдает клиенту или worker'у подходящий storage-node и scoped signed token. Если `storageId` не указан, coordinator выбирает свежий узел по минимальной доле `usedBytes/capacityBytes`, а при равной загрузке распределяет запросы между узлами. После этого файлы загружаются и читаются напрямую через storage-node, а coordinator получает только `StorageObjectRef` в payload/result.
 
 `POST /storage/catalog/lookup` принимает `requesterId`, `requesterType`, `cacheKeys` и optional `kinds`. Endpoint требует `x-client-key` или `x-worker-service-key`, опрашивает все свежие storage-node через `STORAGE_SERVICE_KEY` и возвращает `locations`: storageId, baseUrl, найденный catalog entry, read-only `StorageAccessAssignment` и signed `objectUrl` на referenced object. Если разные storage-node хранят дополняющие entries по одному cacheKey, coordinator вернет все locations.
 

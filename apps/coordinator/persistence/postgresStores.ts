@@ -934,7 +934,15 @@ export class PostgresStorageRegistry implements StorageRegistryStore {
         WHERE status <> 'offline'
           AND last_heartbeat_at >= $1
           AND (capacity_bytes IS NULL OR used_bytes IS NULL OR used_bytes < capacity_bytes)
-        ORDER BY last_heartbeat_at DESC
+        ORDER BY
+          CASE
+            WHEN capacity_bytes IS NOT NULL AND capacity_bytes > 0 AND used_bytes IS NOT NULL
+              THEN used_bytes::double precision / capacity_bytes::double precision
+            WHEN used_bytes IS NOT NULL
+              THEN used_bytes::double precision / 9223372036854775807.0
+            ELSE 0
+          END ASC,
+          random()
         LIMIT 1
       `,
       [cutoff],

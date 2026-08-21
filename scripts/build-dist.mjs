@@ -78,6 +78,7 @@ const services = [
       "LOG_LEVEL",
       "STORAGE_PORT",
       "STORAGE_ID",
+      "STORAGE_ID_PATH",
       "STORAGE_PUBLIC_PROTOCOL",
       "STORAGE_PUBLIC_URL",
       "STORAGE_DRIVER",

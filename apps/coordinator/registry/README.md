@@ -24,13 +24,13 @@ Registry хранит сведения о worker'ах, service clients и storag
 
 ## Что хранит storage registry
 
-- `storageId` - стабильный идентификатор storage-node.
+- `storageId` - стабильный идентификатор storage-node; сам storage может сгенерировать его при первом запуске и хранить в runtime-файле.
 - `baseUrl` - endpoint storage-node, который coordinator вычисляет при регистрации по IP входящего запроса и port, либо берет из override.
 - `driver` - текущий backend storage-node, сейчас `local` или будущий `s3`.
 - `status` - `ready` или `offline`.
 - `usedBytes` и `capacityBytes` - опциональные данные загрузки storage-node для выбора подходящего узла.
 
-Storage registry может хранить несколько active storage-node. Для обычного `POST /storage/access` coordinator выбирает один свежий узел с доступной capacity. Для `POST /storage/catalog/lookup` coordinator опрашивает все свежие storage-node и возвращает все locations, где найден нужный cache entry.
+Storage registry может хранить несколько active storage-node. Для обычного `POST /storage/access` coordinator выбирает один свежий узел с доступной capacity и минимальной долей `usedBytes/capacityBytes`; если несколько узлов одинаково подходят, запросы распределяются между ними. Для `POST /storage/catalog/lookup` coordinator опрашивает все свежие storage-node и возвращает все locations, где найден нужный cache entry.
 - `lastHeartbeatAt` - время последнего heartbeat.
 
 ## Жизненный цикл worker

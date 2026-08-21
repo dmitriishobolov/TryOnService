@@ -70,9 +70,9 @@ Postgres принадлежит coordinator. Worker и client не получа�
 - ссылки на storage-объекты внутри payload/result jobs; инкрементальная metadata объектов и `usedBytes` ведутся самим storage-node.
 - security audit events и persistent registration bans, если включен Postgres backend.
 
-Файлы и изображения хранятся в отдельных object storage node. Есть dev backend `STORAGE_DRIVER=local`, который пишет файлы в `STORAGE_LOCAL_ROOT`, и S3-compatible backend `STORAGE_DRIVER=s3`. Storage-node ведет metadata index (`STORAGE_METADATA_PATH` или файл рядом с local root), поэтому `usedBytes` обновляется инкрементально при PUT/DELETE и heartbeat не обходит всю папку. Дополнительно storage-node ведет catalog index (`STORAGE_CATALOG_PATH` или файл рядом с root), где cache keys указывают на объекты, например clean product card по URL товара или JSON marketplace search. В jobs можно передавать `payload.inputFiles`, а worker result может вернуть `result.files`. Ref, который вернул storage-node, содержит `storageId`, чтобы coordinator выдал worker'у доступ к правильному узлу.
+Файлы и изображения хранятся в отдельных object storage node. Есть dev backend `STORAGE_DRIVER=local`, который пишет файлы в `STORAGE_LOCAL_ROOT`, и S3-compatible backend `STORAGE_DRIVER=s3`. Storage-node сам получает стабильный id: если `STORAGE_ID` пустой, он генерирует id при первом запуске и сохраняет его в `STORAGE_ID_PATH` или `STORAGE_LOCAL_ROOT/.tryon-storage-id`. Storage-node ведет metadata index (`STORAGE_METADATA_PATH` или файл рядом с local root), поэтому `usedBytes` обновляется инкрементально при PUT/DELETE и heartbeat не обходит всю папку. Дополнительно storage-node ведет catalog index (`STORAGE_CATALOG_PATH` или файл рядом с root), где cache keys указывают на объекты, например clean product card по URL товара или JSON marketplace search. В jobs можно передавать `payload.inputFiles`, а worker result может вернуть `result.files`. Ref, который вернул storage-node, содержит `storageId`, чтобы coordinator выдал worker'у доступ к правильному узлу.
 
-Coordinator не принимает и не отдает бинарные файлы. Он выдает `POST /storage/access`: клиент или worker получает `StorageAccessAssignment` с `objectBaseUrl`, scoped `accessToken`, TTL и, при необходимости, `keyPrefix`. После этого upload/download идет напрямую в storage-node через `PUT /objects/<key>` и `GET /objects/<key>`. Для внешних preview/download URL, например Telegram `sendPhoto`, worker может вернуть `StorageObjectRef.url` с тем же storage token в query `accessToken`.
+Coordinator не принимает и не отдает бинарные файлы. Он выдает `POST /storage/access`: клиент или worker получает `StorageAccessAssignment` с `objectBaseUrl`, scoped `accessToken`, TTL и, при необходимости, `keyPrefix`. Для новых записей coordinator выбирает свежий storage-node с учетом `usedBytes/capacityBytes`, а при равной загрузке распределяет запросы между подходящими узлами. После этого upload/download идет напрямую в storage-node через `PUT /objects/<key>` и `GET /objects/<key>`. Для внешних preview/download URL, например Telegram `sendPhoto`, worker может вернуть `StorageObjectRef.url` с тем же storage token в query `accessToken`.
 
 Для distributed cache используется `POST /storage/catalog/lookup`: client/worker передает cacheKeys и kinds, coordinator опрашивает все свежие storage-node через `STORAGE_SERVICE_KEY` и возвращает все locations с read-token на конкретный object prefix. Так несколько storage-node могут хранить дополняющую информацию по одному товару: например один хранит `market-product`, другой - `product-card-image`.
 
@@ -105,7 +105,7 @@ Coordinator:
 
 Object storage node:
 
-- при старте выбирает свободный порт, регистрируется в coordinator по `STORAGE_REGISTRATION_KEY` и сообщает публичный endpoint;
+- при старте выбирает свободный порт, получает стабильный storage id из файла или генерирует новый, регистрируется в coordinator по `STORAGE_REGISTRATION_KEY` и сообщает публичный endpoint;
 - отправляет heartbeat coordinator-у по `STORAGE_SERVICE_KEY`;
 - принимает `PUT /objects/<key>` и `GET /objects/<key>` только с signed token purpose `storage-access`;
 - принимает `POST /catalog/entries` для регистрации cache entry на уже загруженный objectKey;
@@ -191,7 +191,7 @@ npm run dev:telegram
 npm run devtest
 ```
 
-Команда пересобирает TypeScript в `devtest/app`, создает `devtest/.env`, запускает coordinator, storage-node, worker и Telegram client из папки `devtest`, а логи пишет в `devtest/logs`. Local object storage в этом режиме находится в `devtest/runtime/storage/objects`, metadata index - в `devtest/runtime/storage/metadata.json`, catalog index - в `devtest/runtime/storage/catalog.json`. Для проверки нескольких storage-node задайте `DEVTEST_STORAGE_COUNT=2` или больше; дополнительные узлы получат `runtime/storage-2/...`, `runtime/storage-3/...`.
+Команда пересобирает TypeScript в `devtest/app`, создает `devtest/.env`, запускает coordinator, storage-node, worker и Telegram client из папки `devtest`, а логи пишет в `devtest/logs`. Local object storage в этом режиме находится в `devtest/runtime/storage/objects`, metadata index - в `devtest/runtime/storage/metadata.json`, catalog index - в `devtest/runtime/storage/catalog.json`, auto-id - в `devtest/runtime/storage/storage-id`. Для проверки нескольких storage-node задайте `DEVTEST_STORAGE_COUNT=2` или больше; дополнительные узлы получат отдельные `runtime/storage-2/...`, `runtime/storage-3/...`, свои id-файлы и будут выбираться coordinator-ом по загрузке.
 
 Смотреть цепочку обработки job удобнее по логам:
 
@@ -347,6 +347,8 @@ npm run build:dist
 - `STORAGE_HEARTBEAT_INTERVAL_MS`, `STORAGE_HEARTBEAT_TIMEOUT_MS` - heartbeat storage-node и timeout исключения из активного пула.
 - `STORAGE_ACCESS_TOKEN_TTL_MS` - срок жизни token для прямого upload/download в storage-node.
 - `STORAGE_PORT` - порт storage-node; coordinator использует его вместе с IP registration-запроса.
+- `STORAGE_ID` - опциональный ручной storage-node id; если пусто, storage-node создает и переиспользует auto-id на диске.
+- `STORAGE_ID_PATH` - опциональный путь к файлу auto-id; если пусто, используется `STORAGE_LOCAL_ROOT/.tryon-storage-id`.
 - `STORAGE_PUBLIC_PROTOCOL` - протокол публичного storage endpoint.
 - `STORAGE_PUBLIC_URL` - опциональный ручной override для storage endpoint, если автоопределение по IP/port не подходит.
 - `STORAGE_DRIVER` - `local` или `s3`.
@@ -354,7 +356,7 @@ npm run build:dist
 - `STORAGE_METADATA_PATH` - путь к metadata index storage-node; если пусто, выбирается рядом с storage root.
 - `STORAGE_CATALOG_PATH` - путь к catalog index storage-node; если пусто, выбирается рядом с storage root.
 - `STORAGE_S3_ENDPOINT`, `STORAGE_S3_REGION`, `STORAGE_S3_BUCKET`, `STORAGE_S3_ACCESS_KEY_ID`, `STORAGE_S3_SECRET_ACCESS_KEY`, `STORAGE_S3_FORCE_PATH_STYLE` - настройки S3-compatible backend.
-- `STORAGE_CAPACITY_BYTES` - опциональная capacity storage-node для выбора coordinator-ом.
+- `STORAGE_CAPACITY_BYTES` - опциональная capacity storage-node; coordinator использует ее вместе с `usedBytes` для load-aware выбора storage.
 - `STORAGE_MAX_OBJECT_BYTES` - максимальный размер одного объекта для прямого upload.
 - `WORKER_PORT` - порт worker; coordinator использует его вместе с IP registration-запроса, чтобы отправлять jobs на worker.
 - `WORKER_PUBLIC_PROTOCOL` - протокол публичного worker endpoint, обычно `http` или `https`.

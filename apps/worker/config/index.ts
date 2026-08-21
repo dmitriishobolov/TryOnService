@@ -242,7 +242,7 @@ function readOpenAiImageDetail(): OpenAiImageDetail {
 }
 
 function readOpenAiTextVerbosity(): OpenAiTextVerbosity {
-  const value = readString("OPENAI_TEXT_VERBOSITY", "high").toLowerCase();
+  const value = readString("OPENAI_TEXT_VERBOSITY", "medium").toLowerCase();
 
   if (value !== "low" && value !== "medium" && value !== "high") {
     throw new Error("OPENAI_TEXT_VERBOSITY must be low, medium or high");
@@ -405,7 +405,7 @@ export function loadWorkerConfig(): WorkerConfig {
       textVerbosity: readOpenAiTextVerbosity(),
       reasoningEffort: readOpenAiReasoningEffort(),
       reasoningMode: readOptionalString("OPENAI_REASONING_MODE") ?? "standard",
-      maxOutputTokens: readNumber("OPENAI_MAX_OUTPUT_TOKENS", 1_200),
+      maxOutputTokens: readNumber("OPENAI_MAX_OUTPUT_TOKENS", 900),
       storeResponse: readBoolean("OPENAI_STORE_RESPONSE", false),
       organization: readOptionalString("OPENAI_ORGANIZATION"),
       project: readOptionalString("OPENAI_PROJECT"),
@@ -415,7 +415,7 @@ export function loadWorkerConfig(): WorkerConfig {
       ),
       wardrobePrompt: readString(
         "OPENAI_WARDROBE_PROMPT",
-        "Проанализируй внешность человека на фотографии. Определи: форму лица; визуальный контраст внешности; пропорции фигуры; какие цвета одежды подходят; каких цветов лучше избегать; подходящие фасоны футболок, рубашек, курток и брюк; подходящие аксессуары; рекомендации по прическе; 3 наиболее подходящих стилевых направления. Не пытайся устанавливать личность человека. Если освещение мешает точно определить цветотип, явно скажи об этом.",
+        "Кратко проанализируй внешность человека на фотографии. Ответь структурированно и по делу: форма лица, визуальный контраст, видимые пропорции, подходящие цвета, чего избегать, фасоны одежды, аксессуары, прическа и 3 стилевых направления. Не более 1200 символов. Не пытайся устанавливать личность человека. Если освещение мешает точно определить цветотип, явно скажи об этом.",
       ),
     },
     apiRateLimitWindowMs: readNumber("API_RATE_LIMIT_WINDOW_MS", 60_000),

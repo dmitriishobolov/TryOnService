@@ -14,6 +14,7 @@ import type { TelegramCoordinatorClient } from "./coordinatorClient.js";
 import type { TelegramWorkerClient } from "./workerClient.js";
 
 const logger = createLogger("telegram");
+const telegramMessageChunkSize = 3_000;
 
 interface TelegramApiResponse<T> {
   ok: boolean;
@@ -85,16 +86,19 @@ const appearanceAnalysisPrompt = `
 Если изображение не подходит, ответь строго этой фразой:
 "Вы загрузили не реальное фото или на фото не видно лица. Пожалуйста, отправьте четкую фотографию реального человека с видимым лицом."
 
-Если изображение подходит, дай конкретный и полезный разбор внешности на русском языке:
-1. Форма лица.
-2. Визуальный контраст внешности.
-3. Видимые пропорции фигуры, без оценочных суждений.
-4. Какие цвета одежды подходят.
-5. Каких цветов лучше избегать.
-6. Подходящие фасоны футболок, рубашек, курток и брюк.
-7. Подходящие аксессуары.
-8. Рекомендации по прическе.
-9. Три наиболее подходящих стилевых направления.
+Если изображение подходит, дай конкретный и полезный разбор внешности на русском языке. Ответ должен быть компактным: максимум 1200 символов, без длинного вступления и повторов.
+
+Формат ответа:
+**Разбор внешности**
+- **Лицо:** форма лица, 1 короткое уточнение.
+- **Контраст:** низкий/средний/высокий и что это значит для одежды.
+- **Пропорции:** только видимые особенности, без оценочных суждений.
+- **Цвета:** 4-6 подходящих оттенков.
+- **Избегать:** 3-5 оттенков или сочетаний.
+- **Фасоны:** футболки/рубашки/куртки/брюки одной короткой строкой.
+- **Аксессуары:** 2-4 варианта.
+- **Прическа:** 1-2 практичные рекомендации.
+- **Стили:** 3 направления через запятую.
 
 Не пытайся устанавливать личность человека. Не делай выводы о здоровье, этничности, религии, сексуальности, точном возрасте или других чувствительных признаках. Если освещение мешает точно определить цветотип, явно скажи об этом.
 `.trim();
@@ -137,11 +141,38 @@ export class TelegramBot {
     text: string,
     replyMarkup?: TelegramReplyMarkup,
   ): Promise<unknown> {
-    return this.callApi("sendMessage", {
-      chat_id: chatId,
-      text,
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-    });
+    return this.sendFormattedMessage(chatId, text, replyMarkup);
+  }
+
+  private async sendFormattedMessage(
+    chatId: string,
+    text: string,
+    replyMarkup?: TelegramReplyMarkup,
+  ): Promise<unknown> {
+    const chunks = splitTelegramMessage(text);
+    let result: unknown;
+
+    if (chunks.length > 1) {
+      logger.info("Telegram message split into chunks", {
+        chatId,
+        chunks: chunks.length,
+        originalLength: text.length,
+      });
+    }
+
+    for (const [index, chunk] of chunks.entries()) {
+      const isLastChunk = index === chunks.length - 1;
+
+      result = await this.callApi("sendMessage", {
+        chat_id: chatId,
+        text: markdownToTelegramHtml(chunk),
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+        ...(isLastChunk && replyMarkup ? { reply_markup: replyMarkup } : {}),
+      });
+    }
+
+    return result;
   }
 
   private async handleUpdate(update: TelegramUpdate): Promise<void> {
@@ -703,9 +734,10 @@ function createAppearanceAnalysisModelSelection(): TryOnModelSelection {
     task: "appearance-analysis",
     options: {
       imageDetail: "high",
-      textVerbosity: "high",
+      textVerbosity: "low",
       reasoningEffort: "low",
       reasoningMode: "standard",
+      maxOutputTokens: 650,
       store: false,
     },
   };
@@ -754,9 +786,10 @@ function parseModelSelection(
       provider === "openai"
         ? {
             imageDetail: "high",
-            textVerbosity: "high",
+            textVerbosity: "medium",
             reasoningEffort: "low",
             reasoningMode: "standard",
+            maxOutputTokens: 900,
             store: false,
           }
         : undefined,
@@ -856,4 +889,112 @@ function resolveTelegramPhotoContentType(
   }
 
   return contentTypeFromFilename(filename);
+}
+
+function splitTelegramMessage(text: string): string[] {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+
+  if (normalized.length <= telegramMessageChunkSize) {
+    return [normalized || " "];
+  }
+
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const block of normalized.split(/\n{2,}/)) {
+    const candidate = current ? `${current}\n\n${block}` : block;
+
+    if (candidate.length <= telegramMessageChunkSize) {
+      current = candidate;
+      continue;
+    }
+
+    if (current) {
+      chunks.push(current);
+      current = "";
+    }
+
+    appendLongBlockChunks(chunks, block);
+  }
+
+  if (current) {
+    chunks.push(current);
+  }
+
+  return chunks.length ? chunks : [" "];
+}
+
+function appendLongBlockChunks(chunks: string[], block: string): void {
+  let current = "";
+
+  for (const line of block.split("\n")) {
+    const candidate = current ? `${current}\n${line}` : line;
+
+    if (candidate.length <= telegramMessageChunkSize) {
+      current = candidate;
+      continue;
+    }
+
+    if (current) {
+      chunks.push(current);
+      current = "";
+    }
+
+    appendLongLineChunks(chunks, line);
+  }
+
+  if (current) {
+    chunks.push(current);
+  }
+}
+
+function appendLongLineChunks(chunks: string[], line: string): void {
+  let current = "";
+
+  for (const word of line.split(/\s+/)) {
+    const candidate = current ? `${current} ${word}` : word;
+
+    if (candidate.length <= telegramMessageChunkSize) {
+      current = candidate;
+      continue;
+    }
+
+    if (current) {
+      chunks.push(current);
+    }
+
+    current = word;
+
+    while (current.length > telegramMessageChunkSize) {
+      chunks.push(current.slice(0, telegramMessageChunkSize));
+      current = current.slice(telegramMessageChunkSize);
+    }
+  }
+
+  if (current) {
+    chunks.push(current);
+  }
+}
+
+function markdownToTelegramHtml(markdown: string): string {
+  let html = escapeHtml(markdown);
+
+  html = html.replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>");
+  html = html.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
+  html = html.replace(/__([^_\n]+)__/g, "<b>$1</b>");
+  html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  html = html.replace(
+    /\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g,
+    '<a href="$2">$1</a>',
+  );
+
+  return html;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }

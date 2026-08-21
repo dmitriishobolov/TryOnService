@@ -262,9 +262,10 @@ content-type: application/json
       "providerModel": "gpt-5.6-luna",
       "options": {
         "imageDetail": "high",
-        "textVerbosity": "high",
+        "textVerbosity": "medium",
         "reasoningEffort": "low",
         "reasoningMode": "standard",
+        "maxOutputTokens": 900,
         "store": false
       }
     },

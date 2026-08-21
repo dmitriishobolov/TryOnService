@@ -47,6 +47,8 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - client registration и heartbeat в coordinator.
 - автоматический выбор ближайшего свободного callback-порта.
 - `POST /callbacks/jobs` проверяет signed callback token по `CLIENT_CALLBACK_SIGNING_KEY`, `CLIENT_CALLBACK_SIGNING_KEY_VERSION` и одноразовому `tokenId`, принимает ответ worker'а и отправляет пользователю текст результата.
+- длинные ответы автоматически режутся на несколько Telegram-сообщений;
+- Markdown из ответа модели конвертируется в Telegram HTML, поэтому заголовки, `**жирный текст**`, `__жирный текст__`, inline-code и ссылки отображаются форматированно.
 
 ## Логи
 

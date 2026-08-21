@@ -4,6 +4,7 @@ import { sleep } from "../../shared/http.js";
 import { createLogger } from "../../shared/logger.js";
 import type {
   StorageObjectRef,
+  TelegramJobCallbackRequest,
   TryOnJobCreateResponse,
   TryOnJobQueuedResponse,
   TryOnModelProvider,
@@ -15,6 +16,7 @@ import type { TelegramWorkerClient } from "./workerClient.js";
 
 const logger = createLogger("telegram");
 const telegramMessageChunkSize = 3_000;
+const telegramCaptionLimit = 1_024;
 
 interface TelegramApiResponse<T> {
   ok: boolean;
@@ -68,11 +70,81 @@ interface ParsedRequestCommand {
   prompt?: string;
 }
 
-interface ChatSession {
-  mode: "awaiting-appearance-photo";
+type ChatSession =
+  | {
+      mode: "awaiting-appearance-photo";
+    }
+  | {
+      mode: "awaiting-ideal-full-body-photo";
+    }
+  | {
+      mode: "awaiting-ideal-outfit-choice";
+      outfits: IdealOutfit[];
+      inputFiles: StorageObjectRef[];
+      username?: string;
+    };
+
+type PendingJob =
+  | {
+      flow: "appearance";
+      chatId: string;
+    }
+  | {
+      flow: "ideal-plan";
+      chatId: string;
+      inputFiles: StorageObjectRef[];
+      username?: string;
+    }
+  | {
+      flow: "ideal-products";
+      chatId: string;
+      outfit: IdealOutfit;
+    };
+
+interface IdealOutfitItem {
+  slot: string;
+  category: string;
+  color?: string;
+  description: string;
+  searchQuery: string;
 }
 
-const appearanceAnalysisButtonText = "Разбор внешности";
+interface IdealOutfit {
+  id: string;
+  title: string;
+  summary: string;
+  items: IdealOutfitItem[];
+}
+
+interface IdealPlanResponse {
+  ok: boolean;
+  errorMessage?: string;
+  summary?: string;
+  outfits?: IdealOutfit[];
+}
+
+interface IdealProduct {
+  slot: string;
+  category: string;
+  title: string;
+  shortDescription: string;
+  productUrl: string;
+  imageUrl: string;
+  price?: string;
+  source?: string;
+  whyFits?: string;
+}
+
+interface IdealProductsResponse {
+  ok: boolean;
+  errorMessage?: string;
+  lookTitle?: string;
+  products?: IdealProduct[];
+}
+
+const appearanceAnalysisButtonText = "Анализ внешности";
+const legacyAppearanceAnalysisButtonText = "Разбор внешности";
+const idealOutfitButtonText = "Идеальный образ";
 const cancelButtonText = "Отмена";
 
 const appearanceAnalysisPrompt = `
@@ -111,9 +183,57 @@ const appearanceAnalysisPrompt = `
 Не пытайся устанавливать личность человека. Не делай выводы о здоровье, этничности, религии, сексуальности, точном возрасте или других чувствительных признаках. Если освещение мешает точно определить цветотип, явно скажи об этом.
 `.trim();
 
+const idealOutfitPlanPrompt = `
+Ты fashion stylist для сервиса виртуальной примерки.
+
+Сначала проверь изображение:
+- это должна быть фотография реального человека;
+- человек должен быть виден примерно в полный рост: голова, корпус и большая часть ног;
+- поза, освещение и одежда должны позволять оценить пропорции фигуры и общий силуэт;
+- если это селфи только лица, портрет по пояс, рисунок, рендер, аватар, мем, скриншот, фото со спины или человек плохо виден, образ не подбирай.
+
+Если фото не подходит, верни строгий JSON:
+{
+  "ok": false,
+  "errorMessage": "Для подбора идеального образа нужно фото в полный рост: человек должен быть хорошо виден с головы до ног. Пришлите, пожалуйста, подходящее фото."
+}
+
+Если фото подходит, подбери максимум 3 разных комбинации одежды. Они должны подходить человеку по видимым пропорциям, контрасту, цветам и общей подаче. Не делай выводы о личности, здоровье, этничности, религии, сексуальности или точном возрасте.
+
+Правила комбинаций:
+- в одном образе не должно быть дублей одной категории: не добавляй два худи, две куртки, две рубашки, две пары брюк и так далее;
+- образ должен быть собираемым из понятных товарных категорий;
+- каждый item должен иметь отдельный slot, category, description и searchQuery;
+- searchQuery должен быть хорошим запросом для поиска товара в интернет-магазинах на русском языке;
+- не используй длинное тире, символ U+2014.
+
+Верни только строгий JSON без Markdown:
+{
+  "ok": true,
+  "summary": "1-2 короткие фразы о подходящем направлении образов",
+  "outfits": [
+    {
+      "id": "look_1",
+      "title": "Название образа",
+      "summary": "Коротко почему образ подходит",
+      "items": [
+        {
+          "slot": "top",
+          "category": "рубашка",
+          "color": "молочный",
+          "description": "молочная рубашка свободного кроя из плотного хлопка",
+          "searchQuery": "молочная рубашка oversize плотный хлопок"
+        }
+      ]
+    }
+  ]
+}
+`.trim();
+
 export class TelegramBot {
   private updateOffset = 0;
   private readonly sessions = new Map<string, ChatSession>();
+  private readonly pendingJobs = new Map<string, PendingJob>();
 
   constructor(
     private readonly config: TelegramClientConfig,
@@ -152,6 +272,33 @@ export class TelegramBot {
     return this.sendFormattedMessage(chatId, text, replyMarkup);
   }
 
+  async handleJobCallback(callback: TelegramJobCallbackRequest): Promise<void> {
+    const pending = this.pendingJobs.get(callback.jobId);
+
+    if (!pending) {
+      logger.info("Callback has no pending Telegram flow, sending raw result", {
+        jobId: callback.jobId,
+        chatId: callback.client.chatId,
+      });
+      await this.sendMessage(callback.client.chatId, callback.result.message);
+      return;
+    }
+
+    this.pendingJobs.delete(callback.jobId);
+
+    if (pending.flow === "appearance") {
+      await this.sendMessage(pending.chatId, callback.result.message, mainMenuMarkup());
+      return;
+    }
+
+    if (pending.flow === "ideal-plan") {
+      await this.handleIdealPlanCallback(pending, callback.result.message);
+      return;
+    }
+
+    await this.handleIdealProductsCallback(pending, callback.result.message);
+  }
+
   private async sendFormattedMessage(
     chatId: string,
     text: string,
@@ -183,6 +330,21 @@ export class TelegramBot {
     return result;
   }
 
+  private sendPhoto(
+    chatId: string,
+    photoUrl: string,
+    caption: string,
+    replyMarkup?: TelegramReplyMarkup,
+  ): Promise<unknown> {
+    return this.callApi("sendPhoto", {
+      chat_id: chatId,
+      photo: photoUrl,
+      caption: markdownToTelegramHtml(truncateText(caption, telegramCaptionLimit)),
+      parse_mode: "HTML",
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    });
+  }
+
   private async handleUpdate(update: TelegramUpdate): Promise<void> {
     const message = update.message;
     const text = message?.text?.trim() ?? message?.caption?.trim();
@@ -204,13 +366,13 @@ export class TelegramBot {
     }
 
     if (text && isCancelCommand(text)) {
-      logger.info("Appearance analysis cancelled", {
+      logger.info("Telegram flow cancelled", {
         chatId,
       });
       this.sessions.delete(chatId);
       await this.sendMessage(
         chatId,
-        "Разбор внешности отменен. Можем начать заново, когда будете готовы.",
+        "Ок, остановились. Выберите, что сделать дальше.",
         mainMenuMarkup(),
       );
       return;
@@ -224,6 +386,14 @@ export class TelegramBot {
       return;
     }
 
+    if (text && isIdealOutfitCommand(text)) {
+      logger.info("Ideal outfit requested", {
+        chatId,
+      });
+      await this.startIdealOutfit(chatId);
+      return;
+    }
+
     const session = this.sessions.get(chatId);
 
     if (session?.mode === "awaiting-appearance-photo") {
@@ -231,10 +401,20 @@ export class TelegramBot {
       return;
     }
 
+    if (session?.mode === "awaiting-ideal-full-body-photo") {
+      await this.handleIdealFullBodyPhotoStep(message);
+      return;
+    }
+
+    if (session?.mode === "awaiting-ideal-outfit-choice") {
+      await this.handleIdealOutfitChoiceStep(message, session);
+      return;
+    }
+
     if (!text && message.photo?.length) {
       await this.sendMessage(
         chatId,
-        "Чтобы сделать разбор внешности, сначала нажмите кнопку «Разбор внешности».",
+        "Выберите сначала сценарий: анализ внешности или идеальный образ.",
         mainMenuMarkup(),
       );
       return;
@@ -256,7 +436,12 @@ export class TelegramBot {
   private sendStartMessage(chatId: string): Promise<unknown> {
     return this.sendMessage(
       chatId,
-      "Хотите сделать разбор вашей внешности?",
+      [
+        "Привет! Я помогу подобрать одежду под внешность и собрать товарную подборку для будущей виртуальной примерки.",
+        "",
+        "**Анализ внешности**: пришлите фото с лицом, я дам компактный стилистический разбор.",
+        "**Идеальный образ**: пришлите фото в полный рост, я предложу до 3 образов, а после выбора найду похожие товары с подходящими фото.",
+      ].join("\n"),
       mainMenuMarkup(),
     );
   }
@@ -272,6 +457,21 @@ export class TelegramBot {
     return this.sendMessage(
       chatId,
       "Отправьте изображение с вашим лицом.",
+      cancelMarkup(),
+    );
+  }
+
+  private startIdealOutfit(chatId: string): Promise<unknown> {
+    this.sessions.set(chatId, {
+      mode: "awaiting-ideal-full-body-photo",
+    });
+    logger.info("Ideal outfit awaiting full-body photo", {
+      chatId,
+    });
+
+    return this.sendMessage(
+      chatId,
+      "Отправьте фото в полный рост: человек должен быть хорошо виден с головы до ног.",
       cancelMarkup(),
     );
   }
@@ -296,6 +496,50 @@ export class TelegramBot {
     await this.createAppearanceAnalysisRequest(message);
   }
 
+  private async handleIdealFullBodyPhotoStep(
+    message: TelegramMessage,
+  ): Promise<void> {
+    const chatId = String(message.chat.id);
+
+    if (!message.photo?.length) {
+      logger.info("Ideal outfit expected photo but received non-photo", {
+        chatId,
+      });
+      await this.sendMessage(
+        chatId,
+        "Нужно фото в полный рост. Пришлите подходящее изображение или нажмите «Отмена».",
+        cancelMarkup(),
+      );
+      return;
+    }
+
+    await this.createIdealOutfitPlanRequest(message);
+  }
+
+  private async handleIdealOutfitChoiceStep(
+    message: TelegramMessage,
+    session: Extract<ChatSession, { mode: "awaiting-ideal-outfit-choice" }>,
+  ): Promise<void> {
+    const chatId = String(message.chat.id);
+    const text = message.text?.trim() ?? message.caption?.trim();
+    const selectedIndex = text ? parseIdealOutfitChoice(text, session.outfits) : -1;
+
+    if (selectedIndex < 0) {
+      await this.sendMessage(
+        chatId,
+        "Выберите один из предложенных образов кнопкой ниже или нажмите «Отмена».",
+        idealOutfitChoiceMarkup(session.outfits),
+      );
+      return;
+    }
+
+    await this.createIdealProductSearchRequest(
+      chatId,
+      session,
+      session.outfits[selectedIndex],
+    );
+  }
+
   private async createAppearanceAnalysisRequest(
     message: TelegramMessage,
   ): Promise<void> {
@@ -316,12 +560,7 @@ export class TelegramBot {
 
       logger.info("Appearance analysis storage upload completed", {
         chatId,
-        files: inputFiles.map((file) => ({
-          storageId: file.storageId,
-          key: file.key,
-          sizeBytes: file.sizeBytes,
-          contentType: file.contentType,
-        })),
+        files: logStorageFiles(inputFiles),
       });
 
       logger.info("Appearance analysis job create requested", {
@@ -336,7 +575,12 @@ export class TelegramBot {
         model: createAppearanceAnalysisModelSelection(),
         inputFiles,
       });
+      const jobId = getResponseJobId(assignment);
 
+      this.pendingJobs.set(jobId, {
+        flow: "appearance",
+        chatId,
+      });
       this.sessions.delete(chatId);
 
       if (isQueuedJobResponse(assignment)) {
@@ -388,6 +632,271 @@ export class TelegramBot {
         cancelMarkup(),
       );
     }
+  }
+
+  private async createIdealOutfitPlanRequest(
+    message: TelegramMessage,
+  ): Promise<void> {
+    const chatId = String(message.chat.id);
+
+    try {
+      logger.info("Ideal outfit full-body photo received", {
+        chatId,
+        photoVariants: message.photo?.length ?? 0,
+      });
+      const inputFiles = await this.uploadMessagePhotos(message);
+
+      if (!inputFiles?.length) {
+        throw new Error("No Telegram photos were uploaded for ideal outfit");
+      }
+
+      logger.info("Ideal outfit storage upload completed", {
+        chatId,
+        files: logStorageFiles(inputFiles),
+      });
+      const assignment = await this.coordinator.createRequestJob({
+        chatId,
+        username: message.from?.username,
+        text: idealOutfitPlanPrompt,
+        model: createIdealOutfitPlanModelSelection(),
+        inputFiles,
+      });
+      const jobId = getResponseJobId(assignment);
+
+      this.pendingJobs.set(jobId, {
+        flow: "ideal-plan",
+        chatId,
+        inputFiles,
+        username: message.from?.username,
+      });
+      this.sessions.delete(chatId);
+
+      if (isQueuedJobResponse(assignment)) {
+        await this.sendMessage(
+          chatId,
+          `Фото принято. Запрос ${assignment.job.id} поставлен в очередь, скоро соберу варианты образов.`,
+          mainMenuMarkup(),
+        );
+        void this.waitForAssignmentAndDispatch(
+          chatId,
+          assignment.job.id,
+          assignment.retryAfterMs,
+        );
+        return;
+      }
+
+      await this.worker.dispatchJob(assignment);
+      logger.info("Ideal outfit plan job dispatched", {
+        chatId,
+        jobId: assignment.job.id,
+        workerId: assignment.worker.workerId,
+      });
+      await this.sendMessage(
+        chatId,
+        `Фото принято. Запрос ${assignment.job.id} отправлен на сервер. Собираю варианты образов.`,
+        mainMenuMarkup(),
+      );
+    } catch (error) {
+      logger.error("Failed to create ideal outfit plan job", {
+        chatId,
+        error,
+      });
+      await this.sendMessage(
+        chatId,
+        "Не удалось отправить фото на подбор образа. Попробуйте еще раз или нажмите «Отмена».",
+        cancelMarkup(),
+      );
+    }
+  }
+
+  private async handleIdealPlanCallback(
+    pending: Extract<PendingJob, { flow: "ideal-plan" }>,
+    message: string,
+  ): Promise<void> {
+    const parsed = parseJsonFromOpenAiMessage<IdealPlanResponse>(message);
+
+    if (!parsed || parsed.ok !== true) {
+      this.sessions.set(pending.chatId, {
+        mode: "awaiting-ideal-full-body-photo",
+      });
+      await this.sendMessage(
+        pending.chatId,
+        parsed?.errorMessage ??
+          "Не получилось надежно понять фото. Пришлите фото в полный рост, где человек хорошо виден с головы до ног.",
+        cancelMarkup(),
+      );
+      return;
+    }
+
+    const outfits = sanitizeIdealOutfits(parsed.outfits);
+
+    if (outfits.length === 0) {
+      this.sessions.set(pending.chatId, {
+        mode: "awaiting-ideal-full-body-photo",
+      });
+      await this.sendMessage(
+        pending.chatId,
+        "Не удалось собрать достаточно внятные варианты. Пришлите другое фото в полный рост.",
+        cancelMarkup(),
+      );
+      return;
+    }
+
+    this.sessions.set(pending.chatId, {
+      mode: "awaiting-ideal-outfit-choice",
+      outfits,
+      inputFiles: pending.inputFiles,
+      username: pending.username,
+    });
+
+    await this.sendMessage(
+      pending.chatId,
+      formatIdealOutfitOptions(parsed.summary, outfits),
+      idealOutfitChoiceMarkup(outfits),
+    );
+  }
+
+  private async createIdealProductSearchRequest(
+    chatId: string,
+    session: Extract<ChatSession, { mode: "awaiting-ideal-outfit-choice" }>,
+    outfit: IdealOutfit,
+  ): Promise<void> {
+    try {
+      logger.info("Ideal outfit product search requested", {
+        chatId,
+        outfitId: outfit.id,
+        outfitTitle: outfit.title,
+        items: outfit.items.map((item) => ({
+          slot: item.slot,
+          category: item.category,
+          searchQuery: item.searchQuery,
+        })),
+      });
+      const assignment = await this.coordinator.createRequestJob({
+        chatId,
+        username: session.username,
+        text: createIdealProductSearchPrompt(outfit),
+        model: createIdealProductSearchModelSelection(),
+        inputFiles: session.inputFiles,
+      });
+      const jobId = getResponseJobId(assignment);
+
+      this.pendingJobs.set(jobId, {
+        flow: "ideal-products",
+        chatId,
+        outfit,
+      });
+      this.sessions.delete(chatId);
+
+      if (isQueuedJobResponse(assignment)) {
+        await this.sendMessage(
+          chatId,
+          `Образ выбран. Запрос ${assignment.job.id} поставлен в очередь, ищу подходящие товары.`,
+          mainMenuMarkup(),
+        );
+        void this.waitForAssignmentAndDispatch(
+          chatId,
+          assignment.job.id,
+          assignment.retryAfterMs,
+        );
+        return;
+      }
+
+      await this.worker.dispatchJob(assignment);
+      logger.info("Ideal outfit products job dispatched", {
+        chatId,
+        jobId: assignment.job.id,
+        workerId: assignment.worker.workerId,
+        outfitId: outfit.id,
+      });
+      await this.sendMessage(
+        chatId,
+        `Образ выбран: **${outfit.title}**. Ищу товары с подходящими фото.`,
+        mainMenuMarkup(),
+      );
+    } catch (error) {
+      logger.error("Failed to create ideal product search job", {
+        chatId,
+        outfitId: outfit.id,
+        error,
+      });
+      await this.sendMessage(
+        chatId,
+        "Не удалось запустить поиск товаров. Попробуйте выбрать образ еще раз.",
+        idealOutfitChoiceMarkup(session.outfits),
+      );
+    }
+  }
+
+  private async handleIdealProductsCallback(
+    pending: Extract<PendingJob, { flow: "ideal-products" }>,
+    message: string,
+  ): Promise<void> {
+    const parsed = parseJsonFromOpenAiMessage<IdealProductsResponse>(message);
+
+    if (!parsed || parsed.ok !== true) {
+      await this.sendMessage(
+        pending.chatId,
+        parsed?.errorMessage ??
+          "Не получилось найти надежные товарные карточки с подходящими фото. Попробуйте другой образ.",
+        mainMenuMarkup(),
+      );
+      return;
+    }
+
+    const products = sanitizeIdealProducts(parsed.products);
+
+    if (products.length === 0) {
+      await this.sendMessage(
+        pending.chatId,
+        "Не нашел товары с достаточно чистыми фото одежды. Лучше попробовать другой образ или более базовые вещи.",
+        mainMenuMarkup(),
+      );
+      return;
+    }
+
+    await this.sendMessage(
+      pending.chatId,
+      `Подборка для образа **${parsed.lookTitle ?? pending.outfit.title}**. Показываю только карточки с понятным товарным фото.`,
+      mainMenuMarkup(),
+    );
+
+    let delivered = 0;
+
+    for (const product of products) {
+      try {
+        await this.sendPhoto(
+          pending.chatId,
+          product.imageUrl,
+          formatProductCaption(product),
+          productCardMarkup(product),
+        );
+        delivered += 1;
+      } catch (error) {
+        logger.warn("Failed to send product photo, product skipped", {
+          chatId: pending.chatId,
+          title: product.title,
+          imageUrl: product.imageUrl,
+          productUrl: product.productUrl,
+          error,
+        });
+      }
+    }
+
+    if (delivered === 0) {
+      await this.sendMessage(
+        pending.chatId,
+        "Карточки нашлись, но Telegram не смог загрузить их изображения. Попробуйте другой образ.",
+        mainMenuMarkup(),
+      );
+      return;
+    }
+
+    logger.info("Ideal outfit products delivered", {
+      chatId: pending.chatId,
+      delivered,
+      received: products.length,
+    });
   }
 
   private async createRequest(
@@ -513,6 +1022,11 @@ export class TelegramBot {
           jobId: assignment.job.id,
           workerId: assignment.worker.workerId,
         });
+        this.logScenarioJobDispatched(
+          chatId,
+          assignment.job.id,
+          assignment.worker.workerId,
+        );
         await this.sendMessage(
           chatId,
           `Запрос ${assignment.job.id} отправлен на сервер. Ожидаю ответ.`,
@@ -539,6 +1053,41 @@ export class TelegramBot {
     });
   }
 
+  private logScenarioJobDispatched(
+    chatId: string,
+    jobId: string,
+    workerId: string,
+  ): void {
+    const pending = this.pendingJobs.get(jobId);
+
+    if (pending?.flow === "appearance") {
+      logger.info("Appearance analysis job dispatched", {
+        chatId,
+        jobId,
+        workerId,
+      });
+      return;
+    }
+
+    if (pending?.flow === "ideal-plan") {
+      logger.info("Ideal outfit plan job dispatched", {
+        chatId,
+        jobId,
+        workerId,
+      });
+      return;
+    }
+
+    if (pending?.flow === "ideal-products") {
+      logger.info("Ideal outfit products job dispatched", {
+        chatId,
+        jobId,
+        workerId,
+        outfitId: pending.outfit.id,
+      });
+    }
+  }
+
   private setupCommands(): Promise<unknown> {
     const commands: BotCommand[] = [
       {
@@ -547,7 +1096,11 @@ export class TelegramBot {
       },
       {
         command: "appearance",
-        description: "Разбор внешности по фото",
+        description: "Анализ внешности по фото",
+      },
+      {
+        command: "ideal",
+        description: "Подобрать идеальный образ",
       },
       {
         command: "request",
@@ -697,9 +1250,24 @@ function isQueuedJobResponse(
   return "queued" in response;
 }
 
+function getResponseJobId(response: TryOnJobCreateResponse): string {
+  return response.job.id;
+}
+
+function logStorageFiles(files: StorageObjectRef[]): Record<string, unknown>[] {
+  return files.map((file) => ({
+    storageId: file.storageId,
+    key: file.key,
+    sizeBytes: file.sizeBytes,
+    contentType: file.contentType,
+  }));
+}
+
 function mainMenuMarkup(): TelegramReplyMarkup {
   return {
-    keyboard: [[{ text: appearanceAnalysisButtonText }]],
+    keyboard: [
+      [{ text: appearanceAnalysisButtonText }, { text: idealOutfitButtonText }],
+    ],
     resize_keyboard: true,
     one_time_keyboard: false,
   };
@@ -713,12 +1281,46 @@ function cancelMarkup(): TelegramReplyMarkup {
   };
 }
 
+function idealOutfitChoiceMarkup(outfits: IdealOutfit[]): TelegramReplyMarkup {
+  return {
+    keyboard: [
+      ...outfits.map((_, index) => [{ text: `Образ ${index + 1}` }]),
+      [{ text: cancelButtonText }],
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: false,
+  };
+}
+
+function productCardMarkup(product: IdealProduct): TelegramReplyMarkup {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: "Перейти к товару",
+          url: product.productUrl,
+        },
+      ],
+    ],
+  };
+}
+
 function isAppearanceAnalysisCommand(text: string): boolean {
   const normalized = normalizeCommandText(text);
 
   return (
     normalized === normalizeCommandText(appearanceAnalysisButtonText) ||
+    normalized === normalizeCommandText(legacyAppearanceAnalysisButtonText) ||
     normalized === "/appearance"
+  );
+}
+
+function isIdealOutfitCommand(text: string): boolean {
+  const normalized = normalizeCommandText(text);
+
+  return (
+    normalized === normalizeCommandText(idealOutfitButtonText) ||
+    normalized === "/ideal"
   );
 }
 
@@ -749,6 +1351,318 @@ function createAppearanceAnalysisModelSelection(): TryOnModelSelection {
       store: false,
     },
   };
+}
+
+function createIdealOutfitPlanModelSelection(): TryOnModelSelection {
+  return {
+    provider: "openai",
+    task: "wardrobe-recommendation",
+    options: {
+      imageDetail: "high",
+      textVerbosity: "low",
+      reasoningEffort: "low",
+      reasoningMode: "standard",
+      maxOutputTokens: 1_800,
+      store: false,
+    },
+  };
+}
+
+function createIdealProductSearchModelSelection(): TryOnModelSelection {
+  return {
+    provider: "openai",
+    task: "wardrobe-recommendation",
+    options: {
+      imageDetail: "high",
+      textVerbosity: "low",
+      reasoningEffort: "low",
+      reasoningMode: "standard",
+      maxOutputTokens: 3_500,
+      store: false,
+      webSearch: {
+        searchContextSize: "high",
+      },
+    },
+  };
+}
+
+function createIdealProductSearchPrompt(outfit: IdealOutfit): string {
+  return `
+Нужно найти в интернете товарные карточки для выбранного образа.
+
+Выбранный образ:
+${JSON.stringify(outfit, null, 2)}
+
+Задача:
+- используй web search;
+- ищи реальные товары, которые сейчас продаются в интернет-магазинах или маркетплейсах;
+- для каждого item из образа найди максимум 1 подходящий товар;
+- не добавляй два товара одной категории в один образ: если уже выбран худи, второй худи нельзя; если уже выбраны брюки, вторые брюки нельзя;
+- товар должен совпадать по категории, цвету, фасону и смыслу searchQuery;
+- товар должен иметь рабочую ссылку на карточку товара;
+- у товара должен быть прямой imageUrl или доступная картинка товара;
+- бери только фото, где одежда видна как отдельный товар на чистом белом, светлом или контрастном фоне;
+- если фото на модели, в коллаже, с водяными знаками, с текстом поверх, плохо обрезано, размыто или вещь не видно целиком, пропусти товар;
+- не выдумывай productUrl, imageUrl, цену или магазин;
+- если по какому-то item нет надежной карточки, просто пропусти item;
+- верни минимум 2 товара, если они реально найдены и подходят; максимум 6 товаров.
+
+Верни только строгий JSON без Markdown:
+{
+  "ok": true,
+  "lookTitle": "${escapeJsonString(outfit.title)}",
+  "products": [
+    {
+      "slot": "top",
+      "category": "рубашка",
+      "title": "Название товара",
+      "shortDescription": "Коротко что это и почему подходит",
+      "productUrl": "https://...",
+      "imageUrl": "https://...",
+      "price": "если найдено",
+      "source": "магазин или marketplace",
+      "whyFits": "1 короткая причина"
+    }
+  ]
+}
+
+Если надежных товаров нет, верни:
+{
+  "ok": false,
+  "errorMessage": "Не удалось найти надежные товарные карточки с подходящими фото. Лучше попробовать другой образ или более базовые вещи."
+}
+`.trim();
+}
+
+function parseIdealOutfitChoice(text: string, outfits: IdealOutfit[]): number {
+  const normalized = normalizeCommandText(text);
+  const match = /^образ\s+(\d+)$/i.exec(normalized);
+
+  if (!match) {
+    return -1;
+  }
+
+  const index = Number(match[1]) - 1;
+
+  return Number.isInteger(index) && index >= 0 && index < outfits.length
+    ? index
+    : -1;
+}
+
+function sanitizeIdealOutfits(value: unknown): IdealOutfit[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item, index) => sanitizeIdealOutfit(item, index))
+    .filter((item): item is IdealOutfit => Boolean(item))
+    .slice(0, 3);
+}
+
+function sanitizeIdealOutfit(value: unknown, index: number): IdealOutfit | undefined {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+
+  const rawItems = Array.isArray(value.items) ? value.items : [];
+  const items = dedupeIdealOutfitItems(
+    rawItems
+      .map(sanitizeIdealOutfitItem)
+      .filter((item): item is IdealOutfitItem => Boolean(item)),
+  );
+
+  if (items.length === 0) {
+    return undefined;
+  }
+
+  return {
+    id: readString(value.id, `look_${index + 1}`),
+    title: readString(value.title, `Образ ${index + 1}`),
+    summary: readString(value.summary, "Подходит по силуэту, цвету и общей подаче."),
+    items,
+  };
+}
+
+function sanitizeIdealOutfitItem(value: unknown): IdealOutfitItem | undefined {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+
+  const slot = readString(value.slot, "");
+  const category = readString(value.category, "");
+  const description = readString(value.description, "");
+  const searchQuery = readString(value.searchQuery, "");
+
+  if (!slot || !category || !description || !searchQuery) {
+    return undefined;
+  }
+
+  return {
+    slot,
+    category,
+    color: readOptionalString(value.color),
+    description,
+    searchQuery,
+  };
+}
+
+function dedupeIdealOutfitItems(items: IdealOutfitItem[]): IdealOutfitItem[] {
+  const seen = new Set<string>();
+  const result: IdealOutfitItem[] = [];
+
+  for (const item of items) {
+    const key = normalizeCategoryKey(item.category || item.slot);
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    result.push(item);
+  }
+
+  return result;
+}
+
+function sanitizeIdealProducts(value: unknown): IdealProduct[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seenCategories = new Set<string>();
+  const seenUrls = new Set<string>();
+  const products: IdealProduct[] = [];
+
+  for (const raw of value) {
+    const product = sanitizeIdealProduct(raw);
+
+    if (!product) {
+      continue;
+    }
+
+    const categoryKey = normalizeCategoryKey(product.category || product.slot);
+    const urlKey = product.productUrl.toLowerCase();
+
+    if (seenCategories.has(categoryKey) || seenUrls.has(urlKey)) {
+      continue;
+    }
+
+    seenCategories.add(categoryKey);
+    seenUrls.add(urlKey);
+    products.push(product);
+  }
+
+  return products.slice(0, 6);
+}
+
+function sanitizeIdealProduct(value: unknown): IdealProduct | undefined {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+
+  const slot = readString(value.slot, "");
+  const category = readString(value.category, "");
+  const title = readString(value.title, "");
+  const shortDescription = readString(value.shortDescription, "");
+  const productUrl = readString(value.productUrl, "");
+  const imageUrl = readString(value.imageUrl, "");
+
+  if (
+    !slot ||
+    !category ||
+    !title ||
+    !shortDescription ||
+    !isHttpUrl(productUrl) ||
+    !isHttpUrl(imageUrl)
+  ) {
+    return undefined;
+  }
+
+  return {
+    slot,
+    category,
+    title,
+    shortDescription,
+    productUrl,
+    imageUrl,
+    price: readOptionalString(value.price),
+    source: readOptionalString(value.source),
+    whyFits: readOptionalString(value.whyFits),
+  };
+}
+
+function formatIdealOutfitOptions(
+  summary: string | undefined,
+  outfits: IdealOutfit[],
+): string {
+  const lines = [
+    summary ?? "Я собрал несколько вариантов, которые должны хорошо лечь на вашу внешность.",
+    "",
+    "Выберите образ:",
+  ];
+
+  for (const [index, outfit] of outfits.entries()) {
+    lines.push("");
+    lines.push(`**Образ ${index + 1}: ${outfit.title}**`);
+    lines.push(outfit.summary);
+    lines.push(
+      outfit.items
+        .map((item) => `${item.category}: ${item.description}`)
+        .join("\n"),
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function formatProductCaption(product: IdealProduct): string {
+  return [
+    `**${product.title}**`,
+    product.shortDescription,
+    product.price ? `Цена: ${product.price}` : undefined,
+    product.source ? `Магазин: ${product.source}` : undefined,
+    product.whyFits ? `Почему подходит: ${product.whyFits}` : undefined,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
+function parseJsonFromOpenAiMessage<T>(message: string): T | undefined {
+  const text = stripWorkerOpenAiPrefix(message);
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
+  const candidate = fenced?.[1] ?? extractJsonObjectText(text);
+
+  if (!candidate) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(candidate) as T;
+  } catch (error) {
+    logger.warn("Failed to parse OpenAI JSON response", {
+      error,
+      responseStart: candidate.slice(0, 300),
+    });
+    return undefined;
+  }
+}
+
+function stripWorkerOpenAiPrefix(message: string): string {
+  return message
+    .replace(/^Ответ от сервера\. Провайдер: OpenAI\.\s*/i, "")
+    .trim();
+}
+
+function extractJsonObjectText(value: string): string | undefined {
+  const start = value.indexOf("{");
+  const end = value.lastIndexOf("}");
+
+  if (start < 0 || end <= start) {
+    return undefined;
+  }
+
+  return value.slice(start, end + 1);
 }
 
 function parseRequestCommand(text: string): ParsedRequestCommand | undefined {
@@ -1005,4 +1919,69 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, Math.max(0, maxLength - 1)).trim()}...`;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readString(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeCategoryKey(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/\s+/g, " ");
+
+  const synonymGroups: Array<[string, RegExp]> = [
+    ["hoodie", /(худи|hoodie|толстовк|свитшот|sweatshirt)/],
+    ["shirt", /(рубаш|сорочк|\bshirt\b)/],
+    ["tshirt", /(футболк|лонгслив|t-?shirt|\btee\b|longsleeve)/],
+    ["jacket", /(куртк|жакет|бомбер|пиджак|блейзер|ветровк|jacket|blazer|bomber)/],
+    ["coat", /(пальто|тренч|coat|trench)/],
+    ["pants", /(брюк|джинс|штаны|чинос|карго|pants|trousers|jeans|chinos|cargo)/],
+    ["shorts", /(шорт|shorts)/],
+    ["skirt", /(юбк|skirt)/],
+    ["dress", /(плать|dress)/],
+    ["shoes", /(кроссов|кеды|ботин|туфл|лофер|обув|sneakers|shoes|boots|loafers)/],
+    ["bag", /(сумк|рюкзак|bag|backpack)/],
+    ["accessory", /(ремень|очки|шапк|кепк|шарф|перчат|belt|glasses|cap|scarf|accessor)/],
+  ];
+
+  for (const [key, pattern] of synonymGroups) {
+    if (pattern.test(normalized)) {
+      return key;
+    }
+  }
+
+  return normalized;
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function escapeJsonString(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }

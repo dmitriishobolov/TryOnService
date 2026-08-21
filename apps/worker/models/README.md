@@ -10,7 +10,7 @@
 - `tryoncloud` - TryOnCloud Developer API или Platform API. `developer` отправляет файлы и получает raw PNG, `platform` отправляет `user_image` + публичный `product_image_url`.
 - `genlook` - Genlook Try-On API: worker загружает person image, создает generation и polling-ом ждет результат. Auth header и paths вынесены в env.
 - `wearfits` - WEARFITS Virtual Try-On API: worker отправляет sync submit на `/api/v1/virtual-fitting`, затем polling-ом ждет job result.
-- `openai` - OpenAI/ChatGPT vision adapter: worker отправляет фото пользователя в Responses API как data URL и возвращает текстовый анализ внешности/гардероба. Поддерживает per-job options: `imageDetail`, `textVerbosity`, `reasoningEffort`, `reasoningMode`, `maxOutputTokens`, `store`.
+- `openai` - OpenAI/ChatGPT vision adapter: worker отправляет фото пользователя в Responses API как data URL и возвращает текстовый анализ внешности/гардероба. Поддерживает per-job options: `imageDetail`, `textVerbosity`, `reasoningEffort`, `reasoningMode`, `maxOutputTokens`, `store`, `webSearch`.
 
 Для virtual try-on provider-ов worker ожидает минимум два `payload.inputFiles`: `TRYON_PERSON_IMAGE_INDEX` указывает фото пользователя, `TRYON_GARMENT_IMAGE_INDEX` - фото одежды/товара. OpenAI adapter использует только person image. Результат генеративных provider-ов сохраняется напрямую в object storage под `jobs/<jobId>/results/...`; coordinator получает только `StorageObjectRef` в `TryOnJobResult.files`.
 
@@ -53,6 +53,19 @@
 - какие лимиты есть у provider'а.
 
 Runner выбирает adapter через `payload.model.provider`, а provider model берет из `payload.model.providerModel` с fallback на config adapter-а. Worker регистрирует capabilities `try-on`, `try-on.mock` и `try-on.<provider>` для provider-ов с настроенными ключами.
+
+Для OpenAI web search клиент может передать в `payload.model.options.webSearch` значение `true` или объект:
+
+```json
+{
+  "webSearch": {
+    "searchContextSize": "high",
+    "allowedDomains": ["example.com"]
+  }
+}
+```
+
+`allowedDomains` опционален. Если он не передан, model сможет искать по открытой web выдаче. Telegram-сценарий `Идеальный образ` использует это для поиска товарных карточек после выбора образа.
 
 ## Добавление нового AI provider-а
 

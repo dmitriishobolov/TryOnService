@@ -93,6 +93,7 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
       "store",
       config.openai.storeResponse,
     );
+    const tools = buildTools(options);
     logger.info("OpenAI Responses request started", {
       jobId: job.jobId,
       model,
@@ -106,6 +107,7 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
       originalInputContentType: personImage.contentType,
       inputBytes: personImage.buffer.length,
       promptLength: prompt.length,
+      tools: tools.map((tool) => tool.type),
     });
     const response = await fetchJson<unknown>(
       provider,
@@ -152,6 +154,16 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
           reasoning,
           max_output_tokens: maxOutputTokens,
           store,
+          ...(tools.length
+            ? {
+                tools,
+                tool_choice: "auto",
+                include: [
+                  "web_search_call.results",
+                  "web_search_call.action.sources",
+                ],
+              }
+            : {}),
         }),
       },
       config.tryOnModelHttpTimeoutMs,
@@ -182,6 +194,14 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
     };
   },
 };
+
+interface OpenAiToolConfig {
+  type: string;
+  filters?: {
+    allowed_domains?: string[];
+  };
+  search_context_size?: string;
+}
 
 function openAiHeaders(
   apiKey: string,
@@ -306,6 +326,90 @@ function buildReasoningConfig(
   }
 
   return reasoning;
+}
+
+function buildTools(options: Record<string, unknown>): OpenAiToolConfig[] {
+  const webSearchTool = buildWebSearchTool(options);
+
+  return webSearchTool ? [webSearchTool] : [];
+}
+
+function buildWebSearchTool(
+  options: Record<string, unknown>,
+): OpenAiToolConfig | undefined {
+  const raw = options.webSearch;
+
+  if (raw === undefined || raw === false) {
+    return undefined;
+  }
+
+  if (raw !== true && !isRecord(raw)) {
+    throw new TryOnModelError(
+      "openai_invalid_webSearch",
+      "OpenAI option webSearch must be a boolean or object",
+      false,
+    );
+  }
+
+  const rawOptions = isRecord(raw) ? raw : {};
+  const allowedDomains = readStringArrayOption(
+    rawOptions.allowedDomains ?? options.webSearchAllowedDomains,
+    "webSearch.allowedDomains",
+  );
+  const searchContextSize = readSearchContextSize(
+    rawOptions.searchContextSize ?? options.webSearchContextSize,
+  );
+
+  return {
+    type: "web_search",
+    ...(allowedDomains.length
+      ? {
+          filters: {
+            allowed_domains: allowedDomains,
+          },
+        }
+      : {}),
+    ...(searchContextSize
+      ? {
+          search_context_size: searchContextSize,
+        }
+      : {}),
+  };
+}
+
+function readStringArrayOption(value: unknown, key: string): string[] {
+  if (value === undefined) {
+    return [];
+  }
+
+  if (
+    Array.isArray(value) &&
+    value.every((item) => typeof item === "string" && item.trim())
+  ) {
+    return value.map((item) => item.trim());
+  }
+
+  throw new TryOnModelError(
+    `openai_invalid_${key.replace(/[^a-zA-Z0-9]/g, "_")}`,
+    `OpenAI option ${key} must be an array of strings`,
+    false,
+  );
+}
+
+function readSearchContextSize(value: unknown): string | undefined {
+  if (value === undefined) {
+    return "medium";
+  }
+
+  if (value === "low" || value === "medium" || value === "high") {
+    return value;
+  }
+
+  throw new TryOnModelError(
+    "openai_invalid_webSearchContextSize",
+    "OpenAI option webSearchContextSize must be low, medium or high",
+    false,
+  );
 }
 
 function readEnumOption<T extends string>(

@@ -104,14 +104,14 @@ export function createTelegramCallbackServer(
 
         callbackReplayGuard.remember(token.tokenId, token.expiresAt);
 
-        logger.info("Callback accepted, sending Telegram message", {
+        logger.info("Callback accepted, handing job result to bot", {
           jobId: body.jobId,
           chatId: body.client.chatId,
           messageLength: body.result.message.length,
           files: body.result.files?.length ?? 0,
         });
-        await bot.sendMessage(body.client.chatId, body.result.message);
-        logger.info("Callback delivered to Telegram chat", {
+        await bot.handleJobCallback(body);
+        logger.info("Callback handled by Telegram bot", {
           jobId: body.jobId,
           chatId: body.client.chatId,
         });

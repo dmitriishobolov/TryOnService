@@ -38,7 +38,7 @@
 - `HTTP_CLIENT_RETRIES` - количество повторов исходящих HTTP-вызовов worker.
 - `MAX_JSON_BODY_BYTES` - максимальный размер JSON body входящего запроса.
 
-Production API keys не хранятся в git. Для `npm run build:dist` значения API keys подтягиваются из `BUILD_ENV_FILE` и попадают в готовый пакет worker-а в `dist/packages/worker/.env`. Конкретный provider и provider model выбирает клиент в `payload.model`, а не worker env.
+Production API keys не хранятся в git. Для `npm run build:dist` значения API keys подтягиваются из `BUILD_ENV_FILE` и попадают в готовый пакет worker-а в `dist/packages/worker/.env`. Конкретный AI provider и provider model выбирает клиент в `payload.model`, marketplace lookup - в `payload.market`; worker env задает только доступные credentials, defaults и capabilities.
 
 ## Правила
 

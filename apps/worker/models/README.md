@@ -53,3 +53,42 @@
 - какие лимиты есть у provider'а.
 
 Runner выбирает adapter через `payload.model.provider`, а provider model берет из `payload.model.providerModel` с fallback на config adapter-а. Worker регистрирует capabilities `try-on`, `try-on.mock` и `try-on.<provider>` для provider-ов с настроенными ключами.
+
+## Добавление нового AI provider-а
+
+1. Добавьте имя provider-а в `TryOnModelProvider` и validator `isTryOnModelProvider` в [contracts](../../shared/contracts/index.ts). Если появляется новый тип задачи, добавьте его в `TryOnModelTask` и `isTryOnModelTask`.
+2. Создайте папку `apps/worker/models/<provider>/index.ts`. Adapter должен реализовать `TryOnModelAdapter`: указать `provider`, человекочитаемый `displayName` и метод `run(input)`.
+3. Подключите adapter в [models/index.ts](index.ts): импортируйте его и добавьте в массив `adapters`.
+4. Добавьте provider-specific config в [worker config](../config/index.ts): отдельный interface, чтение env в `loadWorkerConfig`, defaults и валидацию перечислений/чисел.
+5. Добавьте автоматическую capability в `readCapabilities()` через `syncProviderCapability(names, "<provider>", "<PROVIDER_API_KEY>")`. Coordinator выбирает worker-а по capability `try-on.<provider>`, поэтому без этого новые jobs не будут матчиться на нужный worker.
+6. Добавьте env-параметры в [.env.example](../../../.env.example) отдельным блоком `Worker AI provider: <Provider>`. Секреты оставляйте пустыми.
+7. Добавьте эти env keys в `worker.envKeys` в [scripts/build-dist.mjs](../../../scripts/build-dist.mjs) и в env whitelist [scripts/devtest.mjs](../../../scripts/devtest.mjs), иначе готовый `dist/packages/worker/.env` и `devtest/.env` потеряют настройки provider-а.
+8. Если provider возвращает файл или URL результата, сохраняйте результат через helpers из [providerUtils.ts](providerUtils.ts): `storeResultFromUrl`, `storeResultFromResponse`, `storeResultFromBuffer`, `createStoredResult`. В итоговом `TryOnJobResult.files` должны быть `StorageObjectRef`, а не бинарные данные.
+9. Для входных изображений используйте `selectTryOnInputFiles`, `selectInputFile`, `downloadInputImage` или `ensurePublicImageUrl`, в зависимости от того, принимает provider binary upload или публичный URL.
+10. Ошибки внешнего API приводите к `TryOnModelError` с понятным `code` и `retryable`. Для HTTP-ответов используйте `providerResponseError`/`fetchJson`, если подходит общий формат.
+11. Обновите этот README и [worker config README](../config/README.md): перечислите provider, особенности входных файлов, env и ограничения.
+12. Проверьте `npm run typecheck`, `npm run build:dist` и `npm run build:devtest`.
+
+Минимальный каркас adapter-а:
+
+```ts
+import type { TryOnModelAdapter } from "../types.js";
+import { requireApiKey, TryOnModelError } from "../providerUtils.js";
+
+const provider = "<provider>";
+
+export const myProviderTryOnAdapter: TryOnModelAdapter = {
+  provider,
+  displayName: "My Provider",
+  run: async ({ job, config, coordinator, signal }) => {
+    const apiKey = requireApiKey(provider, "MY_PROVIDER_API_KEY", config.myProvider.apiKey);
+
+    // 1. Прочитать inputFiles или публичные URLs.
+    // 2. Вызвать внешний API с timeout/retry policy.
+    // 3. Сохранить generated result в object storage.
+    // 4. Вернуть TryOnJobResult.
+
+    throw new TryOnModelError("my_provider_not_implemented", "Adapter is not implemented", false);
+  },
+};
+```

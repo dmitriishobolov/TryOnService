@@ -40,6 +40,7 @@
 - Сначала меняется contract, затем coordinator/worker/client.
 - Удаление поля считается breaking change.
 - Новые обязательные поля требуют миграционного плана.
+- Новый AI provider сначала добавляется в `TryOnModelProvider` и `isTryOnModelProvider`; новый marketplace provider - в `MarketProvider` и `isMarketProvider`.
 - `CreateTryOnJobRequest.sourceClientId` обязателен: jobs создаются только от зарегистрированного service client.
 - Статусы jobs и worker'ов должны быть перечислены явно, без неявных строковых литералов в коде приложений.
 - `delivery_failed` означает, что обработка завершилась и `result` есть, но callback клиенту не доставлен.

@@ -40,6 +40,8 @@ flowchart LR
     CoordinatorAPI -->|"worker endpoint + dispatch token"| Client
     Client -->|"direct job dispatch"| WorkerAPI["Worker API"]
     WorkerAPI --> Runner["Runner"]
+    Runner --> Market["Marketplace adapters"]
+    Market --> Marketplaces["AliExpress / Ozon / Wildberries"]
     Runner --> Models["AI API models"]
     Models --> AI["External AI APIs"]
     Runner -->|"status only"| CoordinatorAPI
@@ -79,8 +81,8 @@ Coordinator не принимает и не отдает бинарные фай
 - [apps](apps/README.md) - все приложения и общие пакеты монорепозитория.
 - [apps/coordinator](apps/coordinator/README.md) - сервис-координатор: API assignment, jobs state, registry worker'ов/service clients, assignment cleanup и coordinator utilities.
 - [apps/storage](apps/storage/README.md) - object storage node: самостоятельная регистрация в coordinator, heartbeat и прямой upload/download файлов.
-- [apps/worker](apps/worker/README.md) - исполняющий сервис: регистрация в coordinator, запуск пайплайнов, вызовы AI API.
-- [apps/shared](apps/shared/README.md) - общие контракты, DTO, типы и схемы валидации.
+- [apps/worker](apps/worker/README.md) - исполняющий сервис: регистрация в coordinator, запуск пайплайнов, вызовы AI API и marketplace adapters.
+- [apps/shared](apps/shared/README.md) - общие контракты, DTO, типы и runtime validators.
 - [apps/client](apps/client/README.md) - клиентские интеграции, через которые пользователи создают задачи.
 - `DemoPhotos/` - локальная игнорируемая папка для демонстрационных фотографий, не хранится в git.
 - `devtest/` - генерируемая и игнорируемая папка для изолированного локального test runtime: compiled app, logs и local object storage.
@@ -114,6 +116,7 @@ Worker:
 - сообщает о готовности, capacity и поддерживаемых моделях/пайплайнах;
 - держит pending assignments, принимает jobs от клиентов по signed dispatch token, запускает runner и обновляет статус выполнения;
 - выбирает adapter из `apps/worker/models` через `payload.model.provider`: доступны `mock`, `pruna`, `pixelcut`, `tryoncloud`, `genlook`, `wearfits`, `openai`;
+- выбирает marketplace adapters через `payload.market.providers`: доступны `aliexpress`, `ozon`, `wildberries`; найденные товары возвращаются в `TryOnJobResult.marketProducts`;
 - объявляет provider-specific capabilities только для настроенных API keys, чтобы coordinator не выдавал job на неподходящий worker;
 - для virtual try-on provider-ов ожидает в `payload.inputFiles` фото пользователя и фото одежды/товара, индексы задаются `TRYON_PERSON_IMAGE_INDEX` и `TRYON_GARMENT_IMAGE_INDEX`; OpenAI adapter использует фото пользователя для анализа внешности и wardrobe-рекомендаций, принимает `providerModel`/`options` из job и по умолчанию отправляет `store=false`;
 - отправляет клиентский результат напрямую в callback URL из assignment;
@@ -375,6 +378,7 @@ npm run build:dist
 ## Расширение системы
 
 - Новый AI provider добавляйте в [apps/worker/models](apps/worker/models/README.md).
+- Новый marketplace provider добавляйте в [apps/worker/market](apps/worker/market/README.md).
 - Новый сценарий обработки данных клиента добавляйте в [apps/worker/runner](apps/worker/runner/README.md).
 - Новый endpoint coordinator добавляйте в [apps/coordinator/api](apps/coordinator/api/README.md).
 - Новое состояние job или worker сначала описывайте в [apps/shared/contracts](apps/shared/contracts/README.md).
@@ -385,5 +389,6 @@ npm run build:dist
 - Contracts first: общие DTO и статусы должны жить в `apps/shared`.
 - Worker'ы должны быть максимально stateless: локально допустимы только временные файлы обработки.
 - Все внешние AI API должны быть закрыты адаптерами в `models`, чтобы runner не зависел от конкретного провайдера.
+- Все внешние marketplace API должны быть закрыты адаптерами в `market`, чтобы runner работал с единым `MarketProductRef`.
 - Jobs должны быть идемпотентными там, где это возможно: повторная обработка не должна ломать состояние клиента.
 - Секреты, API keys и токены не хранятся в git. Используйте `.env` или секрет-хранилище окружения.

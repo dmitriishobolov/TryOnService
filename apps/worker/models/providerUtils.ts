@@ -19,6 +19,7 @@ export class TryOnModelError extends Error {
     public readonly code: string,
     message: string,
     public readonly retryable: boolean,
+    public readonly retryAfterMs?: number,
   ) {
     super(message);
   }
@@ -272,14 +273,21 @@ export async function providerResponseError(
   const raw = await response.text().catch(() => "");
   const parsed = parseJson(raw);
   const message =
-    findStringByKeys(parsed, ["message", "detail", "error", "description"]) ??
+    findNestedStringByKeys(parsed, [
+      "message",
+      "detail",
+      "error",
+      "description",
+    ]) ??
     (raw.slice(0, 500) ||
       `${provider} request failed with status ${response.status}`);
+  const retryAfterMs = parseRetryAfterMs(response.headers, raw);
 
   return new TryOnModelError(
     `${provider}_api_${response.status}`,
     `${provider} request failed with status ${response.status}: ${message}`,
     response.status === 429 || response.status >= 500,
+    retryAfterMs,
   );
 }
 
@@ -488,6 +496,54 @@ function parseJson(raw: string): unknown {
   } catch {
     return undefined;
   }
+}
+
+function parseRetryAfterMs(
+  headers: Headers,
+  rawBody: string,
+): number | undefined {
+  const retryAfterMsHeader = parsePositiveNumber(
+    headers.get("retry-after-ms"),
+  );
+
+  if (retryAfterMsHeader) {
+    return Math.ceil(retryAfterMsHeader);
+  }
+
+  const retryAfterHeader = headers.get("retry-after");
+
+  if (retryAfterHeader) {
+    const seconds = parsePositiveNumber(retryAfterHeader);
+
+    if (seconds) {
+      return Math.ceil(seconds * 1_000);
+    }
+
+    const dateMs = Date.parse(retryAfterHeader);
+
+    if (Number.isFinite(dateMs)) {
+      return Math.max(0, dateMs - Date.now());
+    }
+  }
+
+  const retryInSeconds = /try again in\s+(\d+(?:\.\d+)?)s/i.exec(rawBody)?.[1];
+  const parsedRetryInSeconds = parsePositiveNumber(retryInSeconds);
+
+  return parsedRetryInSeconds
+    ? Math.ceil(parsedRetryInSeconds * 1_000)
+    : undefined;
+}
+
+function parsePositiveNumber(
+  value: string | undefined | null,
+): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const parsed = Number(value.trim());
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function findNestedStringByKeys(

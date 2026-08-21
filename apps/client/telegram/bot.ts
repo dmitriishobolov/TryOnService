@@ -1175,6 +1175,27 @@ export class TelegramBot {
     const parsed = parseJsonFromOpenAiMessage<IdealProductsResponse>(message);
 
     if (!parsed) {
+      if (isWorkerFailureMessage(message)) {
+        logger.warn("Ideal outfit product search failed in worker", {
+          chatId: pending.chatId,
+          outfitId: pending.outfit.id,
+          jobId: callback.jobId,
+          responseStart: message.slice(0, 300),
+        });
+        await this.updateIdealProgressMessage(
+          pending.chatId,
+          formatIdealProductProgress({
+            lookTitle: pending.outfit.title,
+            search: "сервер временно не выполнил запрос",
+            validation: "не запускалась",
+            generation: "не запускалась",
+          }),
+        );
+        this.clearIdealProgressMessage(pending.chatId);
+        await this.sendMessage(pending.chatId, message, mainMenuMarkup());
+        return;
+      }
+
       logger.warn("Ideal outfit product search returned non-json response", {
         chatId: pending.chatId,
         outfitId: pending.outfit.id,
@@ -2451,12 +2472,12 @@ function createIdealProductSearchModelSelection(
     options: {
       imageDetail: "low",
       textVerbosity: "low",
-      reasoningEffort: "medium",
+      reasoningEffort: "low",
       reasoningMode: "standard",
-      maxOutputTokens: Math.min(2_000 + maxCandidates * 180, 9_000),
+      maxOutputTokens: Math.min(1_400 + maxCandidates * 90, 4_200),
       store: false,
       webSearch: {
-        searchContextSize: "high",
+        searchContextSize: "low",
       },
     },
   };
@@ -3313,6 +3334,15 @@ function stripWorkerOpenAiPrefix(message: string): string {
   return message
     .replace(/^Ответ от сервера\. Провайдер: OpenAI\.\s*/i, "")
     .trim();
+}
+
+function isWorkerFailureMessage(message: string): boolean {
+  const text = stripWorkerOpenAiPrefix(message);
+
+  return (
+    text.startsWith("Не удалось выполнить подбор образа или товаров.") ||
+    text.startsWith("Сервер временно уперся в лимит OpenAI.")
+  );
 }
 
 function extractJsonObjectText(value: string): string | undefined {

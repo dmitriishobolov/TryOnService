@@ -69,6 +69,8 @@ Runner выбирает adapter через `payload.model.provider`, а provider
 
 OpenAI не принимает `web_search` вместе с `reasoningEffort=minimal`, а некоторые модели, например `gpt-5.6-luna`, не принимают `minimal` вообще. Adapter автоматически поднимает такие запросы до `low`, а клиентские сценарии, которые используют web search, vision-проверку товаров или image generation, должны сразу задавать `low`.
 
+Если OpenAI возвращает `429` по rate limit, adapter читает `retry-after` или подсказку `Please try again in ...s`, делает короткий backoff и повторяет Responses-запрос несколько раз перед тем, как пометить job failed.
+
 Для OpenAI vision-проверок клиент может передать дополнительные удаленные изображения:
 
 ```json

@@ -10,6 +10,7 @@ import {
   storeResultFromBuffer,
   TryOnModelError,
 } from "../providerUtils.js";
+import { sleep } from "../../../shared/http.js";
 import { createLogger } from "../../../shared/logger.js";
 import type {
   OpenAiImageDetail,
@@ -22,6 +23,9 @@ import type { TryOnModelAdapter } from "../types.js";
 const logger = createLogger("worker");
 const provider = "openai";
 const maxOpenAiRemoteInputImageBytes = 8 * 1024 * 1024;
+const maxOpenAiResponsesRetries = 4;
+const minOpenAiRetryDelayMs = 750;
+const maxOpenAiRetryDelayMs = 20_000;
 const blankInputImageDataUrl =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 const imageDetailValues = [
@@ -136,10 +140,10 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
         (image) => image.placeholder,
       ).length,
     });
-    const response = await fetchJson<unknown>(
-      provider,
-      joinUrl(config.openai.baseUrl, "/v1/responses"),
-      {
+    const response = await fetchOpenAiResponsesJson<unknown>({
+      jobId: job.jobId,
+      url: joinUrl(config.openai.baseUrl, "/v1/responses"),
+      init: {
         method: "POST",
         headers: openAiHeaders(apiKey, config),
         body: JSON.stringify({
@@ -183,9 +187,9 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
             : {}),
         }),
       },
-      config.tryOnModelHttpTimeoutMs,
+      timeoutMs: config.tryOnModelHttpTimeoutMs,
       signal,
-    );
+    });
     const outputText = extractOutputText(response);
     const generatedImages = extractGeneratedImages(response);
 
@@ -261,6 +265,80 @@ interface OpenAiPreparedInputImage {
   sourceUrl: string;
   contentType: string;
   placeholder: boolean;
+}
+
+async function fetchOpenAiResponsesJson<T>(params: {
+  jobId: string;
+  url: string;
+  init: RequestInit;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= maxOpenAiResponsesRetries; attempt += 1) {
+    try {
+      return await fetchJson<T>(
+        provider,
+        params.url,
+        params.init,
+        params.timeoutMs,
+        params.signal,
+      );
+    } catch (error) {
+      lastError = error;
+
+      if (
+        attempt >= maxOpenAiResponsesRetries ||
+        params.signal?.aborted ||
+        !shouldRetryOpenAiResponsesRequest(error)
+      ) {
+        break;
+      }
+
+      const delayMs = openAiRetryDelayMs(error, attempt);
+      logger.warn("OpenAI Responses request retry scheduled", {
+        jobId: params.jobId,
+        attempt: attempt + 1,
+        nextAttempt: attempt + 2,
+        maxAttempts: maxOpenAiResponsesRetries + 1,
+        delayMs,
+        errorCode:
+          error instanceof TryOnModelError ? error.code : "openai_request_failed",
+        retryAfterMs:
+          error instanceof TryOnModelError ? error.retryAfterMs : undefined,
+      });
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new TryOnModelError(
+        "openai_request_failed",
+        "OpenAI request failed",
+        true,
+      );
+}
+
+function shouldRetryOpenAiResponsesRequest(error: unknown): boolean {
+  return (
+    error instanceof TryOnModelError &&
+    error.retryable &&
+    error.code === "openai_api_429"
+  );
+}
+
+function openAiRetryDelayMs(error: unknown, attempt: number): number {
+  const retryAfterMs =
+    error instanceof TryOnModelError ? error.retryAfterMs : undefined;
+  const fallbackMs = 1_500 * (attempt + 1);
+  const withBufferMs = (retryAfterMs ?? fallbackMs) + 250;
+
+  return Math.max(
+    minOpenAiRetryDelayMs,
+    Math.min(maxOpenAiRetryDelayMs, Math.ceil(withBufferMs)),
+  );
 }
 
 function openAiHeaders(

@@ -94,6 +94,7 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
       config.openai.storeResponse,
     );
     const tools = buildTools(options);
+    const extraInputImageUrls = readRemoteImageUrls(options);
     logger.info("OpenAI Responses request started", {
       jobId: job.jobId,
       model,
@@ -108,6 +109,7 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
       inputBytes: personImage.buffer.length,
       promptLength: prompt.length,
       tools: tools.map((tool) => tool.type),
+      extraInputImages: extraInputImageUrls.length,
     });
     const response = await fetchJson<unknown>(
       provider,
@@ -129,20 +131,13 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
             },
             {
               role: "user",
-              content: [
-                {
-                  type: "input_text",
-                  text: prompt,
-                },
-                {
-                  type: "input_image",
-                  image_url: toDataUrl(
-                    personImage.buffer,
-                    inputContentType,
-                  ),
-                  detail: imageDetail,
-                },
-              ],
+              content: buildUserContent(
+                prompt,
+                personImage.buffer,
+                inputContentType,
+                imageDetail,
+                extraInputImageUrls,
+              ),
             },
           ],
           text: {
@@ -203,6 +198,17 @@ interface OpenAiToolConfig {
   search_context_size?: string;
 }
 
+type OpenAiInputContent =
+  | {
+      type: "input_text";
+      text: string;
+    }
+  | {
+      type: "input_image";
+      image_url: string;
+      detail: OpenAiImageDetail;
+    };
+
 function openAiHeaders(
   apiKey: string,
   config: WorkerConfig,
@@ -221,6 +227,31 @@ function openAiHeaders(
 
 function toDataUrl(buffer: Buffer, contentType: string): string {
   return `data:${contentType};base64,${buffer.toString("base64")}`;
+}
+
+function buildUserContent(
+  prompt: string,
+  personImageBuffer: Buffer,
+  inputContentType: string,
+  imageDetail: OpenAiImageDetail,
+  extraInputImageUrls: string[],
+): OpenAiInputContent[] {
+  return [
+    {
+      type: "input_text",
+      text: prompt,
+    },
+    {
+      type: "input_image",
+      image_url: toDataUrl(personImageBuffer, inputContentType),
+      detail: imageDetail,
+    },
+    ...extraInputImageUrls.map((imageUrl) => ({
+      type: "input_image" as const,
+      image_url: imageUrl,
+      detail: imageDetail,
+    })),
+  ];
 }
 
 function resolveOpenAiImageContentType(
@@ -394,6 +425,35 @@ function readStringArrayOption(value: unknown, key: string): string[] {
     `OpenAI option ${key} must be an array of strings`,
     false,
   );
+}
+
+function readRemoteImageUrls(options: Record<string, unknown>): string[] {
+  const urls = readStringArrayOption(
+    options.inputImageUrls ?? options.remoteImageUrls,
+    "inputImageUrls",
+  );
+
+  for (const url of urls) {
+    if (!isHttpUrl(url)) {
+      throw new TryOnModelError(
+        "openai_invalid_inputImageUrls",
+        "OpenAI option inputImageUrls must contain only http or https URLs",
+        false,
+      );
+    }
+  }
+
+  return urls.slice(0, 12);
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function readSearchContextSize(value: unknown): string | undefined {

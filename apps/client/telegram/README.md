@@ -28,16 +28,17 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 3. Сценарий `Идеальный образ` просит фото почти в полный рост, загружает его в storage-node и создает OpenAI job с `payload.model.task=wardrobe-recommendation`. Стопы или обувь могут не попадать в кадр.
 4. Если фото не подходит для почти полного роста, worker возвращает JSON-отказ, а бот просит прислать другое изображение.
 5. Если фото подходит, worker возвращает до 3 образов. Бот показывает описание каждого образа и кнопки `Образ 1`, `Образ 2`, `Образ 3`.
-6. После выбора образа бот создает второй OpenAI job с web search: worker ищет реальные товарные карточки, пропускает неподходящие фото и не добавляет дубли категорий внутри одного образа. Если на исходном фото обувь не видна, обувные категории не уходят в поиск.
-7. Бот отправляет пользователю найденные товары как фото с кратким описанием и inline-кнопкой `Перейти к товару`.
-8. Если пользователь нажал `Отмена`, бот сбрасывает текущее состояние и возвращает главное меню.
-9. Пользователь также может отправить `/request`, `/request openai` или фото с подписью `/request openai` для ручного legacy/demo flow.
-10. Telegram client запрашивает assignment через coordinator API и передает `sourceClientId`.
-11. Coordinator находит callback URL Telegram client, создает queued job, выбирает worker и отправляет worker-у prepare по этой job, когда capacity доступна.
-12. Coordinator возвращает signed dispatch token только после подтверждения worker prepare.
-13. Telegram client отправляет `workerRequest` напрямую выбранному worker'у.
-14. Worker обрабатывает job и отправляет callback в `POST /callbacks/jobs` с `x-client-callback-token`.
-15. Telegram client принимает callback, проверяет token/replay и передает результат в сценарный обработчик бота.
+6. После выбора образа бот создает второй OpenAI job с web search: worker ищет несколько кандидатов товарных карточек для каждого элемента образа. Если на исходном фото обувь не видна, обувные категории не уходят в поиск.
+7. Бот создает третий OpenAI vision job: worker получает найденные `imageUrl` как `payload.model.options.inputImageUrls` и проверяет, что на фото один товар без человека, манекена, других вещей, коллажей, текста и шумного фона.
+8. Бот отправляет пользователю только товары, которые прошли vision-проверку, как фото с кратким описанием и inline-кнопкой `Перейти к товару`. Для элементов без качественной карточки бот выводит отдельный список причин.
+9. Если пользователь нажал `Отмена`, бот сбрасывает текущее состояние и возвращает главное меню.
+10. Пользователь также может отправить `/request`, `/request openai` или фото с подписью `/request openai` для ручного legacy/demo flow.
+11. Telegram client запрашивает assignment через coordinator API и передает `sourceClientId`.
+12. Coordinator находит callback URL Telegram client, создает queued job, выбирает worker и отправляет worker-у prepare по этой job, когда capacity доступна.
+13. Coordinator возвращает signed dispatch token только после подтверждения worker prepare.
+14. Telegram client отправляет `workerRequest` напрямую выбранному worker'у.
+15. Worker обрабатывает job и отправляет callback в `POST /callbacks/jobs` с `x-client-callback-token`.
+16. Telegram client принимает callback, проверяет token/replay и передает результат в сценарный обработчик бота.
 
 ## Реализовано сейчас
 
@@ -47,8 +48,11 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - `Отмена` сбрасывает состояние ожидания фото или выбора образа.
 - Фото в сценарии разбора внешности создает OpenAI job с жестким prompt: если это не фото реального человека или лицо не видно, модель должна ответить отказом без анализа.
 - Фото в сценарии идеального образа создает OpenAI job со строгим JSON-ответом: `ok=false` для неподходящего фото или `ok=true` с массивом `outfits` и флагом `footwearVisible`.
-- По выбранному образу создается второй OpenAI job с `options.webSearch`, чтобы найти товарные карточки в интернете.
+- По выбранному образу создается второй OpenAI job с `options.webSearch`, чтобы найти кандидаты товарных карточек в интернете.
+- После web search создается отдельный OpenAI vision job с `options.inputImageUrls`, чтобы проверить изображения кандидатов до отправки пользователю.
 - Для одного образа бот дополнительно отбраковывает дубли категорий и повторяющиеся ссылки: если уже выбран худи, второй худи в подборку не попадет. Если `footwearVisible=false`, бот вырезает обувь из образа до запуска поиска товаров.
+- Финальная выдача принимает товар только если `imageCheck.approved=true` и все флаги `productOnly`, `noPerson`, `noMannequin`, `noOtherClothes`, `cleanBackground`, `fullyVisible`, `noTextOverlay` истинны.
+- Если по части образа, например куртке, не найдено чистое фото товара, бот явно показывает этот элемент в списке `Не удалось подобрать качественную карточку`.
 - Товар отправляется пользователю через `sendPhoto`, короткое описание попадает в caption, ссылка на карточку идет в inline-кнопку `Перейти к товару`.
 - `/request` создает mock/demo job в coordinator, ждет assignment при очереди и отправляет job worker'у напрямую.
 - Фото с подписью `/request openai` загружается в object storage и создает job с `payload.model.provider=openai`.
@@ -69,6 +73,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - `Callback handled by Telegram bot` - итоговый callback разобран ботом; дальше ищите события конкретного сценария.
 - `Ideal outfit plan job dispatched` - отправлен job на анализ full-body фото и подбор образов.
 - `Ideal outfit products job dispatched` - отправлен job на web search товарных карточек.
+- `Ideal outfit product validation job dispatched` - отправлен job на vision-проверку картинок товаров.
 - `Ideal outfit products delivered` - товары отправлены пользователю.
 
 Если первого события нет, проблема до worker dispatch. Если первое есть, а callback-событий нет, смотрите `devtest/logs/worker.log` по тому же `jobId`.

@@ -10,7 +10,7 @@
 - `tryoncloud` - TryOnCloud Developer API или Platform API. `developer` отправляет файлы и получает raw PNG, `platform` отправляет `user_image` + публичный `product_image_url`.
 - `genlook` - Genlook Try-On API: worker загружает person image, создает generation и polling-ом ждет результат. Auth header и paths вынесены в env.
 - `wearfits` - WEARFITS Virtual Try-On API: worker отправляет sync submit на `/api/v1/virtual-fitting`, затем polling-ом ждет job result.
-- `openai` - OpenAI/ChatGPT vision adapter: worker отправляет фото пользователя в Responses API как data URL и возвращает текстовый анализ внешности/гардероба. Поддерживает per-job options: `imageDetail`, `textVerbosity`, `reasoningEffort`, `reasoningMode`, `maxOutputTokens`, `store`, `webSearch`.
+- `openai` - OpenAI/ChatGPT vision adapter: worker отправляет фото пользователя в Responses API как data URL и возвращает текстовый анализ внешности/гардероба. Поддерживает per-job options: `imageDetail`, `textVerbosity`, `reasoningEffort`, `reasoningMode`, `maxOutputTokens`, `store`, `webSearch`, `inputImageUrls`.
 
 Для virtual try-on provider-ов worker ожидает минимум два `payload.inputFiles`: `TRYON_PERSON_IMAGE_INDEX` указывает фото пользователя, `TRYON_GARMENT_IMAGE_INDEX` - фото одежды/товара. OpenAI adapter использует только person image. Результат генеративных provider-ов сохраняется напрямую в object storage под `jobs/<jobId>/results/...`; coordinator получает только `StorageObjectRef` в `TryOnJobResult.files`.
 
@@ -66,6 +66,19 @@ Runner выбирает adapter через `payload.model.provider`, а provider
 ```
 
 `allowedDomains` опционален. Если он не передан, model сможет искать по открытой web выдаче. Telegram-сценарий `Идеальный образ` использует это для поиска товарных карточек после выбора образа.
+
+Для OpenAI vision-проверок клиент может передать дополнительные удаленные изображения:
+
+```json
+{
+  "inputImageUrls": [
+    "https://example.com/product-1.jpg",
+    "https://example.com/product-2.jpg"
+  ]
+}
+```
+
+Worker всегда добавляет основное фото пользователя из `payload.inputFiles` первым изображением, а затем добавляет `inputImageUrls` в указанном порядке. Сейчас это используется Telegram-сценарием `Идеальный образ`: после web search бот отправляет найденные product images на отдельную vision-проверку и показывает пользователю только карточки, где на фото один товар без человека, манекена, других вещей, коллажа, текста и шумного фона.
 
 ## Добавление нового AI provider-а
 

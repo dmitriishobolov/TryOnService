@@ -24,6 +24,12 @@ export class StorageObjectTooLargeError extends Error {
   }
 }
 
+export class StorageObjectNotFoundError extends Error {
+  constructor(public readonly key: string) {
+    super(`Storage object not found: ${key}`);
+  }
+}
+
 export interface PutStorageObjectRequest {
   key?: string;
   body: NodeJS.ReadableStream;
@@ -107,7 +113,18 @@ export class LocalObjectStorage implements ObjectStorage {
   async getObject(key: string): Promise<GetStorageObjectResponse> {
     const normalizedKey = normalizeStorageKey(key);
     const path = this.resolveObjectPath(normalizedKey);
-    const info = await stat(path);
+    let info: Awaited<ReturnType<typeof stat>>;
+
+    try {
+      info = await stat(path);
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        throw new StorageObjectNotFoundError(normalizedKey);
+      }
+
+      throw error;
+    }
+
     const ref =
       this.metadata.get(normalizedKey) ??
       this.createRef(normalizedKey, info.size, undefined, undefined);
@@ -222,6 +239,10 @@ export class S3CompatibleObjectStorage implements ObjectStorage {
       method: "GET",
       headers,
     });
+
+    if (response.status === 404) {
+      throw new StorageObjectNotFoundError(normalizedKey);
+    }
 
     if (!response.ok || !response.body) {
       throw new Error(`S3 GET failed with status ${response.status}`);
@@ -537,6 +558,15 @@ function readContentLength(headers: Headers): number | undefined {
   const value = Number(headers.get("content-length"));
 
   return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "ENOENT"
+  );
 }
 
 function normalizeHeaders(headers: Record<string, string>): Record<string, string> {

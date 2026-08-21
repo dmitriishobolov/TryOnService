@@ -13,6 +13,7 @@ import { createLogger } from "../../shared/logger.js";
 import { FixedWindowRateLimiter } from "../../shared/rateLimit.js";
 import {
   normalizeStorageKey,
+  StorageObjectNotFoundError,
   StorageObjectTooLargeError,
   type ObjectStorage,
 } from "../../shared/storage/index.js";
@@ -170,6 +171,16 @@ export function createStorageServer(deps: StorageServerDeps): Server {
 
       writeError(response, 404, "not_found", "Route not found");
     } catch (error) {
+      if (error instanceof StorageObjectNotFoundError) {
+        writeError(
+          response,
+          404,
+          "object_not_found",
+          `Storage object not found: ${error.key}`,
+        );
+        return;
+      }
+
       if (error instanceof StorageObjectTooLargeError) {
         writeError(
           response,

@@ -32,17 +32,18 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 7. Если фото подходит, worker возвращает до 3 образов. Бот показывает описание каждого образа и кнопки `Образ 1`, `Образ 2`, `Образ 3`.
 8. После выбора образа бот показывает одно редактируемое status-сообщение и дальше обновляет в нем этапы `Поиск товаров`, `Проверка фото`, `Генерация карточек`, вместо серии технических сообщений. Затем бот создает второй OpenAI job с широким web search: worker ищет до 10 кандидатов товарных карточек для каждого элемента образа, с приоритетом рублей, российских магазинов, доставки по РФ и Москвы/Московского региона, если это видно в выдаче. Ozon, Wildberries, AliExpress Russia и Яндекс Маркет остаются приоритетными источниками, но поиск ими не ограничен. Если на исходном фото обувь не видна, обувные категории не уходят в поиск.
 9. Бот создает третий OpenAI vision job: worker получает найденные `imageUrl` как `payload.model.options.inputImageUrls` и проверяет, можно ли из изображения надежно выделить один целевой товар в чистую карточку. Фото на человеке, модели или манекене допустимо, если форма, цвет, крой и детали предмета хорошо видны.
-10. Для каждого принятого кандидата бот создает отдельный OpenAI image generation job с `options.imageGeneration` и `toolChoice=required`. Worker генерирует PNG-карточку в portrait canvas: один предмет, фронтальный вид, белый фон, 12-18% свободного поля вокруг вещи, без человека, манекена, других вещей и текста.
-11. Worker сохраняет сгенерированную карточку в object storage и возвращает ее в `result.files`. Бот скачивает clean-card из storage и отправляет ее в Telegram как multipart-файл через `sendPhoto`, поэтому dev/local storage URL вида `localhost` не должен быть публично доступен Telegram. Ссылка на исходную товарную карточку идет в inline-кнопку `Перейти к товару`.
-12. Для элементов без надежного кандидата или без сгенерированной карточки бот выводит отдельный список причин.
-13. Если пользователь нажал `Отмена` в шаге ожидания фото или выбора образа, бот сбрасывает текущее состояние и возвращает главное меню. Во время уже отправленного job отмена не выполняется и бот просит дождаться результата.
-14. Пользователь также может отправить `/request`, `/request openai` или фото с подписью `/request openai` для ручного legacy/demo flow.
-15. Telegram client запрашивает assignment через coordinator API и передает `sourceClientId`.
-16. Coordinator находит callback URL Telegram client, создает queued job, выбирает worker и отправляет worker-у prepare по этой job, когда capacity доступна.
-17. Coordinator возвращает signed dispatch token только после подтверждения worker prepare.
-18. Telegram client отправляет `workerRequest` напрямую выбранному worker'у.
-19. Worker обрабатывает job и отправляет callback в `POST /callbacks/jobs` с `x-client-callback-token`.
-20. Telegram client принимает callback, проверяет token/replay и передает результат в сценарный обработчик бота.
+10. Перед генерацией clean-card бот проверяет клиентский cache в storage по нормализованной ссылке товара. Ключи лежат в `clients/<clientId>/product-card-cache/<hash-prefix>/<sha256(productUrl)>.png`, рядом сохраняется JSON metadata с исходным URL товара и описанием.
+11. Если карточка уже есть в cache, бот использует ее без нового OpenAI image generation job. Если cache miss, для каждого принятого кандидата бот создает отдельный OpenAI image generation job с `options.imageGeneration` и `toolChoice=required`. Worker генерирует PNG-карточку в portrait canvas: один предмет, фронтальный вид, белый фон, 12-18% свободного поля вокруг вещи, без человека, манекена, других вещей и текста.
+12. Worker сохраняет сгенерированную карточку в object storage и возвращает ее в `result.files`. Бот копирует clean-card в product-card cache, затем скачивает ее из storage и отправляет в Telegram как multipart-файл через `sendPhoto`, поэтому dev/local storage URL вида `localhost` не должен быть публично доступен Telegram. Ссылка на исходную товарную карточку идет в inline-кнопку `Перейти к товару`.
+13. Для элементов без надежного кандидата или без сгенерированной карточки бот выводит отдельный список причин.
+14. Если пользователь нажал `Отмена` в шаге ожидания фото или выбора образа, бот сбрасывает текущее состояние и возвращает главное меню. Во время уже отправленного job отмена не выполняется и бот просит дождаться результата.
+15. Пользователь также может отправить `/request`, `/request openai` или фото с подписью `/request openai` для ручного legacy/demo flow.
+16. Telegram client запрашивает assignment через coordinator API и передает `sourceClientId`.
+17. Coordinator находит callback URL Telegram client, создает queued job, выбирает worker и отправляет worker-у prepare по этой job, когда capacity доступна.
+18. Coordinator возвращает signed dispatch token только после подтверждения worker prepare.
+19. Telegram client отправляет `workerRequest` напрямую выбранному worker'у.
+20. Worker обрабатывает job и отправляет callback в `POST /callbacks/jobs` с `x-client-callback-token`.
+21. Telegram client принимает callback, проверяет token/replay и передает результат в сценарный обработчик бота.
 
 ## Реализовано сейчас
 
@@ -62,6 +63,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - Поиск товаров просит несколько разных формулировок для каждого элемента образа и старается вернуть запас кандидатов до vision-отсева. Для жакетов и верхнего слоя prompt отдельно расширяет запросы через `жакет`, `пиджак`, `блейзер`, `рубашка-жакет`, `overshirt`, `легкая куртка` и близкие цвета. Фильтр клиента сопоставляет товары по category и slot, поэтому `поло`, `чиносы`, `жакет`, `кардиган`, `жилет` и близкие названия не должны отбрасываться из-за формулировки.
 - Для одного образа бот дополнительно отбраковывает дубли категорий и повторяющиеся ссылки: если уже выбран худи, второй худи в подборку не попадет. Если `footwearVisible=false`, бот вырезает обувь из образа до запуска поиска товаров.
 - Для каждого принятого товара бот запускает отдельный OpenAI job с `options.imageGeneration` и `toolChoice=required`, чтобы получить чистое изображение товара на белом фоне.
+- Перед запуском такого job бот проверяет product-card cache в своем storage namespace по нормализованному `productUrl`. Повторная ссылка товара переиспользует уже сгенерированный PNG и не тратит новый AI-запрос. После новой генерации бот копирует PNG из `jobs/<jobId>/results/...` в `clients/<clientId>/product-card-cache/...` и сохраняет рядом `.json` metadata с URL товара.
 - Если по части образа, например куртке, не найден надежный кандидат или не удалось сгенерировать clean card, бот явно показывает этот элемент в списке `Не удалось подобрать качественную карточку`.
 - Сгенерированная clean card скачивается ботом из storage и отправляется пользователю через `sendPhoto` multipart upload; короткое описание попадает в caption, ссылка на исходную карточку идет в inline-кнопку `Перейти к товару`.
 - `/request` создает mock/demo job в coordinator, ждет assignment при очереди и отправляет job worker'у напрямую.
@@ -86,6 +88,9 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - `Ideal outfit plan job dispatched` - отправлен job на анализ full-body фото и подбор образов.
 - `Ideal outfit products job dispatched` - отправлен job на web search товарных карточек.
 - `Ideal outfit product validation job dispatched` - отправлен job на vision-проверку пригодности картинок товаров к clean-card генерации.
+- `Ideal outfit clean product card cache hit` - clean-card товара уже есть в storage cache, новый image generation job не запускался.
+- `Ideal outfit clean product card cache miss` - clean-card товара в storage cache нет, бот продолжит обычную генерацию.
+- `Ideal outfit clean product card cached` - fresh clean-card скопирована в storage cache по ссылке товара.
 - `Ideal outfit clean product card generation job dispatched` - отправлен job на генерацию чистой карточки товара.
 - `Ideal outfit products delivered` - товары отправлены пользователю.
 

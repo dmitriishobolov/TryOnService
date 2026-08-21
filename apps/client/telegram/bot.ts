@@ -1,10 +1,11 @@
 import { Blob } from "node:buffer";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { sleep } from "../../shared/http.js";
 import { createLogger } from "../../shared/logger.js";
 import type {
   StorageObjectRef,
+  StorageAccessAssignment,
   TelegramJobCallbackRequest,
   TryOnJobCreateResponse,
   TryOnJobQueuedResponse,
@@ -170,6 +171,13 @@ interface IdealProduct {
   source?: string;
   whyFits?: string;
   originalImageUrl?: string;
+}
+
+interface IdealProductCardCacheRef {
+  keyPrefix: string;
+  imageKey: string;
+  metadataKey: string;
+  canonicalProductUrl: string;
 }
 
 interface IdealMissingItem {
@@ -562,6 +570,240 @@ export class TelegramBot {
       contentType,
       sizeBytes: buffer.length,
     };
+  }
+
+  private async getCachedIdealProductCard(
+    chatId: string,
+    product: IdealProduct,
+  ): Promise<IdealProduct | undefined> {
+    const cache = createIdealProductCardCacheRef(
+      this.config.clientId,
+      product.productUrl,
+    );
+
+    try {
+      const storage = await this.requestProductCardCacheAccess(cache, "read");
+      const response = await fetchWithTimeout(
+        storageObjectUrl(storage.objectBaseUrl, cache.imageKey),
+        {
+          method: "GET",
+          headers: {
+            "x-storage-access-token": storage.accessToken,
+          },
+        },
+        this.config.httpClientTimeoutMs,
+      );
+
+      if (response.status === 404) {
+        await response.body?.cancel();
+        logger.info("Ideal outfit clean product card cache miss", {
+          chatId,
+          key: cache.imageKey,
+          productUrl: product.productUrl,
+        });
+        return undefined;
+      }
+
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`Product card cache lookup failed with ${response.status}`);
+      }
+
+      await response.body?.cancel();
+
+      return {
+        ...product,
+        originalImageUrl: product.originalImageUrl ?? product.imageUrl,
+        imageUrl: storageObjectAccessUrl(
+          storage.objectBaseUrl,
+          cache.imageKey,
+          storage.accessToken,
+        ),
+      };
+    } catch (error) {
+      logger.warn("Ideal outfit clean product card cache lookup failed", {
+        chatId,
+        category: product.category,
+        title: product.title,
+        productUrl: product.productUrl,
+        error,
+      });
+      return undefined;
+    }
+  }
+
+  private async cacheIdealProductCard(
+    chatId: string,
+    product: IdealProduct,
+    generatedFile: StorageObjectRef,
+  ): Promise<StorageObjectRef | undefined> {
+    if (!generatedFile.url) {
+      return undefined;
+    }
+
+    const cache = createIdealProductCardCacheRef(
+      this.config.clientId,
+      product.productUrl,
+    );
+
+    try {
+      const storage = await this.requestProductCardCacheAccess(
+        cache,
+        "read-write",
+      );
+      const sourceResponse = await fetchWithTimeout(
+        generatedFile.url,
+        {
+          method: "GET",
+          headers: {
+            Accept: "image/*,*/*;q=0.8",
+          },
+        },
+        this.config.httpClientTimeoutMs,
+      );
+
+      if (!sourceResponse.ok || !sourceResponse.body) {
+        await sourceResponse.body?.cancel();
+        throw new Error(
+          `Generated product card download failed with ${sourceResponse.status}`,
+        );
+      }
+
+      const contentType =
+        sourceResponse.headers.get("content-type") ??
+        generatedFile.contentType ??
+        "image/png";
+      const uploadResponse = await fetchWithTimeout(
+        storageObjectUrl(storage.objectBaseUrl, cache.imageKey),
+        {
+          method: "PUT",
+          headers: {
+            "content-type": contentType,
+            "x-storage-access-token": storage.accessToken,
+          },
+          body: sourceResponse.body,
+          duplex: "half",
+        } as RequestInit,
+        this.config.httpClientTimeoutMs,
+      );
+
+      if (!uploadResponse.ok) {
+        throw new Error(
+          `Product card cache upload failed with ${uploadResponse.status}`,
+        );
+      }
+
+      const payload = (await uploadResponse.json()) as {
+        object?: StorageObjectRef;
+      };
+
+      if (!payload.object) {
+        throw new Error("Product card cache upload did not return metadata");
+      }
+
+      try {
+        await this.putIdealProductCardCacheMetadata(storage, cache, product, {
+          imageKey: payload.object.key,
+          sourceGeneratedKey: generatedFile.key,
+          contentType: payload.object.contentType ?? contentType,
+          sizeBytes: payload.object.sizeBytes,
+        });
+      } catch (metadataError) {
+        logger.warn("Ideal outfit clean product card cache metadata failed", {
+          chatId,
+          key: payload.object.key,
+          metadataKey: cache.metadataKey,
+          productUrl: product.productUrl,
+          error: metadataError,
+        });
+      }
+
+      logger.info("Ideal outfit clean product card cached", {
+        chatId,
+        key: payload.object.key,
+        metadataKey: cache.metadataKey,
+        category: product.category,
+        title: product.title,
+        productUrl: product.productUrl,
+      });
+
+      return {
+        ...payload.object,
+        url: storageObjectAccessUrl(
+          storage.objectBaseUrl,
+          payload.object.key,
+          storage.accessToken,
+        ),
+      };
+    } catch (error) {
+      logger.warn("Ideal outfit clean product card cache write failed", {
+        chatId,
+        category: product.category,
+        title: product.title,
+        productUrl: product.productUrl,
+        generatedKey: generatedFile.key,
+        error,
+      });
+      return undefined;
+    }
+  }
+
+  private async putIdealProductCardCacheMetadata(
+    storage: StorageAccessAssignment,
+    cache: IdealProductCardCacheRef,
+    product: IdealProduct,
+    cached: {
+      imageKey: string;
+      sourceGeneratedKey: string;
+      contentType?: string;
+      sizeBytes?: number;
+    },
+  ): Promise<void> {
+    const response = await fetchWithTimeout(
+      storageObjectUrl(storage.objectBaseUrl, cache.metadataKey),
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "x-storage-access-token": storage.accessToken,
+        },
+        body: JSON.stringify({
+          version: 1,
+          cachedAt: new Date().toISOString(),
+          productUrl: product.productUrl,
+          canonicalProductUrl: cache.canonicalProductUrl,
+          title: product.title,
+          category: product.category,
+          slot: product.slot,
+          source: product.source,
+          price: product.price,
+          sourceImageUrl: product.originalImageUrl ?? product.imageUrl,
+          imageKey: cached.imageKey,
+          sourceGeneratedKey: cached.sourceGeneratedKey,
+          contentType: cached.contentType,
+          sizeBytes: cached.sizeBytes,
+        }),
+      },
+      this.config.httpClientTimeoutMs,
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Product card cache metadata upload failed with ${response.status}`,
+      );
+    }
+  }
+
+  private async requestProductCardCacheAccess(
+    cache: IdealProductCardCacheRef,
+    scope: "read" | "read-write",
+  ): Promise<StorageAccessAssignment> {
+    const { storage } = await this.coordinator.requestStorageAccess({
+      scope,
+      keyPrefix: cache.keyPrefix,
+    });
+
+    return storage;
   }
 
   private async handleUpdate(update: TelegramUpdate): Promise<void> {
@@ -1561,6 +1803,39 @@ export class TelegramBot {
       generatedProducts.length + remainingProducts.length + 1;
     const currentProductIndex = generatedProducts.length + 1;
 
+    const cachedProduct = await this.getCachedIdealProductCard(
+      chatId,
+      product,
+    );
+
+    if (cachedProduct) {
+      logger.info("Ideal outfit clean product card cache hit", {
+        chatId,
+        outfitId: outfit.id,
+        category: product.category,
+        title: product.title,
+        productUrl: product.productUrl,
+      });
+      await this.updateIdealProgressMessage(
+        chatId,
+        formatIdealProductProgress({
+          lookTitle: outfit.title,
+          search: "готово",
+          validation: "готово",
+          generation: `готово ${generatedProducts.length + 1}/${totalProducts}, взято из кэша: ${product.category}`,
+        }),
+      );
+      await this.continueOrDeliverGeneratedProducts({
+        chatId,
+        outfit,
+        remainingProducts,
+        generatedProducts: [...generatedProducts, cachedProduct],
+        missingItems,
+        inputFiles,
+      });
+      return;
+    }
+
     try {
       logger.info("Ideal outfit clean product card generation requested", {
         chatId,
@@ -1662,18 +1937,22 @@ export class TelegramBot {
     callback: TelegramJobCallbackRequest,
   ): Promise<void> {
     const generatedFile = callback.result.files?.find((file) => file.url);
-    const generatedProducts = generatedFile?.url
+    const cachedFile = generatedFile
+      ? await this.cacheIdealProductCard(pending.chatId, pending.product, generatedFile)
+      : undefined;
+    const productCardFile = cachedFile ?? generatedFile;
+    const generatedProducts = productCardFile?.url
       ? [
           ...pending.generatedProducts,
           {
             ...pending.product,
             originalImageUrl:
               pending.product.originalImageUrl ?? pending.product.imageUrl,
-            imageUrl: generatedFile.url,
+            imageUrl: productCardFile.url,
           },
         ]
       : pending.generatedProducts;
-    const missingItems = generatedFile?.url
+    const missingItems = productCardFile?.url
       ? pending.missingItems
       : mergeMissingItems(pending.missingItems, [
           {
@@ -1690,7 +1969,7 @@ export class TelegramBot {
         lookTitle: pending.outfit.title,
         search: "готово",
         validation: "готово",
-        generation: generatedFile?.url
+        generation: productCardFile?.url
           ? `готово ${generatedProducts.length}/${totalProducts}, продолжаю`
           : `не удалось сгенерировать ${pending.product.category}, продолжаю`,
       }),
@@ -3463,6 +3742,82 @@ function encodeStorageKey(key: string): string {
 
 function storageObjectUrl(objectBaseUrl: string, key: string): string {
   return `${objectBaseUrl.replace(/\/$/, "")}/${encodeStorageKey(key)}`;
+}
+
+function storageObjectAccessUrl(
+  objectBaseUrl: string,
+  key: string,
+  accessToken: string,
+): string {
+  const url = new URL(storageObjectUrl(objectBaseUrl, key));
+  url.searchParams.set("accessToken", accessToken);
+
+  return url.toString();
+}
+
+function createIdealProductCardCacheRef(
+  clientId: string,
+  productUrl: string,
+): IdealProductCardCacheRef {
+  const canonicalProductUrl = canonicalProductUrlForCache(productUrl);
+  const hash = createHash("sha256")
+    .update(canonicalProductUrl)
+    .digest("hex");
+  const keyPrefix = `clients/${clientId}/product-card-cache/${hash.slice(0, 2)}`;
+
+  return {
+    keyPrefix,
+    imageKey: `${keyPrefix}/${hash}.png`,
+    metadataKey: `${keyPrefix}/${hash}.json`,
+    canonicalProductUrl,
+  };
+}
+
+function canonicalProductUrlForCache(value: string): string {
+  const trimmed = value.trim();
+
+  try {
+    const url = new URL(trimmed);
+    const searchParams = [...url.searchParams.entries()]
+      .filter(([key]) => !isTrackingSearchParam(key))
+      .sort(([keyA, valueA], [keyB, valueB]) =>
+        keyA === keyB ? valueA.localeCompare(valueB) : keyA.localeCompare(keyB),
+      );
+
+    url.hash = "";
+    url.search = "";
+    url.hostname = url.hostname.toLowerCase();
+    url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+
+    for (const [key, paramValue] of searchParams) {
+      url.searchParams.append(key, paramValue);
+    }
+
+    return url.toString();
+  } catch {
+    return trimmed.replace(/\s+/g, " ");
+  }
+}
+
+function isTrackingSearchParam(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+
+  return (
+    normalized.startsWith("utm_") ||
+    [
+      "fbclid",
+      "gclid",
+      "gbraid",
+      "yclid",
+      "wbraid",
+      "msclkid",
+      "spm",
+      "scm",
+      "algo_pvid",
+      "click_id",
+      "clickid",
+    ].includes(normalized)
+  );
 }
 
 function sanitizeStorageFilename(path: string): string {

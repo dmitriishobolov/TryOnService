@@ -38,7 +38,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 
 Если клиент не указал `payload.model.provider`, runner использует `mock` и возвращает текст `Ответ от сервера.`. Клиент может запросить `pruna`, `pixelcut`, `tryoncloud`, `genlook`, `wearfits` или `openai`; worker примет job только если у него есть соответствующая capability. Если `providerModel` не передан, adapter использует свой fallback из config. Подробности в [models](models/README.md) и [config](config/README.md).
 
-Marketplace lookup включается только если клиент передал `payload.market`. Сейчас доступны `aliexpress`, `ozon` и `wildberries`; worker примет provider в поиск только если он включен в `MARKET_PROVIDERS` и доступен выбранный adapter. Ozon и Wildberries работают через public parsers без seller-token; AliExpress использует Open Platform / Affiliate API. При `MARKET_STORAGE_CACHE_ENABLED=true` worker сначала проверяет distributed storage catalog, а после live-поиска сохраняет `market-search`/`market-product` cache entries. Подробности и инструкция по добавлению новых marketplace provider-ов находятся в [market](market/README.md).
+Marketplace lookup включается только если клиент передал `payload.market`. Сейчас доступны `aliexpress`, `ozon`, `wildberries`, `tsum`, `tsum-outlet` и `ostin`; worker примет provider в поиск только если он включен в `MARKET_PROVIDERS` и доступен выбранный adapter. Ozon, Wildberries, TSUM, TSUM Outlet и O'STIN работают через public parsers без seller-token; AliExpress использует Open Platform / Affiliate API. При `MARKET_STORAGE_CACHE_ENABLED=true` worker сначала проверяет distributed storage catalog, а после live-поиска сохраняет `market-search`/`market-product` cache entries. Подробности и инструкция по добавлению новых marketplace provider-ов находятся в [market](market/README.md).
 
 ## Расширение worker-а
 
@@ -58,4 +58,4 @@ Marketplace lookup включается только если клиент пе�
 - Конкретные AI providers изолируются в `models`.
 - Runner описывает бизнес-пайплайн, но не знает деталей HTTP API конкретного AI provider.
 - Все входные и выходные данные сверяются с контрактами из `apps/shared`.
-- Marketplace providers изолируются в `market`, чтобы runner не зависел от API AliExpress/Ozon/Wildberries.
+- Marketplace providers изолируются в `market`, чтобы runner не зависел от API или HTML-структуры конкретного marketplace/catalog сайта.

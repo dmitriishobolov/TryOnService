@@ -311,7 +311,19 @@ function marketplaceName(provider: MarketProductRef["provider"]): string {
     return "Ozon";
   }
 
-  return "Wildberries";
+  if (provider === "wildberries") {
+    return "Wildberries";
+  }
+
+  if (provider === "tsum") {
+    return "TSUM";
+  }
+
+  if (provider === "tsum-outlet") {
+    return "TSUM Outlet";
+  }
+
+  return "O'STIN";
 }
 
 async function deliverFailureCallback(

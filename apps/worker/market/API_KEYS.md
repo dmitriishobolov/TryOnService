@@ -29,6 +29,18 @@ WILDBERRIES_PUBLIC_DEST=-1257786
 
 Parser получает JSON выдачу, нормализует `id`, `name`, `brand`, `sizes[0].price.product`, `rating`, `feedbacks`, строит ссылку на товар и image URL через WB basket CDN. Ключ WB seller кабинета для этого сценария не нужен.
 
+## TSUM, TSUM Outlet и O'STIN
+
+Текущие adapter-ы `tsum`, `tsum-outlet` и `ostin` не используют API keys. Они работают как public HTML catalog parsers:
+
+```env
+TSUM_PUBLIC_SEARCH_BASE_URL=https://www.tsum.ru/catalog/search/
+TSUM_OUTLET_PUBLIC_SEARCH_BASE_URL=https://outlet.tsum.ru/catalog/search/
+OSTIN_PUBLIC_SEARCH_BASE_URL=https://ostin.com/search
+```
+
+Parser открывает search/catalog HTML, извлекает JSON-LD `ItemList/Product`, ссылки `/product/...`, meta-теги, изображения и ограниченно читает карточки товаров. Если сайт возвращает QRator/captcha/anti-bot challenge вместо HTML, worker не обходит защиту, а включает cooldown и использует stale-cache, если он уже есть.
+
 ## AliExpress Open Platform / Affiliate API
 
 Worker использует:
@@ -75,6 +87,9 @@ ALIEXPRESS_TRACKING_ID=
    - `market.aliexpress`
    - `market.ozon` (ключи не нужны)
    - `market.wildberries` (ключи не нужны)
+   - `market.tsum` (ключи не нужны)
+   - `market.tsum-outlet` (ключи не нужны)
+   - `market.ostin` (ключи не нужны)
 4. Если собираете deploy-пакет, запустите:
 
 ```bash
@@ -86,7 +101,7 @@ npm run build:dist
 ## Безопасность
 
 - Не передавайте marketplace keys клиентам. Если provider требует keys, они должны жить только в worker env.
-- Для Ozon/Wildberries текущие public parsers не используют seller keys.
+- Для Ozon/Wildberries/TSUM/TSUM Outlet/O'STIN текущие public parsers не используют seller keys.
 - Храните ключи в secret manager или защищенном `.env` на сервере.
 - Сразу ротируйте ключ при подозрении на утечку.
 - Не отправляйте реальные ключи в чат, issue tracker или git.
@@ -95,6 +110,9 @@ npm run build:dist
 
 - Ozon public parsing article: https://habr.com/ru/companies/amvera/articles/960280/
 - Wildberries public parsing article: https://habr.com/ru/companies/amvera/articles/948988/
+- TSUM catalog: https://www.tsum.ru/
+- TSUM Outlet catalog: https://outlet.tsum.ru/
+- O'STIN catalog: https://ostin.com/
 - AliExpress Open Platform getting started: https://developer.alibaba.com/docs/doc.htm?articleId=120672&docType=1&treeId=727
 - AliExpress register application: https://developer.alibaba.com/docs/doc.htm?articleId=120674&docType=1&treeId=727
 - AliExpress retrieve App Key and App Secret: https://developer.alibaba.com/docs/doc.htm?articleId=120675&docType=1&treeId=727

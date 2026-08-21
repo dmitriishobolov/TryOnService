@@ -6,12 +6,15 @@ import type {
 import { createLogger } from "../../shared/logger.js";
 import type { WorkerConfig } from "../config/index.js";
 import { aliexpressMarketplaceAdapter } from "./aliexpress/index.js";
+import { ostinMarketplaceAdapter } from "./ostin/index.js";
 import { ozonMarketplaceAdapter } from "./ozon/index.js";
 import type {
   MarketplaceAdapter,
   MarketplaceSearchInput,
   MarketplaceSearchResult,
 } from "./types.js";
+import { tsumMarketplaceAdapter } from "./tsum/index.js";
+import { tsumOutletMarketplaceAdapter } from "./tsumOutlet/index.js";
 import { MarketplaceError } from "./utils.js";
 import { wildberriesMarketplaceAdapter } from "./wildberries/index.js";
 
@@ -22,6 +25,9 @@ const adapters = new Map<MarketProvider, MarketplaceAdapter>(
     aliexpressMarketplaceAdapter,
     ozonMarketplaceAdapter,
     wildberriesMarketplaceAdapter,
+    tsumMarketplaceAdapter,
+    tsumOutletMarketplaceAdapter,
+    ostinMarketplaceAdapter,
   ].map((adapter) => [adapter.provider, adapter]),
 );
 

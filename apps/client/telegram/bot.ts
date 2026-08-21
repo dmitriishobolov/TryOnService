@@ -228,7 +228,13 @@ const legacyAppearanceAnalysisButtonText = "Разбор внешности";
 const idealOutfitButtonText = "Идеальный образ";
 const cancelButtonText = "Отмена";
 const idealCandidatesPerOutfitItem = 10;
-const idealMarketProviders: MarketProvider[] = ["ozon", "wildberries"];
+const idealMarketProviders: MarketProvider[] = [
+  "ozon",
+  "wildberries",
+  "tsum",
+  "tsum-outlet",
+  "ostin",
+];
 
 const appearanceAnalysisPrompt = `
 Ты выполняешь разбор внешности только по фотографии реального человека.
@@ -1550,7 +1556,7 @@ export class TelegramBot {
         chatId,
         formatIdealProductProgress({
           lookTitle: outfit.title,
-          search: `выполняется через парсеры Ozon/Wildberries: 0/${searchState.totalJobs}`,
+          search: `выполняется через парсеры ${marketplaceNames(idealMarketProviders)}: 0/${searchState.totalJobs}`,
           validation: "ожидает",
           generation: "ожидает",
         }),
@@ -1605,7 +1611,7 @@ export class TelegramBot {
       pending.chatId,
       formatIdealProductProgress({
         lookTitle: pending.outfit.title,
-        search: `выполняется через парсеры Ozon/Wildberries: ${Math.min(searchState.completedJobs, searchState.totalJobs)}/${searchState.totalJobs}, найдено ${formatCandidateCount(searchState.candidates.length)}`,
+        search: `выполняется через парсеры ${marketplaceNames(pending.marketProviders)}: ${Math.min(searchState.completedJobs, searchState.totalJobs)}/${searchState.totalJobs}, найдено ${formatCandidateCount(searchState.candidates.length)}`,
         validation: "ожидает",
         generation: "ожидает",
       }),
@@ -1645,7 +1651,7 @@ export class TelegramBot {
         searchState.chatId,
         formatIdealProductProgress({
           lookTitle: searchState.outfit.title,
-          search: "готово, парсеры Ozon/Wildberries не дали подходящих кандидатов",
+          search: `готово, парсеры ${marketplaceNames(idealMarketProviders)} не дали подходящих кандидатов`,
           validation: "не запускалась",
           generation: "не запускалась",
         }),
@@ -1657,7 +1663,7 @@ export class TelegramBot {
           searchState.outfit,
           [],
           missingItems,
-          "Не нашел кандидаты товаров через Ozon/Wildberries для этого образа.",
+          `Не нашел кандидаты товаров через ${marketplaceNames(idealMarketProviders)} для этого образа.`,
         ),
         mainMenuMarkup(),
       );
@@ -1668,7 +1674,7 @@ export class TelegramBot {
       searchState.chatId,
       formatIdealProductProgress({
         lookTitle: searchState.outfit.title,
-        search: `готово, найдено ${formatCandidateCount(candidates.length)} через Ozon/Wildberries`,
+        search: `готово, найдено ${formatCandidateCount(candidates.length)} через ${marketplaceNames(idealMarketProviders)}`,
         validation: "создаю запрос проверки",
         generation: "ожидает",
       }),
@@ -3646,6 +3652,18 @@ function marketplaceName(provider: MarketProductRef["provider"]): string {
 
   if (provider === "wildberries") {
     return "Wildberries";
+  }
+
+  if (provider === "tsum") {
+    return "TSUM";
+  }
+
+  if (provider === "tsum-outlet") {
+    return "TSUM Outlet";
+  }
+
+  if (provider === "ostin") {
+    return "O'STIN";
   }
 
   return "AliExpress";

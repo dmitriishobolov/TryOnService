@@ -117,6 +117,27 @@ export interface OzonMarketConfig {
   productUrlTemplate: string;
 }
 
+export interface PublicHtmlCatalogMarketConfig {
+  publicSearchBaseUrl: string;
+  publicProductBaseUrl: string;
+  publicSearchParamName: string;
+  publicSearchPages: number;
+  publicUserAgent: string;
+  publicCacheTtlMs: number;
+  publicCacheStaleTtlMs: number;
+  publicCacheMaxEntries: number;
+  publicErrorCooldownMs: number;
+  publicRequestIntervalMs: number;
+  maxScanProducts: number;
+  productUrlTemplate: string;
+}
+
+export interface TsumMarketConfig extends PublicHtmlCatalogMarketConfig {}
+
+export interface TsumOutletMarketConfig extends PublicHtmlCatalogMarketConfig {}
+
+export interface OstinMarketConfig extends PublicHtmlCatalogMarketConfig {}
+
 export interface WildberriesMarketConfig {
   locale: string;
   productUrlTemplate: string;
@@ -141,6 +162,9 @@ export interface WorkerMarketConfig {
   aliexpress: AliExpressMarketConfig;
   ozon: OzonMarketConfig;
   wildberries: WildberriesMarketConfig;
+  tsum: TsumMarketConfig;
+  tsumOutlet: TsumOutletMarketConfig;
+  ostin: OstinMarketConfig;
 }
 
 export interface WorkerConfig {
@@ -342,7 +366,10 @@ function readAliExpressSignMethod(): AliExpressSignMethod {
 }
 
 function readMarketProviders(): MarketProvider[] {
-  const raw = readString("MARKET_PROVIDERS", "aliexpress,ozon,wildberries");
+  const raw = readString(
+    "MARKET_PROVIDERS",
+    "aliexpress,ozon,wildberries,tsum,tsum-outlet,ostin",
+  );
   const providers = raw
     .split(",")
     .map((provider) => provider.trim().toLowerCase())
@@ -356,13 +383,16 @@ function readMarketProviders(): MarketProvider[] {
     if (
       provider === "aliexpress" ||
       provider === "ozon" ||
-      provider === "wildberries"
+      provider === "wildberries" ||
+      provider === "tsum" ||
+      provider === "tsum-outlet" ||
+      provider === "ostin"
     ) {
       return provider;
     }
 
     throw new Error(
-      "MARKET_PROVIDERS must include only aliexpress, ozon or wildberries",
+      "MARKET_PROVIDERS must include only aliexpress, ozon, wildberries, tsum, tsum-outlet or ostin",
     );
   });
 }
@@ -390,6 +420,9 @@ function readCapabilities(): WorkerCapability[] {
   ]);
   syncPublicMarketCapability(names, "ozon");
   syncPublicMarketCapability(names, "wildberries");
+  syncPublicMarketCapability(names, "tsum");
+  syncPublicMarketCapability(names, "tsum-outlet");
+  syncPublicMarketCapability(names, "ostin");
 
   return [...names].map((name) => ({ name }));
 }
@@ -678,6 +711,135 @@ export function loadWorkerConfig(): WorkerConfig {
         publicErrorCooldownMs: readNonNegativeInteger(
           "WILDBERRIES_PUBLIC_ERROR_COOLDOWN_MS",
           60_000,
+        ),
+      },
+      tsum: {
+        publicSearchBaseUrl: readString(
+          "TSUM_PUBLIC_SEARCH_BASE_URL",
+          "https://www.tsum.ru/catalog/search/",
+        ),
+        publicProductBaseUrl: readString(
+          "TSUM_PUBLIC_PRODUCT_BASE_URL",
+          "https://www.tsum.ru",
+        ),
+        publicSearchParamName: readString("TSUM_PUBLIC_SEARCH_PARAM_NAME", "q"),
+        publicSearchPages: readNumber("TSUM_PUBLIC_SEARCH_PAGES", 1),
+        publicUserAgent: readString(
+          "TSUM_PUBLIC_USER_AGENT",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        ),
+        publicCacheTtlMs: readNonNegativeInteger(
+          "TSUM_PUBLIC_CACHE_TTL_MS",
+          30 * 60 * 1_000,
+        ),
+        publicCacheStaleTtlMs: readNonNegativeInteger(
+          "TSUM_PUBLIC_CACHE_STALE_TTL_MS",
+          24 * 60 * 60 * 1_000,
+        ),
+        publicCacheMaxEntries: readNonNegativeInteger(
+          "TSUM_PUBLIC_CACHE_MAX_ENTRIES",
+          500,
+        ),
+        publicErrorCooldownMs: readNonNegativeInteger(
+          "TSUM_PUBLIC_ERROR_COOLDOWN_MS",
+          60_000,
+        ),
+        publicRequestIntervalMs: readNonNegativeInteger(
+          "TSUM_PUBLIC_REQUEST_INTERVAL_MS",
+          1_200,
+        ),
+        maxScanProducts: readNumber("TSUM_MAX_SCAN_PRODUCTS", 12),
+        productUrlTemplate: readString(
+          "TSUM_PRODUCT_URL_TEMPLATE",
+          "https://www.tsum.ru/product/{productSlug}",
+        ),
+      },
+      tsumOutlet: {
+        publicSearchBaseUrl: readString(
+          "TSUM_OUTLET_PUBLIC_SEARCH_BASE_URL",
+          "https://outlet.tsum.ru/catalog/search/",
+        ),
+        publicProductBaseUrl: readString(
+          "TSUM_OUTLET_PUBLIC_PRODUCT_BASE_URL",
+          "https://outlet.tsum.ru",
+        ),
+        publicSearchParamName: readString(
+          "TSUM_OUTLET_PUBLIC_SEARCH_PARAM_NAME",
+          "q",
+        ),
+        publicSearchPages: readNumber("TSUM_OUTLET_PUBLIC_SEARCH_PAGES", 1),
+        publicUserAgent: readString(
+          "TSUM_OUTLET_PUBLIC_USER_AGENT",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        ),
+        publicCacheTtlMs: readNonNegativeInteger(
+          "TSUM_OUTLET_PUBLIC_CACHE_TTL_MS",
+          30 * 60 * 1_000,
+        ),
+        publicCacheStaleTtlMs: readNonNegativeInteger(
+          "TSUM_OUTLET_PUBLIC_CACHE_STALE_TTL_MS",
+          24 * 60 * 60 * 1_000,
+        ),
+        publicCacheMaxEntries: readNonNegativeInteger(
+          "TSUM_OUTLET_PUBLIC_CACHE_MAX_ENTRIES",
+          500,
+        ),
+        publicErrorCooldownMs: readNonNegativeInteger(
+          "TSUM_OUTLET_PUBLIC_ERROR_COOLDOWN_MS",
+          60_000,
+        ),
+        publicRequestIntervalMs: readNonNegativeInteger(
+          "TSUM_OUTLET_PUBLIC_REQUEST_INTERVAL_MS",
+          1_200,
+        ),
+        maxScanProducts: readNumber("TSUM_OUTLET_MAX_SCAN_PRODUCTS", 12),
+        productUrlTemplate: readString(
+          "TSUM_OUTLET_PRODUCT_URL_TEMPLATE",
+          "https://outlet.tsum.ru/product/{productSlug}",
+        ),
+      },
+      ostin: {
+        publicSearchBaseUrl: readString(
+          "OSTIN_PUBLIC_SEARCH_BASE_URL",
+          "https://ostin.com/search",
+        ),
+        publicProductBaseUrl: readString(
+          "OSTIN_PUBLIC_PRODUCT_BASE_URL",
+          "https://ostin.com",
+        ),
+        publicSearchParamName: readString(
+          "OSTIN_PUBLIC_SEARCH_PARAM_NAME",
+          "search",
+        ),
+        publicSearchPages: readNumber("OSTIN_PUBLIC_SEARCH_PAGES", 1),
+        publicUserAgent: readString(
+          "OSTIN_PUBLIC_USER_AGENT",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        ),
+        publicCacheTtlMs: readNonNegativeInteger(
+          "OSTIN_PUBLIC_CACHE_TTL_MS",
+          30 * 60 * 1_000,
+        ),
+        publicCacheStaleTtlMs: readNonNegativeInteger(
+          "OSTIN_PUBLIC_CACHE_STALE_TTL_MS",
+          24 * 60 * 60 * 1_000,
+        ),
+        publicCacheMaxEntries: readNonNegativeInteger(
+          "OSTIN_PUBLIC_CACHE_MAX_ENTRIES",
+          500,
+        ),
+        publicErrorCooldownMs: readNonNegativeInteger(
+          "OSTIN_PUBLIC_ERROR_COOLDOWN_MS",
+          60_000,
+        ),
+        publicRequestIntervalMs: readNonNegativeInteger(
+          "OSTIN_PUBLIC_REQUEST_INTERVAL_MS",
+          1_200,
+        ),
+        maxScanProducts: readNumber("OSTIN_MAX_SCAN_PRODUCTS", 12),
+        productUrlTemplate: readString(
+          "OSTIN_PRODUCT_URL_TEMPLATE",
+          "https://ostin.com/product/{productSlug}/{productId}",
         ),
       },
     },

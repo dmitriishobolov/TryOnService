@@ -321,7 +321,7 @@ Coordinator сам подставит trusted callback URL из registry по `s
 {
   "market": {
     "query": "черная кожаная куртка прямого кроя",
-    "providers": ["aliexpress", "ozon", "wildberries"],
+    "providers": ["aliexpress", "ozon", "wildberries", "tsum", "tsum-outlet", "ostin"],
     "limit": 6,
     "required": false
   }

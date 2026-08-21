@@ -32,7 +32,13 @@ export type TryOnModelTask =
   | "try-on"
   | "appearance-analysis"
   | "wardrobe-recommendation";
-export type MarketProvider = "aliexpress" | "ozon" | "wildberries";
+export type MarketProvider =
+  | "aliexpress"
+  | "ozon"
+  | "wildberries"
+  | "tsum"
+  | "tsum-outlet"
+  | "ostin";
 
 export interface TelegramClientRef {
   type: "telegram";
@@ -441,7 +447,12 @@ export function isCreateTryOnJobRequest(
 
 export function isMarketProvider(value: unknown): value is MarketProvider {
   return (
-    value === "aliexpress" || value === "ozon" || value === "wildberries"
+    value === "aliexpress" ||
+    value === "ozon" ||
+    value === "wildberries" ||
+    value === "tsum" ||
+    value === "tsum-outlet" ||
+    value === "ostin"
   );
 }
 

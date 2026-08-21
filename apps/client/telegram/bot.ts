@@ -32,6 +32,10 @@ interface TelegramPhotoUpload {
   sizeBytes: number;
 }
 
+interface IdealProgressMessage {
+  messageId: number;
+}
+
 interface TelegramUser {
   username?: string;
 }
@@ -223,6 +227,14 @@ const idealProductSearchPriorityDomains = [
   "zarina.ru",
   "stockmann.ru",
   "brandshop.ru",
+  "ostin.com",
+  "finn-flare.com",
+  "baon.ru",
+  "snowqueen.ru",
+  "12storeez.com",
+  "2moodstore.com",
+  "tsum.ru",
+  "ladygentleman.ru",
 ];
 
 const appearanceAnalysisPrompt = `
@@ -316,6 +328,7 @@ export class TelegramBot {
   private updateOffset = 0;
   private readonly sessions = new Map<string, ChatSession>();
   private readonly pendingJobs = new Map<string, PendingJob>();
+  private readonly idealProgressMessages = new Map<string, IdealProgressMessage>();
 
   constructor(
     private readonly config: TelegramClientConfig,
@@ -352,6 +365,57 @@ export class TelegramBot {
     replyMarkup?: TelegramReplyMarkup,
   ): Promise<unknown> {
     return this.sendFormattedMessage(chatId, text, replyMarkup);
+  }
+
+  private async updateIdealProgressMessage(
+    chatId: string,
+    text: string,
+  ): Promise<void> {
+    const existing = this.idealProgressMessages.get(chatId);
+
+    if (existing) {
+      try {
+        await this.callApi("editMessageText", {
+          chat_id: chatId,
+          message_id: existing.messageId,
+          text: markdownToTelegramHtml(text),
+          parse_mode: "HTML",
+          disable_web_page_preview: true,
+        });
+        return;
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+
+        if (message.includes("message is not modified")) {
+          return;
+        }
+
+        logger.warn("Failed to edit ideal progress message, sending a new one", {
+          chatId,
+          messageId: existing.messageId,
+          error,
+        });
+        this.idealProgressMessages.delete(chatId);
+      }
+    }
+
+    const sent = await this.sendFormattedMessage(
+      chatId,
+      text,
+      processingMarkup(),
+    );
+    const messageId = readTelegramMessageId(sent);
+
+    if (messageId) {
+      this.idealProgressMessages.set(chatId, {
+        messageId,
+      });
+    }
+  }
+
+  private clearIdealProgressMessage(chatId: string): void {
+    this.idealProgressMessages.delete(chatId);
   }
 
   async handleJobCallback(callback: TelegramJobCallbackRequest): Promise<void> {
@@ -1010,6 +1074,15 @@ export class TelegramBot {
     let pendingJobId: string | undefined;
 
     try {
+      await this.updateIdealProgressMessage(
+        chatId,
+        formatIdealProductProgress({
+          lookTitle: outfit.title,
+          search: "создаю запрос",
+          validation: "ожидает",
+          generation: "ожидает",
+        }),
+      );
       logger.info("Ideal outfit product search requested", {
         chatId,
         outfitId: outfit.id,
@@ -1039,10 +1112,14 @@ export class TelegramBot {
       this.sessions.delete(chatId);
 
       if (isQueuedJobResponse(assignment)) {
-        await this.sendMessage(
+        await this.updateIdealProgressMessage(
           chatId,
-          `Образ выбран. Запрос ${assignment.job.id} поставлен в очередь, ищу подходящие товары.`,
-          processingMarkup(),
+          formatIdealProductProgress({
+            lookTitle: outfit.title,
+            search: `в очереди, запрос ${assignment.job.id}`,
+            validation: "ожидает",
+            generation: "ожидает",
+          }),
         );
         void this.waitForAssignmentAndDispatch(
           chatId,
@@ -1059,10 +1136,14 @@ export class TelegramBot {
         workerId: assignment.worker.workerId,
         outfitId: outfit.id,
       });
-      await this.sendMessage(
+      await this.updateIdealProgressMessage(
         chatId,
-        `Образ выбран: **${outfit.title}**. Ищу товары с подходящими фото.`,
-        processingMarkup(),
+        formatIdealProductProgress({
+          lookTitle: outfit.title,
+          search: "выполняется на сервере",
+          validation: "ожидает",
+          generation: "ожидает",
+        }),
       );
     } catch (error) {
       if (pendingJobId) {
@@ -1073,6 +1154,7 @@ export class TelegramBot {
         outfitId: outfit.id,
         error,
       });
+      this.clearIdealProgressMessage(chatId);
       await this.sendMessage(
         chatId,
         "Не удалось запустить поиск товаров. Попробуйте выбрать образ еще раз.",
@@ -1095,6 +1177,16 @@ export class TelegramBot {
         jobId: callback.jobId,
         responseStart: message.slice(0, 300),
       });
+      await this.updateIdealProgressMessage(
+        pending.chatId,
+        formatIdealProductProgress({
+          lookTitle: pending.outfit.title,
+          search: "ошибка обработки ответа",
+          validation: "не запускалась",
+          generation: "не запускалась",
+        }),
+      );
+      this.clearIdealProgressMessage(pending.chatId);
       await this.sendMessage(
         pending.chatId,
         "Поиск товаров временно не выполнился из-за ошибки обработки. Попробуйте выбрать образ еще раз через минуту.",
@@ -1104,6 +1196,16 @@ export class TelegramBot {
     }
 
     if (parsed.ok !== true) {
+      await this.updateIdealProgressMessage(
+        pending.chatId,
+        formatIdealProductProgress({
+          lookTitle: pending.outfit.title,
+          search: parsed?.errorMessage ?? "товары не найдены",
+          validation: "не запускалась",
+          generation: "не запускалась",
+        }),
+      );
+      this.clearIdealProgressMessage(pending.chatId);
       await this.sendMessage(
         pending.chatId,
         parsed?.errorMessage ??
@@ -1129,6 +1231,16 @@ export class TelegramBot {
     });
 
     if (candidates.length === 0) {
+      await this.updateIdealProgressMessage(
+        pending.chatId,
+        formatIdealProductProgress({
+          lookTitle: pending.outfit.title,
+          search: "готово, подходящих кандидатов после фильтра нет",
+          validation: "не запускалась",
+          generation: "не запускалась",
+        }),
+      );
+      this.clearIdealProgressMessage(pending.chatId);
       await this.sendMessage(
         pending.chatId,
         formatMissingProductsMessage(
@@ -1142,6 +1254,15 @@ export class TelegramBot {
       return;
     }
 
+    await this.updateIdealProgressMessage(
+      pending.chatId,
+      formatIdealProductProgress({
+        lookTitle: pending.outfit.title,
+        search: `готово, найдено ${formatCandidateCount(candidates.length)}`,
+        validation: "создаю запрос проверки",
+        generation: "ожидает",
+      }),
+    );
     await this.createIdealProductValidationRequest(
       pending,
       candidates,
@@ -1181,10 +1302,14 @@ export class TelegramBot {
       });
 
       if (isQueuedJobResponse(assignment)) {
-        await this.sendMessage(
+        await this.updateIdealProgressMessage(
           pending.chatId,
-          `Нашёл ${formatCandidateCount(candidates.length)}. Запрос ${assignment.job.id} поставлен в очередь, проверяю фото товаров.`,
-          processingMarkup(),
+          formatIdealProductProgress({
+            lookTitle: pending.outfit.title,
+            search: `готово, найдено ${formatCandidateCount(candidates.length)}`,
+            validation: `в очереди, запрос ${assignment.job.id}`,
+            generation: "ожидает",
+          }),
         );
         void this.waitForAssignmentAndDispatch(
           pending.chatId,
@@ -1201,10 +1326,14 @@ export class TelegramBot {
         workerId: assignment.worker.workerId,
         outfitId: pending.outfit.id,
       });
-      await this.sendMessage(
+      await this.updateIdealProgressMessage(
         pending.chatId,
-        `Нашёл ${formatCandidateCount(candidates.length)}. Проверяю, какие товары можно аккуратно превратить в чистые карточки.`,
-        processingMarkup(),
+        formatIdealProductProgress({
+          lookTitle: pending.outfit.title,
+          search: `готово, найдено ${formatCandidateCount(candidates.length)}`,
+          validation: "выполняется на сервере",
+          generation: "ожидает",
+        }),
       );
     } catch (error) {
       if (pendingJobId) {
@@ -1215,6 +1344,16 @@ export class TelegramBot {
         outfitId: pending.outfit.id,
         error,
       });
+      await this.updateIdealProgressMessage(
+        pending.chatId,
+        formatIdealProductProgress({
+          lookTitle: pending.outfit.title,
+          search: `готово, найдено ${formatCandidateCount(candidates.length)}`,
+          validation: "не удалось запустить проверку",
+          generation: "не запускалась",
+        }),
+      );
+      this.clearIdealProgressMessage(pending.chatId);
       await this.sendMessage(
         pending.chatId,
         "Не удалось проверить фото товаров. Попробуйте выбрать образ еще раз.",
@@ -1307,6 +1446,19 @@ export class TelegramBot {
     fallbackMessage?: string,
   ): Promise<void> {
     if (products.length === 0) {
+      await this.updateIdealProgressMessage(
+        chatId,
+        formatIdealProductProgress({
+          lookTitle: outfit.title,
+          search: "готово",
+          validation: "товары не прошли проверку",
+          generation: "не запускалась",
+          note:
+            fallbackMessage ??
+            "Не осталось товаров после проверки фото: не нашлось кандидатов, из которых можно надежно сделать чистую карточку товара.",
+        }),
+      );
+      this.clearIdealProgressMessage(chatId);
       await this.sendMessage(
         chatId,
         formatMissingProductsMessage(
@@ -1322,7 +1474,16 @@ export class TelegramBot {
     }
 
     if (fallbackMessage) {
-      await this.sendMessage(chatId, fallbackMessage, processingMarkup());
+      await this.updateIdealProgressMessage(
+        chatId,
+        formatIdealProductProgress({
+          lookTitle: outfit.title,
+          search: "готово",
+          validation: "использую fallback-кандидаты",
+          generation: "готовлю генерацию",
+          note: fallbackMessage,
+        }),
+      );
     }
 
     const [firstProduct, ...remainingProducts] = products;
@@ -1341,6 +1502,15 @@ export class TelegramBot {
       return;
     }
 
+    await this.updateIdealProgressMessage(
+      chatId,
+      formatIdealProductProgress({
+        lookTitle: outfit.title,
+        search: "готово",
+        validation: "готово",
+        generation: `готовлю товар 1/${products.length}: ${firstProduct.category}`,
+      }),
+    );
     await this.createIdealProductCardGenerationRequest(
       chatId,
       outfit,
@@ -1362,6 +1532,9 @@ export class TelegramBot {
     inputFiles: StorageObjectRef[],
   ): Promise<void> {
     let pendingJobId: string | undefined;
+    const totalProducts =
+      generatedProducts.length + remainingProducts.length + 1;
+    const currentProductIndex = generatedProducts.length + 1;
 
     try {
       logger.info("Ideal outfit clean product card generation requested", {
@@ -1391,10 +1564,14 @@ export class TelegramBot {
       });
 
       if (isQueuedJobResponse(assignment)) {
-        await this.sendMessage(
+        await this.updateIdealProgressMessage(
           chatId,
-          `Генерирую чистую карточку товара: ${product.category}. Запрос ${assignment.job.id} поставлен в очередь.`,
-          processingMarkup(),
+          formatIdealProductProgress({
+            lookTitle: outfit.title,
+            search: "готово",
+            validation: "готово",
+            generation: `в очереди, товар ${currentProductIndex}/${totalProducts}: ${product.category}, запрос ${assignment.job.id}`,
+          }),
         );
         void this.waitForAssignmentAndDispatch(
           chatId,
@@ -1411,10 +1588,14 @@ export class TelegramBot {
         workerId: assignment.worker.workerId,
         category: product.category,
       });
-      await this.sendMessage(
+      await this.updateIdealProgressMessage(
         chatId,
-        `Генерирую чистую карточку товара: ${product.category}.`,
-        processingMarkup(),
+        formatIdealProductProgress({
+          lookTitle: outfit.title,
+          search: "готово",
+          validation: "готово",
+          generation: `выполняется, товар ${currentProductIndex}/${totalProducts}: ${product.category}`,
+        }),
       );
     } catch (error) {
       if (pendingJobId) {
@@ -1425,6 +1606,15 @@ export class TelegramBot {
         category: product.category,
         error,
       });
+      await this.updateIdealProgressMessage(
+        chatId,
+        formatIdealProductProgress({
+          lookTitle: outfit.title,
+          search: "готово",
+          validation: "готово",
+          generation: `ошибка запуска для товара ${currentProductIndex}/${totalProducts}: ${product.category}`,
+        }),
+      );
       await this.continueOrDeliverGeneratedProducts({
         chatId,
         outfit,
@@ -1467,6 +1657,19 @@ export class TelegramBot {
             reason: "Не удалось получить сгенерированную чистую карточку товара",
           },
         ]);
+    const totalProducts =
+      pending.generatedProducts.length + pending.remainingProducts.length + 1;
+    await this.updateIdealProgressMessage(
+      pending.chatId,
+      formatIdealProductProgress({
+        lookTitle: pending.outfit.title,
+        search: "готово",
+        validation: "готово",
+        generation: generatedFile?.url
+          ? `готово ${generatedProducts.length}/${totalProducts}, продолжаю`
+          : `не удалось сгенерировать ${pending.product.category}, продолжаю`,
+      }),
+    );
 
     await this.continueOrDeliverGeneratedProducts({
       chatId: pending.chatId,
@@ -1519,6 +1722,21 @@ export class TelegramBot {
     missingItems: IdealMissingItem[],
   ): Promise<void> {
     if (products.length === 0) {
+      await this.updateIdealProgressMessage(
+        chatId,
+        formatMissingProductsMessage(
+          {
+            id: "look",
+            title: lookTitle,
+            summary: "",
+            items: [],
+          },
+          products,
+          missingItems,
+          "Не удалось подготовить чистые карточки товаров для этого образа.",
+        ),
+      );
+      this.clearIdealProgressMessage(chatId);
       await this.sendMessage(
         chatId,
         formatMissingProductsMessage(
@@ -1537,7 +1755,7 @@ export class TelegramBot {
       return;
     }
 
-    await this.sendMessage(
+    await this.updateIdealProgressMessage(
       chatId,
       formatProductSelectionIntro(lookTitle, products, missingItems),
     );
@@ -1565,6 +1783,11 @@ export class TelegramBot {
     }
 
     if (delivered === 0) {
+      await this.updateIdealProgressMessage(
+        chatId,
+        `${formatProductSelectionIntro(lookTitle, products, missingItems)}\n\nКарточки нашлись, но Telegram не смог загрузить их изображения.`,
+      );
+      this.clearIdealProgressMessage(chatId);
       await this.sendMessage(
         chatId,
         "Карточки нашлись, но Telegram не смог загрузить их изображения. Попробуйте другой образ.",
@@ -1573,6 +1796,11 @@ export class TelegramBot {
       return;
     }
 
+    await this.updateIdealProgressMessage(
+      chatId,
+      `${formatProductSelectionIntro(lookTitle, products, missingItems)}\n\nОтправлено карточек: ${delivered}.`,
+    );
+    this.clearIdealProgressMessage(chatId);
     await this.sendMessage(chatId, "Подборка готова.", mainMenuMarkup());
 
     logger.info("Ideal outfit products delivered", {
@@ -1724,6 +1952,9 @@ export class TelegramBot {
           assignment.job.id,
           assignment.worker.workerId,
         );
+        if (await this.updateQueuedIdealProgress(chatId, assignment.job.id)) {
+          return;
+        }
         await this.sendMessage(
           chatId,
           `Запрос ${assignment.job.id} отправлен на сервер. Ожидаю ответ.`,
@@ -1741,6 +1972,23 @@ export class TelegramBot {
       }
     }
 
+    const pending = this.pendingJobs.get(jobId);
+    if (
+      pending?.flow === "ideal-products" ||
+      pending?.flow === "ideal-products-validation" ||
+      pending?.flow === "ideal-product-card-generation"
+    ) {
+      await this.updateIdealProgressMessage(
+        chatId,
+        formatIdealProductProgress({
+          lookTitle: pending.outfit.title,
+          search: "очередь не освободилась",
+          validation: "проверьте позже",
+          generation: "проверьте позже",
+        }),
+      );
+      this.clearIdealProgressMessage(chatId);
+    }
     await this.sendMessage(
       chatId,
       `Запрос ${jobId} все еще в очереди. Попробуйте проверить позже.`,
@@ -1751,6 +1999,57 @@ export class TelegramBot {
       chatId,
       jobId,
     });
+  }
+
+  private async updateQueuedIdealProgress(
+    chatId: string,
+    jobId: string,
+  ): Promise<boolean> {
+    const pending = this.pendingJobs.get(jobId);
+
+    if (pending?.flow === "ideal-products") {
+      await this.updateIdealProgressMessage(
+        chatId,
+        formatIdealProductProgress({
+          lookTitle: pending.outfit.title,
+          search: "выполняется на сервере",
+          validation: "ожидает",
+          generation: "ожидает",
+        }),
+      );
+      return true;
+    }
+
+    if (pending?.flow === "ideal-products-validation") {
+      await this.updateIdealProgressMessage(
+        chatId,
+        formatIdealProductProgress({
+          lookTitle: pending.outfit.title,
+          search: `готово, найдено ${formatCandidateCount(pending.candidates.length)}`,
+          validation: "выполняется на сервере",
+          generation: "ожидает",
+        }),
+      );
+      return true;
+    }
+
+    if (pending?.flow === "ideal-product-card-generation") {
+      const totalProducts =
+        pending.generatedProducts.length + pending.remainingProducts.length + 1;
+      const currentProductIndex = pending.generatedProducts.length + 1;
+      await this.updateIdealProgressMessage(
+        chatId,
+        formatIdealProductProgress({
+          lookTitle: pending.outfit.title,
+          search: "готово",
+          validation: "готово",
+          generation: `выполняется, товар ${currentProductIndex}/${totalProducts}: ${pending.product.category}`,
+        }),
+      );
+      return true;
+    }
+
+    return false;
   }
 
   private logScenarioJobDispatched(
@@ -2148,7 +2447,7 @@ function createIdealProductSearchModelSelection(
     options: {
       imageDetail: "low",
       textVerbosity: "low",
-      reasoningEffort: "low",
+      reasoningEffort: "medium",
       reasoningMode: "standard",
       maxOutputTokens: Math.min(2_000 + maxCandidates * 180, 9_000),
       store: false,
@@ -2218,7 +2517,7 @@ function createIdealProductCardGenerationModelSelection(
       imageGeneration: {
         model: "gpt-image-1",
         quality: "medium",
-        size: "1024x1024",
+        size: "1024x1536",
         background: "opaque",
         outputFormat: "png",
         inputFidelity: "low",
@@ -2246,8 +2545,10 @@ ${JSON.stringify(compactOutfitForPrompt(outfit))}
 - Ozon, Wildberries, AliExpress Russia и Яндекс Маркет хороши, но можно брать любой интернет-магазин, если товар реально продается онлайн;
 - до ${idealCandidatesPerOutfitItem} кандидатов на каждый item, всего не больше ${maxCandidates};
 - для каждого item сделай несколько разных поисковых формулировок: исходный searchQuery, "купить", "руб", "Москва", "доставка по России" и 2-3 приоритетных магазина;
+- для жакета/пиджака/верхнего слоя обязательно пробуй синонимы: "жакет", "пиджак", "блейзер", "рубашка-жакет", "overshirt", "легкая куртка"; для цветов пробуй близкие "серый", "серо-бежевый", "бежевый", "тауп", "графит", "темно-серый";
 - стремись вернуть минимум 3-5 кандидатов на каждый item, если рынок вообще что-то дает;
 - не останавливайся после 1-2 товаров: сначала ищи альтернативные магазины и близкие формулировки;
+- missingItems можно добавлять только после расширенного поиска по синонимам категории, близким цветам и нескольким магазинам; не пиши, что в Москве/России нет жакета, если есть близкие пиджаки, блейзеры или рубашки-жакеты;
 - точный цвет лучше, но если точных вариантов мало, можно брать близкий оттенок или нейтральный вариант, который подходит описанию;
 - slot в product должен совпадать с item.slot; category лучше копировать из item.category, даже если title содержит более подробное название;
 - productUrl должен быть карточкой товара, не категорией, поиском или рекламной страницей;
@@ -2366,7 +2667,11 @@ Image 1 = найденное фото товара.
 Требования к изображению:
 - только один целевой предмет одежды или обуви;
 - убрать человека, лицо, тело, руки, ноги, манекен, фон, интерьер и другие вещи;
-- белый фон, фронтальный вид, предмет по центру, целиком в кадре;
+- белый фон, фронтальный вид, предмет строго по центру, целиком в кадре;
+- обязательны чистые поля: оставь 12-18% белого пространства сверху, снизу, слева и справа;
+- предмет не должен касаться краев изображения и не должен быть обрезан ни сверху, ни снизу, ни по бокам;
+- для брюк покажи полный пояс, всю длину штанин и низ обеих штанин; для рубашек/курток покажи воротник, оба рукава целиком, манжеты и низ изделия; для пальто/жакетов покажи весь силуэт целиком;
+- если предмет высокий или широкий, уменьши масштаб, чтобы он полностью помещался в кадр с полями;
 - сохранить цвет, материал, крой, принт, застежки и характерные детали;
 - без текста, водяных знаков, ценников, рамок и декоративных элементов;
 - не добавлять новые элементы гардероба.
@@ -2808,6 +3113,26 @@ function formatCandidateCount(count: number): string {
   return `${count} ${word}`;
 }
 
+function formatIdealProductProgress(params: {
+  lookTitle: string;
+  search: string;
+  validation: string;
+  generation: string;
+  note?: string;
+}): string {
+  return [
+    `Подбор товаров для **${params.lookTitle}**`,
+    "",
+    `1. Поиск товаров: ${params.search}`,
+    `2. Проверка фото: ${params.validation}`,
+    `3. Генерация карточек: ${params.generation}`,
+    params.note ? "" : undefined,
+    params.note,
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+}
+
 function formatProductSelectionIntro(
   lookTitle: string,
   products: IdealProduct[],
@@ -3224,6 +3549,14 @@ function readPositiveInteger(value: unknown): number | undefined {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function readTelegramMessageId(value: unknown): number | undefined {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+
+  return readPositiveInteger(value.message_id);
+}
+
 function normalizeCategoryKey(value: string): string {
   const normalized = value
     .trim()
@@ -3241,9 +3574,9 @@ function normalizeCategoryKey(value: string): string {
     ["cardigan", /(кардиган|cardigan)/],
     ["sweater", /(свитер|джемпер|пуловер|sweater|jumper|pullover)/],
     ["hoodie", /(худи|hoodie|толстовк|свитшот|sweatshirt)/],
+    ["jacket", /(рубашк[а -]*жакет|овершерт|overshirt|куртк|жакет|бомбер|пиджак|блейзер|ветровк|jacket|blazer|bomber)/],
     ["shirt", /(рубаш|сорочк|\bshirt\b)/],
     ["tshirt", /(футболк|лонгслив|t-?shirt|\btee\b|longsleeve)/],
-    ["jacket", /(куртк|жакет|бомбер|пиджак|блейзер|ветровк|jacket|blazer|bomber)/],
     ["coat", /(пальто|тренч|coat|trench)/],
     ["pants", /(брюк|джинс|штаны|чинос|карго|pants|trousers|jeans|chinos|cargo)/],
     ["shorts", /(шорт|shorts)/],

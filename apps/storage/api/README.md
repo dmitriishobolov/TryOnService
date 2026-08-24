@@ -14,7 +14,7 @@
 
 PUT и GET работают потоково: storage-node не собирает объект целиком в память. После успешного PUT backend обновляет metadata index и `usedBytes` инкрементально.
 
-Catalog entry не содержит бинарных данных. Он связывает cache key с уже загруженным объектом и optional metadata, например `product-card-image`, `product-card-metadata`, `market-search` или `market-product`. При lookup storage-node проверяет, что objectKey ещё существует, и удаляет устаревшие/битые записи из catalog index.
+Catalog entry не содержит бинарных данных. Он связывает cache key с уже загруженным объектом и optional metadata. Сейчас контракт оставляет cache kinds `product-card-image` и `product-card-metadata` для будущих сценариев повторного использования generated assets. При lookup storage-node проверяет, что objectKey ещё существует, и удаляет устаревшие/битые записи из catalog index.
 
 ## Coordinator client
 

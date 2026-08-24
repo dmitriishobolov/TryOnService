@@ -76,7 +76,7 @@ export const openAiTryOnAdapter: TryOnModelAdapter = {
       personRef.key,
       personImage.buffer,
     );
-    const prompt = job.payload.text?.trim() || config.openai.wardrobePrompt;
+    const prompt = job.payload.text?.trim() || config.openai.appearancePrompt;
     const options = isRecord(job.payload.model?.options)
       ? job.payload.model.options
       : {};

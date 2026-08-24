@@ -1773,14 +1773,6 @@ function resolveRequiredCapabilities(request: CreateTryOnJobRequest): string[] {
       provider ? ["try-on", `try-on.${provider}`] : ["try-on"],
     );
 
-    if (request.payload.market) {
-      required.add("market");
-
-      for (const marketProvider of request.payload.market.providers ?? []) {
-        required.add(`market.${marketProvider}`);
-      }
-    }
-
     return [...required];
   }
 

@@ -25,7 +25,7 @@
 - `tryoncloud/` - adapter TryOnCloud Developer/Platform API.
 - `genlook/` - adapter Genlook Try-On API.
 - `wearfits/` - adapter WEARFITS Virtual Try-On API.
-- `openai/` - adapter OpenAI Responses API для vision analysis и wardrobe-рекомендаций.
+- `openai/` - adapter OpenAI Responses API для vision analysis и анализа внешности.
 
 ## Что здесь размещать
 
@@ -65,9 +65,9 @@ Runner выбирает adapter через `payload.model.provider`, а provider
 }
 ```
 
-`allowedDomains` опционален. Если он не передан, model сможет искать по открытой web выдаче. Telegram-сценарий `Идеальный образ` не использует OpenAI web search для товаров: товарные кандидаты приходят из marketplace adapters, а OpenAI получает только изображения для vision-проверки и генерации clean-card.
+`allowedDomains` опционален. Если он не передан, model сможет искать по открытой web выдаче. В текущем Telegram-сценарии web search не используется: бот передает только пользовательское фото и prompt анализа внешности.
 
-OpenAI не принимает `web_search` вместе с `reasoningEffort=minimal`, а некоторые модели, например `gpt-5.6-luna`, не принимают `minimal` вообще. Adapter автоматически поднимает такие запросы до `low`, а клиентские сценарии, которые используют web search, vision-проверку товаров или image generation, должны сразу задавать `low`.
+OpenAI не принимает `web_search` вместе с `reasoningEffort=minimal`, а некоторые модели, например `gpt-5.6-luna`, не принимают `minimal` вообще. Adapter автоматически поднимает такие запросы до `low`, а клиентские сценарии, которые используют web search или image generation, должны сразу задавать `low`.
 
 Если OpenAI возвращает `429` по rate limit, adapter читает `retry-after` или подсказку `Please try again in ...s`, делает короткий backoff и повторяет Responses-запрос несколько раз перед тем, как пометить job failed.
 
@@ -84,7 +84,7 @@ OpenAI не принимает `web_search` вместе с `reasoningEffort=min
 
 Worker всегда добавляет основное фото пользователя из `payload.inputFiles` первым изображением, а затем добавляет `inputImageUrls` в указанном порядке. Дополнительные URL worker сначала скачивает сам, проверяет размер и MIME-тип, конвертирует в data-url и только потом отправляет в OpenAI. Это защищает flow от ситуаций, когда OpenAI не может скачать картинку магазина напрямую или получает от магазина `415/403/HTML`.
 
-Сейчас `inputImageUrls` используется Telegram-сценарием `Идеальный образ`: после поиска через marketplace adapters Ozon/Wildberries/TSUM/TSUM Outlet/O'STIN/2MOOD/LIMÉ бот отправляет найденные product images на отдельную vision-проверку, где модель принимает кандидатов с `canGenerateCleanCard=true`, если из изображения можно надежно выделить один целевой товар. Фото товара на человеке или манекене допустимо, если предмет хорошо виден и его можно отделить от фона.
+`inputImageUrls` сейчас является общей возможностью OpenAI adapter-а для будущих сценариев. Текущий Telegram-сценарий анализа внешности дополнительные удаленные изображения не передает.
 
 По умолчанию worker берет до 12 дополнительных `inputImageUrls`. Клиент может поднять лимит через `maxInputImageUrls`; worker всё равно ограничивает его верхним предохранителем `80`. Для batch validation клиент может включить `allowInputImagePlaceholders=true`: тогда битая картинка заменится пустым placeholder-изображением в том же индексе, чтобы один плохой URL не ломал проверку всей пачки.
 

@@ -6,9 +6,8 @@
 
 - создание job;
 - выбор AI provider-а, provider model и provider-specific options в `CreateTryOnJobRequest.payload.model`;
-- выбор marketplace provider-ов и параметров поиска одежды в `CreateTryOnJobRequest.payload.market`;
 - получение статуса job;
-- результат обработки, включая `TryOnJobResult.marketProducts` для найденных marketplace-товаров;
+- результат обработки, включая текстовый ответ и optional `result.files`;
 - storage object refs для входных и выходных файлов, включая `storageId` узла, где лежит объект;
 - регистрацию storage-node, heartbeat storage-node и выдачу storage-access;
 - storage catalog entries и lookup locations для distributed cache объектов;
@@ -42,7 +41,7 @@
 - Сначала меняется contract, затем coordinator/worker/client.
 - Удаление поля считается breaking change.
 - Новые обязательные поля требуют миграционного плана.
-- Новый AI provider сначала добавляется в `TryOnModelProvider` и `isTryOnModelProvider`; новый marketplace provider - в `MarketProvider` и `isMarketProvider`.
+- Новый AI provider сначала добавляется в `TryOnModelProvider` и `isTryOnModelProvider`.
 - `CreateTryOnJobRequest.sourceClientId` обязателен: jobs создаются только от зарегистрированного service client.
 - Статусы jobs и worker'ов должны быть перечислены явно, без неявных строковых литералов в коде приложений.
 - `delivery_failed` означает, что обработка завершилась и `result` есть, но callback клиенту не доставлен.

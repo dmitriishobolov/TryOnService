@@ -6,7 +6,7 @@
 
 - [coordinator](coordinator/README.md) - центральный сервис, который хранит jobs, регистрирует worker'ы/service clients/storage-node, ведет storage registry и выдает клиентам worker assignment.
 - [storage](storage/README.md) - object storage node, который сам регистрируется в coordinator и принимает прямой upload/download файлов от клиентов и worker'ов.
-- [worker](worker/README.md) - исполняющий сервис, который запускается на отдельных серверах, регистрируется в coordinator, выполняет обработку через AI API adapters и при необходимости подбирает товары через marketplace adapters.
+- [worker](worker/README.md) - исполняющий сервис, который запускается на отдельных серверах, регистрируется в coordinator и выполняет обработку через AI API adapters.
 - [shared](shared/README.md) - общие типы, DTO, runtime validators и helpers между сервисами.
 - [client](client/README.md) - клиентские интеграции и каналы, через которые пользователи создают запросы на примерку и получают результат.
 

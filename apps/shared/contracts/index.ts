@@ -30,17 +30,7 @@ export type TryOnModelProvider =
   | "openai";
 export type TryOnModelTask =
   | "try-on"
-  | "appearance-analysis"
-  | "wardrobe-recommendation";
-export type MarketProvider =
-  | "aliexpress"
-  | "ozon"
-  | "wildberries"
-  | "tsum"
-  | "tsum-outlet"
-  | "ostin"
-  | "2mood"
-  | "lime";
+  | "appearance-analysis";
 
 export interface TelegramClientRef {
   type: "telegram";
@@ -120,8 +110,6 @@ export interface StorageAccessResponse {
 }
 
 export type StorageCatalogEntryKind =
-  | "market-search"
-  | "market-product"
   | "product-card-image"
   | "product-card-metadata";
 
@@ -182,45 +170,12 @@ export interface TryOnModelSelection {
   options?: Record<string, unknown>;
 }
 
-export interface MarketSearchSelection {
-  providers?: MarketProvider[];
-  query?: string;
-  limit?: number;
-  category?: string;
-  categoryIds?: string[];
-  minPrice?: number;
-  maxPrice?: number;
-  currency?: string;
-  locale?: string;
-  country?: string;
-  sort?: string;
-  required?: boolean;
-}
-
-export interface MarketProductPrice {
-  amount: number;
-  currency?: string;
-}
-
-export interface MarketProductRef {
-  provider: MarketProvider;
-  productId: string;
-  title: string;
-  productUrl?: string;
-  imageUrl?: string;
-  images?: string[];
-  price?: MarketProductPrice;
-  brand?: string;
-  category?: string;
-}
-
 export interface CreateTryOnJobRequest {
   sourceClientId: string;
   client: ClientRef;
   payload: {
     command: "request";
     model?: TryOnModelSelection;
-    market?: MarketSearchSelection;
     text?: string;
     inputFiles?: StorageObjectRef[];
   };
@@ -235,7 +190,6 @@ export interface JobCancelRequest {
 export interface TryOnJobResult {
   message: string;
   files?: StorageObjectRef[];
-  marketProducts?: MarketProductRef[];
 }
 
 export interface TryOnJobError {
@@ -450,7 +404,6 @@ export function isCreateTryOnJobRequest(
     client.chatId.length > 0 &&
     payload.command === "request" &&
     (payload.model === undefined || isTryOnModelSelection(payload.model)) &&
-    (payload.market === undefined || isMarketSearchSelection(payload.market)) &&
     (payload.inputFiles === undefined ||
       (Array.isArray(payload.inputFiles) &&
         payload.inputFiles.every(isStorageObjectRef))) &&
@@ -464,52 +417,6 @@ export function isJobCancelRequest(value: unknown): value is JobCancelRequest {
     typeof value.sourceClientId === "string" &&
     value.sourceClientId.length > 0 &&
     (value.reason === undefined || typeof value.reason === "string")
-  );
-}
-
-export function isMarketProvider(value: unknown): value is MarketProvider {
-  return (
-    value === "aliexpress" ||
-    value === "ozon" ||
-    value === "wildberries" ||
-    value === "tsum" ||
-    value === "tsum-outlet" ||
-    value === "ostin" ||
-    value === "2mood" ||
-    value === "lime"
-  );
-}
-
-export function isMarketSearchSelection(
-  value: unknown,
-): value is MarketSearchSelection {
-  if (!isObject(value)) {
-    return false;
-  }
-
-  return (
-    (value.providers === undefined ||
-      (Array.isArray(value.providers) &&
-        value.providers.every(isMarketProvider))) &&
-    (value.query === undefined || typeof value.query === "string") &&
-    (value.limit === undefined ||
-      (typeof value.limit === "number" &&
-        Number.isInteger(value.limit) &&
-        value.limit > 0 &&
-        value.limit <= 100)) &&
-    (value.category === undefined || typeof value.category === "string") &&
-    (value.categoryIds === undefined ||
-      (Array.isArray(value.categoryIds) &&
-        value.categoryIds.every((id) => typeof id === "string"))) &&
-    (value.minPrice === undefined ||
-      (typeof value.minPrice === "number" && value.minPrice >= 0)) &&
-    (value.maxPrice === undefined ||
-      (typeof value.maxPrice === "number" && value.maxPrice >= 0)) &&
-    (value.currency === undefined || typeof value.currency === "string") &&
-    (value.locale === undefined || typeof value.locale === "string") &&
-    (value.country === undefined || typeof value.country === "string") &&
-    (value.sort === undefined || typeof value.sort === "string") &&
-    (value.required === undefined || typeof value.required === "boolean")
   );
 }
 
@@ -545,8 +452,7 @@ export function isTryOnModelProvider(
 function isTryOnModelTask(value: unknown): value is TryOnModelTask {
   return (
     value === "try-on" ||
-    value === "appearance-analysis" ||
-    value === "wardrobe-recommendation"
+    value === "appearance-analysis"
   );
 }
 
@@ -570,33 +476,6 @@ export function isStorageObjectRef(value: unknown): value is StorageObjectRef {
     (value.url === undefined || typeof value.url === "string") &&
     (value.createdAt === undefined || typeof value.createdAt === "string") &&
     (value.expiresAt === undefined || typeof value.expiresAt === "string")
-  );
-}
-
-export function isMarketProductRef(value: unknown): value is MarketProductRef {
-  if (!isObject(value)) {
-    return false;
-  }
-
-  return (
-    isMarketProvider(value.provider) &&
-    typeof value.productId === "string" &&
-    value.productId.length > 0 &&
-    typeof value.title === "string" &&
-    value.title.length > 0 &&
-    (value.productUrl === undefined || typeof value.productUrl === "string") &&
-    (value.imageUrl === undefined || typeof value.imageUrl === "string") &&
-    (value.images === undefined ||
-      (Array.isArray(value.images) &&
-        value.images.every((image) => typeof image === "string"))) &&
-    (value.price === undefined ||
-      (isObject(value.price) &&
-        typeof value.price.amount === "number" &&
-        Number.isFinite(value.price.amount) &&
-        (value.price.currency === undefined ||
-          typeof value.price.currency === "string"))) &&
-    (value.brand === undefined || typeof value.brand === "string") &&
-    (value.category === undefined || typeof value.category === "string")
   );
 }
 
@@ -659,8 +538,6 @@ export function isStorageCatalogEntryKind(
   value: unknown,
 ): value is StorageCatalogEntryKind {
   return (
-    value === "market-search" ||
-    value === "market-product" ||
     value === "product-card-image" ||
     value === "product-card-metadata"
   );
@@ -818,8 +695,6 @@ export function isWorkerJobRequest(value: unknown): value is WorkerJobRequest {
     value.payload.command === "request" &&
     (value.payload.model === undefined ||
       isTryOnModelSelection(value.payload.model)) &&
-    (value.payload.market === undefined ||
-      isMarketSearchSelection(value.payload.market)) &&
     (value.payload.inputFiles === undefined ||
       (Array.isArray(value.payload.inputFiles) &&
         value.payload.inputFiles.every(isStorageObjectRef)))
@@ -874,9 +749,6 @@ export function isJobResultUpdateRequest(
         (value.result.files === undefined ||
           (Array.isArray(value.result.files) &&
             value.result.files.every(isStorageObjectRef))) &&
-        (value.result.marketProducts === undefined ||
-          (Array.isArray(value.result.marketProducts) &&
-            value.result.marketProducts.every(isMarketProductRef))) &&
       (value.status === "succeeded" ||
         (isObject(value.error) && typeof value.error.message === "string"))
     );
@@ -905,9 +777,6 @@ export function isTelegramJobCallbackRequest(
     typeof value.result.message === "string" &&
     (value.result.files === undefined ||
       (Array.isArray(value.result.files) &&
-        value.result.files.every(isStorageObjectRef))) &&
-    (value.result.marketProducts === undefined ||
-      (Array.isArray(value.result.marketProducts) &&
-        value.result.marketProducts.every(isMarketProductRef)))
+        value.result.files.every(isStorageObjectRef)))
   );
 }

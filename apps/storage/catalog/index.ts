@@ -187,8 +187,6 @@ function resolveLookupKinds(
   return requested.length
     ? requested
     : [
-        "market-search",
-        "market-product",
         "product-card-image",
         "product-card-metadata",
       ];
@@ -220,8 +218,6 @@ function isPersistedCatalogEntry(value: unknown): value is StorageCatalogEntry {
 
 function isCatalogKind(value: unknown): value is StorageCatalogEntryKind {
   return (
-    value === "market-search" ||
-    value === "market-product" ||
     value === "product-card-image" ||
     value === "product-card-metadata"
   );

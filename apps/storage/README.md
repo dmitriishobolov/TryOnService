@@ -40,7 +40,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - Storage-node не принимает master credentials от clients/worker'ов.
 - Доступ к объектам только по signed token purpose `storage-access`.
 - Для `GET /objects/<key>` token можно передать header-ом `x-storage-access-token` или query-параметром `accessToken`. Query-вариант нужен для внешних клиентов вроде Telegram `sendPhoto`, которым проще отдать готовый URL.
-- Если объект не найден, storage-node возвращает `404 object_not_found`. Telegram client использует это как cache miss для product-card cache.
+- Если объект не найден, storage-node возвращает `404 object_not_found`.
 - Storage-node доверяет `keyPrefix` только из token coordinator-а; client/worker не могут расширить scope на стороне storage-node.
 - `STORAGE_DRIVER=local` пишет файлы в `STORAGE_LOCAL_ROOT`.
 - `STORAGE_DRIVER=s3` пишет файлы в S3-compatible backend напрямую из request stream.
@@ -50,5 +50,3 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - Catalog index хранится отдельно (`STORAGE_CATALOG_PATH` или файл рядом с storage root), переживает restart storage-node и при lookup проверяет, что referenced object ещё существует.
 - Upload response добавляет `storageId` в `StorageObjectRef`; client обязан передать этот ref в job payload без потери поля.
 - Object keys должны быть scoped и предсказуемыми, например `clients/<clientId>/input/<requestId>/<file>` или `jobs/<jobId>/output/<file>`.
-- Для повторного использования сгенерированных карточек товаров Telegram client хранит clean-card cache в `clients/<clientId>/product-card-cache/<hash-prefix>/<sha256(productUrl)>.png`, JSON metadata рядом с тем же hash и регистрирует catalog entries `product-card-image`/`product-card-metadata` по normalized product URL.
-- Worker пишет JSON cache marketplace search в `workers/<workerId>/market-cache/<hash-prefix>/<hash>.json` и регистрирует `market-search` plus `market-product` entries, чтобы другие worker'ы могли переиспользовать результаты без повторного обхода площадок.

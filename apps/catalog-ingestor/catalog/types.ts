@@ -9,6 +9,7 @@ export const catalogProviderNames = [
   "ostin",
   "2mood",
   "lime",
+  "custom",
 ] as const;
 
 export type CatalogProviderName = (typeof catalogProviderNames)[number];
@@ -42,6 +43,7 @@ export interface CatalogGarmentDraft {
 export interface CatalogProviderContext {
   batchSize: number;
   userAgent: string;
+  customSourceFile?: string;
   signal?: AbortSignal;
 }
 

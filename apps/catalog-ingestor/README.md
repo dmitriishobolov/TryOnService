@@ -2,7 +2,7 @@
 
 `apps/catalog-ingestor` - отдельный сервис сбора каталога одежды. Его можно положить на любую машину с доступом к coordinator и интернету: сервис регистрируется как service client, отправляет heartbeat, получает прямой доступ к object storage и публикует записи `garment-item`.
 
-Сейчас реализована архитектура без реального парсинга сайтов. Провайдеры `wildberries`, `ozon`, `aliexpress`, `tsum`, `tsum-outlet`, `ostin`, `2mood` и `lime` подключены как no-op заглушки. Когда появится конкретный парсер, он должен вернуть нормализованные `CatalogGarmentDraft`, а общий publisher уже загрузит clean image в storage и создаст catalog entry.
+Сейчас реализована архитектура без реального парсинга сайтов. Провайдеры `wildberries`, `ozon`, `aliexpress`, `tsum`, `tsum-outlet`, `ostin`, `2mood` и `lime` подключены как no-op заглушки. Provider `custom` уже готов как основа под ваш parser: он умеет читать нормализованные товары из JSON-файла, а его `parser.ts` можно заменить на реальный обход нужного источника.
 
 ## Запуск
 
@@ -11,6 +11,14 @@ npm run dev:catalog-ingestor
 ```
 
 По умолчанию sync выключен через `CATALOG_INGESTOR_ENABLED=false`. Сервис всё равно поднимает health endpoint, регистрируется в coordinator и отправляет heartbeat, чтобы можно было проверять deploy/lifecycle.
+
+Для проверки custom provider-а включите sync и укажите файл с товарами:
+
+```env
+CATALOG_INGESTOR_ENABLED=true
+CATALOG_INGESTOR_PROVIDERS=custom
+CATALOG_INGESTOR_CUSTOM_SOURCE_FILE=apps/catalog-ingestor/catalog/providers/custom/example-catalog.json
+```
 
 ## Поток данных
 
@@ -28,18 +36,42 @@ npm run dev:catalog-ingestor
 - `config` - env-настройки сервиса.
 - `catalog` - контракты provider-ов, sync runner и общий publisher в storage.
 - `catalog/providers` - место для будущих реализаций парсинга каталогов.
+- `catalog/providers/custom` - основа для вашего кастомного parser-а и пример входного JSON.
+
+## Как добавить свой parser
+
+Быстрый путь:
+
+1. Откройте `catalog/providers/custom/parser.ts`.
+2. В `collectCustomCatalog(context)` получите данные из своего источника: HTML, локальный файл, API, выгрузка магазина.
+3. Приведите каждую найденную вещь к `CatalogGarmentDraft`.
+4. Верните массив draft-ов. Запись в storage делать не нужно.
+5. В `.env` поставьте `CATALOG_INGESTOR_PROVIDERS=custom` и `CATALOG_INGESTOR_ENABLED=true`.
+
+Если источник станет постоянным provider-ом, создайте отдельную папку в `catalog/providers/<provider-name>`, реализуйте `CatalogProvider`, добавьте имя в `catalogProviderNames` и подключите его в `catalog/providers/index.ts`.
 
 ## Формат нормализованной вещи
 
 Provider должен вернуть минимум:
 
-- `provider` - имя источника из списка provider-ов.
+- `provider` - имя источника из списка provider-ов, для custom parser-а это `custom`.
 - `externalId` - стабильный id товара в магазине.
 - `productUrl` - ссылка на страницу товара.
 - `title` и `category` - название и роль вещи.
 - `image` - clean front-view изображение вещи: URL или bytes.
 
-Желательные поля: `description`, `tags`, `colorTags`, `styleTags`, `materialTags`, `price`, `currency`, `store`.
+Желательные поля: `description`, `tags`, `colorTags`, `styleTags`, `materialTags`, `price`, `currency`, `store`, `metadata`, `cacheKey`.
+
+Подробный формат JSON, TypeScript-пример и правила качества изображений описаны в [custom provider README](catalog/providers/custom/README.md).
+
+## Что будет записано
+
+На каждую вещь `storagePublisher` создает:
+
+- object с изображением по ключу вида `clients/<clientId>/catalog/<provider>/<category>/<cacheKey>/<filename>`;
+- catalog entry `kind=garment-item` с `cacheKey`, `objectKey` и metadata товара.
+
+Metadata включает `provider`, `externalId`, `productUrl`, `title`, `category`, `description`, `tags`, `colorTags`, `styleTags`, `materialTags`, `price`, `currency`, `store` и дополнительные поля из `metadata`.
 
 ## Правила
 

@@ -21,6 +21,7 @@ export interface CatalogIngestorConfig {
   providers: CatalogProviderName[];
   storagePrefix: string;
   userAgent: string;
+  customSourceFile?: string;
   imageDownloadTimeoutMs: number;
   maxImageBytes: number;
   httpClientTimeoutMs: number;
@@ -149,6 +150,7 @@ export function loadCatalogIngestorConfig(): CatalogIngestorConfig {
       "CATALOG_INGESTOR_USER_AGENT",
       "TryOnServiceCatalogIngestor/0.1",
     ),
+    customSourceFile: readOptionalString("CATALOG_INGESTOR_CUSTOM_SOURCE_FILE"),
     imageDownloadTimeoutMs: readNumber(
       "CATALOG_INGESTOR_IMAGE_DOWNLOAD_TIMEOUT_MS",
       120_000,

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="640" viewBox="0 0 640 640" role="img" aria-label="Example clean garment image">
+  <rect width="640" height="640" fill="#ffffff"/>
+  <path d="M230 140h180l80 70-58 75-42-36v241H250V249l-42 36-58-75 80-70z" fill="#f8fafc" stroke="#334155" stroke-width="12" stroke-linejoin="round"/>
+  <path d="M272 142c12 30 31 46 48 46s36-16 48-46" fill="none" stroke="#334155" stroke-width="10" stroke-linecap="round"/>
+  <path d="M250 250h140" stroke="#cbd5e1" stroke-width="8" stroke-linecap="round"/>
+  <path d="M250 305h140" stroke="#cbd5e1" stroke-width="8" stroke-linecap="round"/>
+</svg>

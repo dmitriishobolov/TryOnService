@@ -71,6 +71,7 @@ export class CatalogSyncRunner {
         const drafts = await provider.collect({
           batchSize: this.config.batchSize,
           userAgent: this.config.userAgent,
+          customSourceFile: this.config.customSourceFile,
         });
         const limitedDrafts = drafts.slice(0, this.config.batchSize);
         collected += limitedDrafts.length;

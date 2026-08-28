@@ -289,7 +289,7 @@ function contentTypeFromFilename(filename: string | undefined): string {
 }
 
 function sanitizeFilename(value: string): string {
-  const sanitized = value.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/-+/g, "-");
+  const sanitized = value.replace(/[^\p{L}\p{N}._-]/gu, "-").replace(/-+/g, "-");
 
   return sanitized || "product-image.jpg";
 }
@@ -298,7 +298,7 @@ function sanitizeSegment(value: string): string {
   const sanitized = value
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/[^\p{L}\p{N}._-]+/gu, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
 

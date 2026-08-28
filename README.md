@@ -83,7 +83,7 @@ Coordinator не принимает и не отдает бинарные фай
 - [apps](apps/README.md) - все приложения и общие пакеты монорепозитория.
 - [apps/coordinator](apps/coordinator/README.md) - сервис-координатор: API assignment, jobs state, registry worker'ов/service clients, assignment cleanup и coordinator utilities.
 - [apps/storage](apps/storage/README.md) - object storage node: самостоятельная регистрация в coordinator, heartbeat и прямой upload/download файлов.
-- [apps/catalog-ingestor](apps/catalog-ingestor/README.md) - отдельный сервис сбора каталогов одежды и публикации `garment-item` в storage.
+- [apps/catalog-ingestor](apps/catalog-ingestor/README.md) - отдельный сервис сбора каталогов одежды и публикации `garment-item` в storage; внутри есть [custom parser scaffold](apps/catalog-ingestor/catalog/providers/custom/README.md).
 - [apps/worker](apps/worker/README.md) - исполняющий сервис: регистрация в coordinator, запуск пайплайнов и вызовы AI API.
 - [apps/shared](apps/shared/README.md) - общие контракты, DTO, типы и runtime validators.
 - [apps/client](apps/client/README.md) - клиентские интеграции, через которые пользователи создают задачи.
@@ -119,7 +119,7 @@ Catalog ingestor:
 
 - при старте выбирает свободный порт, регистрируется в coordinator как service client типа `catalog-ingestor` и отправляет heartbeat;
 - содержит provider-интерфейс для будущих парсеров каталогов магазинов;
-- получает от provider-ов нормализованные `CatalogGarmentDraft` и публикует их в object storage как `garment-item`;
+- получает от provider-ов нормализованные `CatalogGarmentDraft` и публикует их в object storage как `garment-item`; provider `custom` можно использовать как основу под ваш собственный parser или как JSON-import для тестового наполнения каталога;
 - загружает изображения вещей напрямую в выбранный storage-node, а coordinator использует только control-plane `POST /storage/access`;
 - по умолчанию не выполняет sync, пока `CATALOG_INGESTOR_ENABLED=false`.
 
@@ -389,7 +389,7 @@ npm run build:dist
 - `TELEGRAM_CLIENT_PUBLIC_URL` - опциональный ручной override для Telegram callback endpoint, если автоопределение по IP/port не подходит.
 - `CATALOG_INGESTOR_CLIENT_ID`, `CATALOG_INGESTOR_PORT`, `CATALOG_INGESTOR_PUBLIC_URL` - identity и endpoint catalog ingestor как service client.
 - `CATALOG_INGESTOR_ENABLED`, `CATALOG_INGESTOR_RUN_ON_START`, `CATALOG_INGESTOR_SYNC_INTERVAL_MS`, `CATALOG_INGESTOR_BATCH_SIZE` - управление периодическим сбором каталога.
-- `CATALOG_INGESTOR_PROVIDERS`, `CATALOG_INGESTOR_STORAGE_PREFIX`, `CATALOG_INGESTOR_USER_AGENT`, `CATALOG_INGESTOR_IMAGE_DOWNLOAD_TIMEOUT_MS`, `CATALOG_INGESTOR_MAX_IMAGE_BYTES` - список источников, namespace storage и лимиты подготовки изображений.
+- `CATALOG_INGESTOR_PROVIDERS`, `CATALOG_INGESTOR_STORAGE_PREFIX`, `CATALOG_INGESTOR_USER_AGENT`, `CATALOG_INGESTOR_CUSTOM_SOURCE_FILE`, `CATALOG_INGESTOR_IMAGE_DOWNLOAD_TIMEOUT_MS`, `CATALOG_INGESTOR_MAX_IMAGE_BYTES` - список источников, namespace storage, JSON-файл для custom provider-а и лимиты подготовки изображений.
 
 ## Production readiness
 

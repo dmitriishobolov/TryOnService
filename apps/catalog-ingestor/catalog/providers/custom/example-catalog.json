@@ -1,0 +1,27 @@
+{
+  "items": [
+    {
+      "externalId": "demo-white-shirt-001",
+      "productUrl": "https://example.com/products/demo-white-shirt-001",
+      "title": "Белая рубашка прямого кроя",
+      "category": "рубашка",
+      "description": "Базовая рубашка из плотного хлопка для smart casual образов.",
+      "tags": ["мужское", "smart casual", "базовая", "прямой крой"],
+      "colorTags": ["белый", "светлый"],
+      "styleTags": ["минимализм", "smart casual"],
+      "materialTags": ["хлопок"],
+      "price": "4990",
+      "currency": "RUB",
+      "store": "Example Store",
+      "image": {
+        "path": "apps/catalog-ingestor/catalog/providers/custom/example-shirt.svg",
+        "contentType": "image/svg+xml",
+        "filename": "demo-white-shirt-front.svg"
+      },
+      "metadata": {
+        "gender": "men",
+        "season": "all-season"
+      }
+    }
+  ]
+}

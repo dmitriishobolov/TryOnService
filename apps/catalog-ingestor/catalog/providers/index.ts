@@ -4,13 +4,17 @@ import type {
   CatalogProviderName,
 } from "../types.js";
 import { catalogProviderNames } from "../types.js";
+import { createCustomProvider } from "./custom/index.js";
 
 export function createCatalogProviders(
   names: CatalogProviderName[],
 ): CatalogProvider[] {
-  const known = new Map<CatalogProviderName, CatalogProvider>(
-    catalogProviderNames.map((name) => [name, createStubProvider(name)]),
-  );
+  const knownEntries: [CatalogProviderName, CatalogProvider][] =
+    catalogProviderNames.map((name) => [
+      name,
+      name === "custom" ? createCustomProvider() : createStubProvider(name),
+    ]);
+  const known = new Map<CatalogProviderName, CatalogProvider>(knownEntries);
 
   return names.map((name) => {
     const provider = known.get(name);

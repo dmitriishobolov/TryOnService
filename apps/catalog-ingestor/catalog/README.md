@@ -1,10 +1,12 @@
-# Catalog Pipeline
+# Catalog Layer
 
-`catalog` содержит общий pipeline наполнения каталога одежды.
+Папка `catalog` содержит общий pipeline наполнения каталога вещей:
 
 - `types.ts` - контракт `CatalogGarmentDraft`, `CatalogProvider` и список известных provider-ов.
-- `providers/` - место для реализаций сбора данных из магазинов. Сейчас все provider-ы являются no-op заглушками.
-- `syncRunner.ts` - периодический запуск provider-ов, защита от наложения циклов и публикация результатов.
+- `providers` - реализации источников каталога и заготовка `custom` для вашего parser-а.
+- `syncRunner.ts` - периодический запуск provider-ов и публикация batch-а.
 - `storagePublisher.ts` - общий writer: скачивает или принимает clean image, загружает его в storage-node и создает `garment-item` catalog entry.
 
 Будущий parser provider должен заниматься только добычей и нормализацией данных магазина. Он не должен знать, как устроены coordinator, storage tokens или формат HTTP upload-а в storage-node.
+
+Если нужно быстро наполнить каталог вручную или проверить формат без настоящего парсинга сайта, используйте provider [custom](providers/custom/README.md) и `CATALOG_INGESTOR_CUSTOM_SOURCE_FILE`.

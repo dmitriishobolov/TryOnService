@@ -23,9 +23,28 @@ TryOnService - сервис примерки на базе AI API. Проект 
 
 ## Как устроен сервис
 
-<p align="center">
-  <img src="docs/assets/service-map.svg" alt="TryOnService service map" width="100%">
-</p>
+```mermaid
+flowchart LR
+    Client["Client integrations"] -->|"request assignment"| CoordinatorAPI["Coordinator API"]
+    CoordinatorAPI --> Jobs["Jobs"]
+    CoordinatorAPI --> Registry["Worker/client registry"]
+    CoordinatorAPI --> DB["Postgres or memory state"]
+    CoordinatorAPI --> StorageRegistry["Storage registry"]
+    CoordinatorAPI --> Security["Registration guard"]
+    StorageNode["Object storage node"] -->|"register + heartbeat"| CoordinatorAPI
+    Client -->|"request storage access"| CoordinatorAPI
+    CoordinatorAPI -->|"storage endpoint + access token"| Client
+    Client -->|"direct upload/download"| StorageNode
+    WorkerAPI -->|"direct upload/download"| StorageNode
+    CoordinatorAPI -->|"prepare assignment"| WorkerAPI
+    CoordinatorAPI -->|"worker endpoint + dispatch token"| Client
+    Client -->|"direct job dispatch"| WorkerAPI["Worker API"]
+    WorkerAPI --> Runner["Runner"]
+    Runner --> Models["AI API models"]
+    Models --> AI["External AI APIs"]
+    Runner -->|"status only"| CoordinatorAPI
+    Runner -->|"result callback"| Client
+```
 
 1. Client, worker и storage-node при запуске регистрируются в coordinator и регулярно подтверждают доступность.
 2. Клиент запрашивает у coordinator storage-access, получает подходящий storage-node и короткоживущий token, затем загружает изображения напрямую в storage-node.

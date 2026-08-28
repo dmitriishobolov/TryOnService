@@ -5,11 +5,12 @@
 ## Модули
 
 - [coordinator](coordinator/README.md) - центральный сервис, который хранит jobs, регистрирует worker'ы/service clients/storage-node, ведет storage registry и выдает клиентам worker assignment.
-- [storage](storage/README.md) - object storage node, который сам регистрируется в coordinator и принимает прямой upload/download файлов от клиентов и worker'ов.
+- [storage](storage/README.md) - object storage node, который сам регистрируется в coordinator и принимает прямой upload/download файлов от клиентов, worker'ов и catalog ingestor.
+- [catalog-ingestor](catalog-ingestor/README.md) - отдельный сервис для будущего парсинга каталогов магазинов и публикации `garment-item` в storage.
 - [worker](worker/README.md) - исполняющий сервис, который запускается на отдельных серверах, регистрируется в coordinator и выполняет обработку через AI API adapters.
 - [shared](shared/README.md) - общие типы, DTO, runtime validators и helpers между сервисами.
 - [client](client/README.md) - клиентские интеграции и каналы, через которые пользователи создают запросы на примерку и получают результат.
 
 ## Правило границ
 
-Код coordinator не должен напрямую зависеть от внутренних реализаций worker и не должен быть каналом передачи клиентского результата или файлов. Client отвечает за прямую отправку job назначенному worker'у и прямой upload входных файлов в storage-node, но не содержит бизнес-логику обработки примерки. Worker читает входные файлы и пишет результаты через storage-node, получая доступ от coordinator. Postgres credentials остаются только у coordinator. Файлы передаются между сервисами как object storage refs. Все общие форматы данных выносите в `shared`, чтобы контракты между сервисами оставались явными.
+Код coordinator не должен напрямую зависеть от внутренних реализаций worker и не должен быть каналом передачи клиентского результата или файлов. Client отвечает за прямую отправку job назначенному worker'у и прямой upload входных файлов в storage-node, но не содержит бизнес-логику обработки примерки. Catalog ingestor не создает пользовательские jobs: он только наполняет storage catalog нормализованными вещами. Worker читает входные файлы и пишет результаты через storage-node, получая доступ от coordinator. Postgres credentials остаются только у coordinator. Файлы передаются между сервисами как object storage refs. Все общие форматы данных выносите в `shared`, чтобы контракты между сервисами оставались явными.

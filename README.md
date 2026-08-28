@@ -9,7 +9,7 @@ TryOnService - сервис примерки на базе AI API. Проект 
 Сейчас реализован первый вертикальный срез на Node.js/TypeScript:
 
 - coordinator регистрирует worker'ы и service clients, получает heartbeat, ведет очередь jobs, выбирает worker по capacity/capabilities, готовит assignment на worker-е и возвращает клиенту выбранный worker;
-- object storage node регистрируется в coordinator по отдельному ключу, отправляет heartbeat, принимает streaming upload/download от клиентов и worker'ов по короткоживущему signed storage token и ведет catalog index cache entries;
+- object storage node регистрируется в coordinator по отдельному ключу, отправляет heartbeat, принимает streaming upload/download от клиентов, worker'ов и catalog ingestor по короткоживущему signed storage token и ведет catalog index cache entries;
 - worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat с учетом running jobs и pending assignments, принимает jobs напрямую от клиентов только после prepare от coordinator и выбирает AI provider из `payload.model.provider` конкретной job;
 - Telegram client подбирает свободный callback-порт, регистрируется в coordinator, по `/start` показывает меню `Анализ внешности` и `Идеальный образ`, умеет отменять сценарии, получает assignment или `queued`-ответ, polling-ом дожидается свободного worker'а, отправляет job worker'у напрямую и продолжает сценарий после callback; длинные ответы режутся на несколько сообщений и Markdown отображается форматированно; фото с подписью `/request openai:gpt-5.6-luna` также отправляется на OpenAI/ChatGPT vision adapter с выбранной моделью из запроса;
 - coordinator защищает регистрацию worker'ов, service clients и storage-node от перебора ключа: после достижения лимита неверных попыток IP блокируется; при `COORDINATOR_PERSISTENCE=postgres` ban сохраняется в БД и переживает restart;
@@ -83,6 +83,7 @@ Coordinator не принимает и не отдает бинарные фай
 - [apps](apps/README.md) - все приложения и общие пакеты монорепозитория.
 - [apps/coordinator](apps/coordinator/README.md) - сервис-координатор: API assignment, jobs state, registry worker'ов/service clients, assignment cleanup и coordinator utilities.
 - [apps/storage](apps/storage/README.md) - object storage node: самостоятельная регистрация в coordinator, heartbeat и прямой upload/download файлов.
+- [apps/catalog-ingestor](apps/catalog-ingestor/README.md) - отдельный сервис сбора каталогов одежды и публикации `garment-item` в storage.
 - [apps/worker](apps/worker/README.md) - исполняющий сервис: регистрация в coordinator, запуск пайплайнов и вызовы AI API.
 - [apps/shared](apps/shared/README.md) - общие контракты, DTO, типы и runtime validators.
 - [apps/client](apps/client/README.md) - клиентские интеграции, через которые пользователи создают задачи.
@@ -113,6 +114,14 @@ Object storage node:
 - хранит файлы локально или в S3-compatible backend за единым `ObjectStorage` интерфейсом;
 - пишет и читает объекты streaming-ом, без полной загрузки файла в память процесса;
 - ведет metadata index и `usedBytes` инкрементально, без рекурсивного обхода storage на heartbeat.
+
+Catalog ingestor:
+
+- при старте выбирает свободный порт, регистрируется в coordinator как service client типа `catalog-ingestor` и отправляет heartbeat;
+- содержит provider-интерфейс для будущих парсеров каталогов магазинов;
+- получает от provider-ов нормализованные `CatalogGarmentDraft` и публикует их в object storage как `garment-item`;
+- загружает изображения вещей напрямую в выбранный storage-node, а coordinator использует только control-plane `POST /storage/access`;
+- по умолчанию не выполняет sync, пока `CATALOG_INGESTOR_ENABLED=false`.
 
 Worker:
 
@@ -163,6 +172,12 @@ npm run dev:storage
 npm run dev:worker
 ```
 
+Опционально запустите catalog ingestor. Сейчас он стартует и регистрируется, но не парсит сайты, пока `CATALOG_INGESTOR_ENABLED=false`:
+
+```bash
+npm run dev:catalog-ingestor
+```
+
 В отдельном терминале запустите Telegram client:
 
 ```bash
@@ -175,6 +190,7 @@ npm run dev:telegram
 - object storage node: `http://localhost:4200`
 - worker: `http://localhost:4001`
 - telegram callback server: `http://localhost:4100`
+- catalog ingestor health server: `http://localhost:4300`
 
 Если основной порт storage-node, worker или Telegram client занят, сервис автоматически выберет ближайший свободный порт и зарегистрирует в coordinator фактический порт.
 
@@ -301,6 +317,7 @@ npm run build:dist
 - `dist/packages/coordinator` - готовый coordinator.
 - `dist/packages/storage` - готовый object storage node.
 - `dist/packages/worker` - готовый worker.
+- `dist/packages/catalog-ingestor` - готовый catalog ingestor.
 - `dist/packages/telegram-client` - готовый Telegram client.
 
 Каждый пакет содержит:
@@ -370,6 +387,9 @@ npm run build:dist
 - `POSTGRES_URL`, `POSTGRES_SSL`, `POSTGRES_MAX_CONNECTIONS` - настройки Postgres coordinator.
 - `TELEGRAM_CLIENT_PUBLIC_PROTOCOL` - протокол публичного Telegram callback endpoint.
 - `TELEGRAM_CLIENT_PUBLIC_URL` - опциональный ручной override для Telegram callback endpoint, если автоопределение по IP/port не подходит.
+- `CATALOG_INGESTOR_CLIENT_ID`, `CATALOG_INGESTOR_PORT`, `CATALOG_INGESTOR_PUBLIC_URL` - identity и endpoint catalog ingestor как service client.
+- `CATALOG_INGESTOR_ENABLED`, `CATALOG_INGESTOR_RUN_ON_START`, `CATALOG_INGESTOR_SYNC_INTERVAL_MS`, `CATALOG_INGESTOR_BATCH_SIZE` - управление периодическим сбором каталога.
+- `CATALOG_INGESTOR_PROVIDERS`, `CATALOG_INGESTOR_STORAGE_PREFIX`, `CATALOG_INGESTOR_USER_AGENT`, `CATALOG_INGESTOR_IMAGE_DOWNLOAD_TIMEOUT_MS`, `CATALOG_INGESTOR_MAX_IMAGE_BYTES` - список источников, namespace storage и лимиты подготовки изображений.
 
 ## Production readiness
 
@@ -385,6 +405,7 @@ npm run build:dist
 
 - Новый AI provider добавляйте в [apps/worker/models](apps/worker/models/README.md).
 - Новый сценарий обработки данных клиента добавляйте в [apps/worker/runner](apps/worker/runner/README.md).
+- Новый сборщик каталога или parser provider добавляйте в [apps/catalog-ingestor](apps/catalog-ingestor/README.md).
 - Новый endpoint coordinator добавляйте в [apps/coordinator/api](apps/coordinator/api/README.md).
 - Новое состояние job или worker сначала описывайте в [apps/shared/contracts](apps/shared/contracts/README.md).
 - Новую клиентскую интеграцию добавляйте в [apps/client](apps/client/README.md), подробный порядок для website, Discord и других клиентов описан в [apps/client/NEW_CLIENT_GUIDE.md](apps/client/NEW_CLIENT_GUIDE.md).

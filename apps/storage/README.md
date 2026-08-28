@@ -21,7 +21,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 
 ## Garment Catalog
 
-Для сценария `Идеальный образ` storage-node хранит catalog entries с `kind=garment-item`. Такая запись указывает на уже загруженное изображение вещи и содержит metadata:
+Для сценария `Идеальный образ` storage-node хранит catalog entries с `kind=garment-item`. Обычно эти записи будет наполнять отдельный `catalog-ingestor` service. Такая запись указывает на уже загруженное изображение вещи и содержит metadata:
 
 - `category` - роль вещи в образе, например `рубашка`, `брюки`, `куртка`.
 - `title` и `description` - короткое название и описание товара.

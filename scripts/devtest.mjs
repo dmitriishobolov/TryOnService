@@ -20,6 +20,8 @@ const args = new Set(process.argv.slice(2));
 const buildOnly = args.has("--build-only");
 const sourceEnvFileName =
   process.env.DEVTEST_ENV_FILE?.trim() || process.env.BUILD_ENV_FILE?.trim() || ".env";
+const defaultDevtestServices = "coordinator,storage,worker,telegram,catalog-ingestor";
+const legacyDefaultDevtestServices = "coordinator,storage,worker,telegram";
 const exampleEnvPath = join(rootDir, ".env.example");
 const sourceEnvPath = existsSync(join(rootDir, sourceEnvFileName))
   ? join(rootDir, sourceEnvFileName)
@@ -107,13 +109,16 @@ async function buildDevtestEnv() {
     readPort(merged.TELEGRAM_CLIENT_PORT, 4100),
     reservedPorts,
   );
+  const catalogIngestorPort = await findAvailablePort(
+    readPort(merged.CATALOG_INGESTOR_PORT, 4300),
+    reservedPorts,
+  );
 
   return {
     ...merged,
     BUILD_ENV_FILE: sourceEnvFileName,
     DEVTEST_ENV_FILE: sourceEnvFileName,
-    DEVTEST_SERVICES:
-      merged.DEVTEST_SERVICES?.trim() || "coordinator,storage,worker,telegram",
+    DEVTEST_SERVICES: resolveDevtestServices(merged.DEVTEST_SERVICES),
     DEVTEST_CLEAN: merged.DEVTEST_CLEAN?.trim() || "true",
     DEVTEST_STORAGE_COUNT: String(storageCount),
     DEVTEST_STORAGE_PORTS: storagePorts.join(","),
@@ -146,6 +151,9 @@ async function buildDevtestEnv() {
     TELEGRAM_CLIENT_PORT: String(telegramPort),
     TELEGRAM_CLIENT_PUBLIC_PROTOCOL: "http",
     TELEGRAM_CLIENT_PUBLIC_URL: "",
+    CATALOG_INGESTOR_PORT: String(catalogIngestorPort),
+    CATALOG_INGESTOR_PUBLIC_PROTOCOL: "http",
+    CATALOG_INGESTOR_PUBLIC_URL: "",
   };
 }
 
@@ -184,6 +192,11 @@ function getServicesToStart(selected, env) {
       id: "worker",
       title: "worker",
       entry: "app/apps/worker/index.js",
+    },
+    {
+      id: "catalog-ingestor",
+      title: "catalog-ingestor",
+      entry: "app/apps/catalog-ingestor/index.js",
     },
     {
       id: "telegram",
@@ -330,6 +343,7 @@ Selected services: \`${services}\`
 - storage preferred ports: ${storagePorts.join(", ")}
 - worker preferred port: ${env.WORKER_PORT}
 - telegram preferred callback port: ${env.TELEGRAM_CLIENT_PORT}
+- catalog ingestor preferred port: ${env.CATALOG_INGESTOR_PORT}
 
 ## Files
 
@@ -467,6 +481,19 @@ function buildEnvFile(env) {
     "OPENAI_PROJECT",
     "OPENAI_SYSTEM_PROMPT",
     "OPENAI_APPEARANCE_PROMPT",
+    "CATALOG_INGESTOR_CLIENT_ID",
+    "CATALOG_INGESTOR_PORT",
+    "CATALOG_INGESTOR_PUBLIC_PROTOCOL",
+    "CATALOG_INGESTOR_PUBLIC_URL",
+    "CATALOG_INGESTOR_ENABLED",
+    "CATALOG_INGESTOR_RUN_ON_START",
+    "CATALOG_INGESTOR_SYNC_INTERVAL_MS",
+    "CATALOG_INGESTOR_BATCH_SIZE",
+    "CATALOG_INGESTOR_PROVIDERS",
+    "CATALOG_INGESTOR_STORAGE_PREFIX",
+    "CATALOG_INGESTOR_USER_AGENT",
+    "CATALOG_INGESTOR_IMAGE_DOWNLOAD_TIMEOUT_MS",
+    "CATALOG_INGESTOR_MAX_IMAGE_BYTES",
     "TELEGRAM_CLIENT_ID",
     "TELEGRAM_CLIENT_PORT",
     "TELEGRAM_CLIENT_PUBLIC_PROTOCOL",
@@ -533,12 +560,14 @@ function unquote(value) {
 }
 
 function readServices(rawValue) {
-  const raw = rawValue?.trim() || "coordinator,storage,worker,telegram";
+  const raw = rawValue?.trim() || defaultDevtestServices;
   const aliases = new Map([
     ["client", "telegram"],
     ["telegram-client", "telegram"],
+    ["catalog", "catalog-ingestor"],
+    ["ingestor", "catalog-ingestor"],
   ]);
-  const allowed = new Set(["coordinator", "storage", "worker", "telegram"]);
+  const allowed = new Set(["coordinator", "storage", "worker", "telegram", "catalog-ingestor"]);
   const services = new Set();
 
   for (const item of raw.split(",")) {
@@ -558,6 +587,16 @@ function readServices(rawValue) {
   }
 
   return services;
+}
+
+function resolveDevtestServices(rawValue) {
+  const trimmed = rawValue?.trim();
+
+  if (!trimmed || trimmed === legacyDefaultDevtestServices) {
+    return defaultDevtestServices;
+  }
+
+  return trimmed;
 }
 
 function createStorageServices(env) {

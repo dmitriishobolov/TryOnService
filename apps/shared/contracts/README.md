@@ -13,7 +13,7 @@
 - storage catalog entries и lookup locations для distributed cache объектов;
 - garment catalog categories/search для сценария `Идеальный образ`;
 - ошибки API;
-- регистрацию service client;
+- регистрацию service client, включая `telegram` и `catalog-ingestor`;
 - heartbeat service client;
 - регистрацию worker;
 - heartbeat worker;

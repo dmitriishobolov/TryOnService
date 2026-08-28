@@ -16,7 +16,7 @@ Registry хранит сведения о worker'ах, service clients и storag
 ## Что хранит client registry
 
 - `clientId` - стабильный идентификатор service client.
-- `type` - тип интеграции, сейчас `telegram`.
+- `type` - тип service client: `telegram` для пользовательского бота или `catalog-ingestor` для сборщика каталога.
 - `baseUrl` - endpoint callback server'а клиента.
 - `callbackUrl` - путь для результата job, собранный из `baseUrl` и `callbackPath`.
 - `status` - `ready` или `offline`.
@@ -41,7 +41,7 @@ Storage registry может хранить несколько active storage-nod
 4. Worker регулярно отправляет heartbeat.
 5. Если heartbeat пропущен, worker исключается из активного пула.
 
-Service client проходит похожий цикл: стартует, выбирает свободный callback port, регистрируется через `POST /clients/register`, затем отправляет heartbeat.
+Service client проходит похожий цикл: стартует, выбирает свободный callback/health port, регистрируется через `POST /clients/register`, затем отправляет heartbeat. Catalog ingestor использует этот же lifecycle, но не создает пользовательские jobs.
 
 Storage-node также стартует самостоятельно, выбирает свободный port, регистрируется через `POST /storage/register`, затем отправляет heartbeat через `POST /storage/:storageId/heartbeat`.
 

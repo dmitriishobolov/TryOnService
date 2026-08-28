@@ -5,7 +5,7 @@ export const CLIENT_HEARTBEAT_TIMEOUT_MS = 15_000;
 export const STORAGE_HEARTBEAT_INTERVAL_MS = 5_000;
 export const STORAGE_HEARTBEAT_TIMEOUT_MS = 15_000;
 
-export type ClientType = "telegram";
+export type ClientType = "telegram" | "catalog-ingestor";
 export type ClientStatus = "ready" | "offline";
 
 export type JobStatus =
@@ -763,7 +763,7 @@ export function isClientRegistrationRequest(
   return (
     typeof value.clientId === "string" &&
     value.clientId.length > 0 &&
-    value.type === "telegram" &&
+    (value.type === "telegram" || value.type === "catalog-ingestor") &&
     typeof value.port === "number" &&
     Number.isInteger(value.port) &&
     value.port > 0 &&

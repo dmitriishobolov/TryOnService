@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="720" viewBox="0 0 1180 720" role="img" aria-labelledby="title desc">
+  <title id="title">TryOnService service map</title>
+  <desc id="desc">Service architecture map for coordinator, clients, workers, storage nodes, catalog ingestor, Postgres and external AI APIs.</desc>
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#059669"/>
+    </marker>
+    <marker id="arrow-slate" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .group { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+      .node { stroke-width: 1.5; rx: 8; ry: 8; }
+      .title { font: 700 18px Segoe UI, Arial, sans-serif; fill: #0f172a; }
+      .label { font: 600 14px Segoe UI, Arial, sans-serif; fill: #0f172a; }
+      .small { font: 12px Segoe UI, Arial, sans-serif; fill: #475569; }
+      .tiny { font: 11px Segoe UI, Arial, sans-serif; fill: #64748b; }
+      .edge-blue { fill: none; stroke: #2563eb; stroke-width: 2.2; marker-end: url(#arrow-blue); }
+      .edge-green { fill: none; stroke: #059669; stroke-width: 2.2; marker-end: url(#arrow-green); }
+      .edge-slate { fill: none; stroke: #475569; stroke-width: 2; marker-end: url(#arrow-slate); }
+      .dash { stroke-dasharray: 7 6; }
+      .pill { fill: #ffffff; stroke: #e2e8f0; stroke-width: 1; }
+      .note { font: 600 12px Segoe UI, Arial, sans-serif; fill: #334155; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1180" height="720"/>
+  <text class="title" x="40" y="48">TryOnService: service map</text>
+  <text class="small" x="40" y="72">Coordinator is control-plane only. Files, heavy jobs and final callbacks go directly between clients, workers and storage nodes.</text>
+
+  <rect class="group" x="30" y="105" width="1120" height="555" rx="8"/>
+  <text class="small" x="55" y="136">Control-plane</text>
+  <text class="small" x="920" y="136">Data-plane</text>
+
+  <rect class="node" x="450" y="170" width="250" height="120" fill="#dbeafe" stroke="#2563eb"/>
+  <text class="label" x="485" y="205">Coordinator API</text>
+  <text class="small" x="485" y="229">registry, jobs, assignment</text>
+  <text class="small" x="485" y="251">storage access tokens</text>
+  <text class="small" x="485" y="273">security audit + bans</text>
+
+  <rect class="node" x="70" y="185" width="230" height="105" fill="#dcfce7" stroke="#059669"/>
+  <text class="label" x="105" y="218">Client integrations</text>
+  <text class="small" x="105" y="242">Telegram, website, Discord</text>
+  <text class="small" x="105" y="264">uploads input and dispatches jobs</text>
+
+  <rect class="node" x="865" y="185" width="230" height="105" fill="#ede9fe" stroke="#7c3aed"/>
+  <text class="label" x="920" y="218">Worker API</text>
+  <text class="small" x="902" y="242">runner + AI adapters</text>
+  <text class="small" x="902" y="264">parallel heavy processing</text>
+
+  <rect class="node" x="835" y="385" width="255" height="110" fill="#fef3c7" stroke="#d97706"/>
+  <text class="label" x="888" y="418">Object storage node</text>
+  <text class="small" x="878" y="442">local or S3-compatible backend</text>
+  <text class="small" x="878" y="464">objects + garment catalog cache</text>
+
+  <rect class="node" x="65" y="385" width="245" height="110" fill="#ccfbf1" stroke="#0f766e"/>
+  <text class="label" x="118" y="418">Catalog ingestor</text>
+  <text class="small" x="103" y="442">future marketplace parsers</text>
+  <text class="small" x="103" y="464">publishes garment-item records</text>
+
+  <rect class="node" x="465" y="430" width="220" height="90" fill="#e2e8f0" stroke="#475569"/>
+  <text class="label" x="536" y="464">Postgres</text>
+  <text class="small" x="500" y="488">persistent coordinator state</text>
+
+  <rect class="node" x="880" y="555" width="205" height="70" fill="#fae8ff" stroke="#c026d3"/>
+  <text class="label" x="925" y="586">External AI APIs</text>
+  <text class="small" x="915" y="607">OpenAI, Pruna, others</text>
+
+  <path class="edge-blue" d="M 300 218 C 360 205, 390 205, 450 214"/>
+  <rect class="pill" x="317" y="180" width="106" height="24" rx="6"/>
+  <text class="tiny" x="331" y="196">assignment</text>
+
+  <path class="edge-blue" d="M 700 220 C 765 205, 805 205, 865 220"/>
+  <rect class="pill" x="728" y="181" width="105" height="24" rx="6"/>
+  <text class="tiny" x="741" y="197">prepare job</text>
+
+  <path class="edge-green" d="M 300 250 C 480 335, 675 335, 865 252"/>
+  <rect class="pill" x="505" y="316" width="146" height="24" rx="6"/>
+  <text class="tiny" x="519" y="332">direct job dispatch</text>
+
+  <path class="edge-green" d="M 865 280 C 680 360, 480 360, 300 280"/>
+  <rect class="pill" x="512" y="360" width="130" height="24" rx="6"/>
+  <text class="tiny" x="527" y="376">result callback</text>
+
+  <path class="edge-blue dash" d="M 185 385 C 250 315, 350 270, 450 246"/>
+  <rect class="pill" x="238" y="303" width="128" height="24" rx="6"/>
+  <text class="tiny" x="252" y="319">register + heartbeat</text>
+
+  <path class="edge-blue dash" d="M 962 385 C 915 330, 805 275, 700 248"/>
+  <rect class="pill" x="777" y="314" width="128" height="24" rx="6"/>
+  <text class="tiny" x="791" y="330">register + heartbeat</text>
+
+  <path class="edge-blue dash" d="M 310 426 C 385 390, 425 330, 488 290"/>
+  <rect class="pill" x="327" y="369" width="128" height="24" rx="6"/>
+  <text class="tiny" x="341" y="385">register + heartbeat</text>
+
+  <path class="edge-slate" d="M 575 290 L 575 430"/>
+  <rect class="pill" x="593" y="347" width="90" height="24" rx="6"/>
+  <text class="tiny" x="607" y="363">state only</text>
+
+  <path class="edge-green" d="M 300 270 C 500 405, 650 430, 835 435"/>
+  <rect class="pill" x="505" y="405" width="154" height="24" rx="6"/>
+  <text class="tiny" x="519" y="421">direct file upload</text>
+
+  <path class="edge-green" d="M 865 405 C 800 370, 800 300, 880 275"/>
+  <rect class="pill" x="778" y="344" width="126" height="24" rx="6"/>
+  <text class="tiny" x="792" y="360">direct file IO</text>
+
+  <path class="edge-green" d="M 310 450 C 500 515, 665 505, 835 464"/>
+  <rect class="pill" x="500" y="510" width="160" height="24" rx="6"/>
+  <text class="tiny" x="514" y="526">catalog publish</text>
+
+  <path class="edge-slate" d="M 980 290 L 980 555"/>
+  <rect class="pill" x="1000" y="405" width="82" height="24" rx="6"/>
+  <text class="tiny" x="1014" y="421">AI calls</text>
+
+  <path class="edge-blue" d="M 450 260 C 390 310, 360 365, 310 430"/>
+  <rect class="pill" x="349" y="332" width="92" height="24" rx="6"/>
+  <text class="tiny" x="363" y="348">storage token</text>
+
+  <path class="edge-blue" d="M 700 260 C 748 320, 790 360, 835 413"/>
+  <rect class="pill" x="725" y="331" width="92" height="24" rx="6"/>
+  <text class="tiny" x="739" y="347">storage token</text>
+
+  <text class="note" x="65" y="640">Blue: registration, assignment and tokens. Green: heavy data flow. Gray: persistent state and external execution.</text>
+</svg>

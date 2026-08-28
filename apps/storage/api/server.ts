@@ -3,6 +3,7 @@ import type { IncomingHttpHeaders, Server } from "node:http";
 import { pipeline } from "node:stream/promises";
 
 import {
+  isGarmentCatalogNodeSearchRequest,
   isStorageCatalogEntryUpsertRequest,
   isStorageCatalogNodeLookupRequest,
 } from "../../shared/contracts/index.js";
@@ -96,6 +97,44 @@ export function createStorageServer(deps: StorageServerDeps): Server {
 
         writeJson(response, 200, {
           entries,
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/catalog/garments/categories") {
+        if (!hasStorageServiceKey(request.headers, config)) {
+          writeError(response, 401, "unauthorized_storage", "Invalid storage key");
+          return;
+        }
+
+        writeJson(response, 200, {
+          categories: await catalog.garmentCategories(),
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/catalog/garments/search") {
+        if (!hasStorageServiceKey(request.headers, config)) {
+          writeError(response, 401, "unauthorized_storage", "Invalid storage key");
+          return;
+        }
+
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
+
+        if (!isGarmentCatalogNodeSearchRequest(body)) {
+          writeError(
+            response,
+            400,
+            "invalid_garment_catalog_search",
+            "Invalid garment catalog search payload",
+          );
+          return;
+        }
+
+        writeJson(response, 200, {
+          items: await catalog.searchGarments(body),
         });
         return;
       }

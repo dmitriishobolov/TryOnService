@@ -1,4 +1,5 @@
 import { sleep } from "../../../shared/http.js";
+import type { StorageObjectRef } from "../../../shared/contracts/index.js";
 import {
   appendImageFile,
   createStoredResult,
@@ -9,7 +10,7 @@ import {
   isRecord,
   joinUrl,
   requireApiKey,
-  selectTryOnInputFiles,
+  selectInputFile,
   storeResultFromUrl,
   TryOnModelError,
 } from "../providerUtils.js";
@@ -26,18 +27,27 @@ export const prunaTryOnAdapter: TryOnModelAdapter = {
   displayName: "Pruna",
   run: async ({ job, config, coordinator, signal }) => {
     const apiKey = requireApiKey(provider, "PRUNA_API_KEY", config.pruna.apiKey);
-    const files = selectTryOnInputFiles(job, config);
-    const [person, garment] = await Promise.all([
-      downloadInputImage(job, files.person, config, signal),
-      downloadInputImage(job, files.garment, config, signal),
+    const personRef = selectInputFile(
+      job,
+      config.tryOnPersonImageIndex,
+      "person",
+    );
+    const garmentRefs = selectPrunaGarmentInputFiles(job, config);
+    const [person, ...garments] = await Promise.all([
+      downloadInputImage(job, personRef, config, signal),
+      ...garmentRefs.map((ref) =>
+        downloadInputImage(job, ref, config, signal),
+      ),
     ]);
-    const [personUrl, garmentUrl] = await Promise.all([
+    const [personUrl, ...garmentUrls] = await Promise.all([
       uploadPrunaFile(person, apiKey, config, signal),
-      uploadPrunaFile(garment, apiKey, config, signal),
+      ...garments.map((garment) =>
+        uploadPrunaFile(garment, apiKey, config, signal),
+      ),
     ]);
     const prediction = await createPrunaPrediction(
       personUrl,
-      garmentUrl,
+      garmentUrls,
       apiKey,
       config,
       signal,
@@ -66,6 +76,53 @@ export const prunaTryOnAdapter: TryOnModelAdapter = {
     return createStoredResult("Pruna", resultFile);
   },
 };
+
+function selectPrunaGarmentInputFiles(
+  job: TryOnModelInput["job"],
+  config: TryOnModelInput["config"],
+): StorageObjectRef[] {
+  const files = job.payload.inputFiles ?? [];
+  const explicitIndexes = readGarmentFileIndexes(job);
+  const indexes = explicitIndexes ?? files
+    .map((_, index) => index)
+    .filter((index) => index !== config.tryOnPersonImageIndex);
+
+  if (indexes.length === 0) {
+    return [selectInputFile(job, config.tryOnGarmentImageIndex, "garment")];
+  }
+
+  return uniqueNumbers(indexes).map((index) =>
+    selectInputFile(job, index, "garment"),
+  );
+}
+
+function readGarmentFileIndexes(job: TryOnModelInput["job"]): number[] | undefined {
+  const options = isRecord(job.payload.model?.options)
+    ? job.payload.model.options
+    : {};
+  const raw = options.garmentFileIndexes;
+
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  if (
+    Array.isArray(raw) &&
+    raw.every((item) => Number.isInteger(item) && Number(item) >= 0)
+  ) {
+    return raw.map(Number);
+  }
+
+  throw new TryOnModelError(
+    "pruna_invalid_garment_file_indexes",
+    "Pruna option garmentFileIndexes must be an array of non-negative integers",
+    false,
+  );
+}
+
+function uniqueNumbers(values: number[]): number[] {
+  return [...new Set(values)];
+}
 
 async function uploadPrunaFile(
   image: DownloadedImage,
@@ -105,14 +162,14 @@ async function uploadPrunaFile(
 
 function createPrunaPrediction(
   personUrl: string,
-  garmentUrl: string,
+  garmentUrls: string[],
   apiKey: string,
   config: TryOnModelInput["config"],
   signal?: AbortSignal,
 ): Promise<unknown> {
   const input: Record<string, unknown> = {
     person_image: personUrl,
-    garment_images: [garmentUrl],
+    garment_images: garmentUrls,
     output_format: config.pruna.outputFormat,
     preserve_input_size: config.pruna.preserveInputSize,
     turbo: config.pruna.turbo,

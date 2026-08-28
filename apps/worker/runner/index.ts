@@ -8,6 +8,7 @@ import { createLogger } from "../../shared/logger.js";
 import type { CoordinatorClient } from "../api/coordinatorClient.js";
 import type { WorkerConfig } from "../config/index.js";
 import { runSelectedTryOnModel } from "../models/index.js";
+import { runIdealOutfitJob } from "./idealOutfit.js";
 import { TryOnModelError } from "../models/providerUtils.js";
 
 const logger = createLogger("worker");
@@ -46,12 +47,19 @@ export async function runWorkerJob(
       provider,
       task,
     });
-    const result = await runSelectedTryOnModel({
-      job,
-      config,
-      coordinator,
-      signal,
-    });
+    const result = task === "ideal-outfit"
+      ? await runIdealOutfitJob({
+          job,
+          config,
+          coordinator,
+          signal,
+        })
+      : await runSelectedTryOnModel({
+          job,
+          config,
+          coordinator,
+          signal,
+        });
     logger.info("Model execution finished", {
       jobId: job.jobId,
       provider,
@@ -228,6 +236,10 @@ function failureMessage(update: JobResultUpdateRequest): string {
 
   if (update.error?.code === "openai_api_429") {
     return "Сервер временно уперся в лимит OpenAI. Я повторил запрос несколько раз, но лимит не освободился. Попробуйте еще раз через минуту.";
+  }
+
+  if (update.error?.code?.startsWith("ideal_outfit")) {
+    return "Не удалось собрать идеальный образ. Попробуйте отправить другое фото или проверьте, что в storage есть каталог вещей.";
   }
 
   return "Не удалось выполнить разбор внешности. Попробуйте отправить другое четкое фото с видимым лицом чуть позже.";

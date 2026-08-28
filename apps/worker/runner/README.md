@@ -4,6 +4,11 @@ Runner - место, где живут процессы обработки да�
 
 Текущий runner запускает выбранную model, сообщает progress/final status в coordinator и, если в job есть `callbackUrl`, отправляет результат клиентскому callback endpoint. Payload ответа клиента не обязан храниться в coordinator, но coordinator сохраняет `result`, чтобы отличать успешную обработку от ошибки доставки. Если AI-обработка завершилась, а callback клиенту не дошел, runner отправляет статус `delivery_failed`, а не повторяет генерацию как обычный `failed`. В сценариях с изображениями runner читает входные `StorageObjectRef` из job payload через storage-access из `workerRequest` или отдельный `POST /storage/access`, а generated files возвращает как `result.files`.
 
+## Реализованные Pipelines
+
+- `try-on` и `appearance-analysis` идут через общий `runSelectedTryOnModel`: runner выбирает adapter по `payload.model.provider`, сохраняет файлы результата в storage и доставляет callback клиенту.
+- `ideal-outfit` находится в `idealOutfit.ts`: worker проверяет фото пользователя через OpenAI, запрашивает у coordinator категории `garment-item`, выбирает цельный комплект из storage catalog, передает фото пользователя и изображения выбранных вещей в Pruna и возвращает клиенту результат примерки плюс карточки вещей. Если ноги/обувь на фото не видны, pipeline не выбирает обувь.
+
 ## Типовой Пайплайн
 
 1. Принять job и проверить payload.

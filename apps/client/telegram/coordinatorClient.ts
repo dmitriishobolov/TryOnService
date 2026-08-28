@@ -1,4 +1,6 @@
 import type {
+  GarmentCatalogCategoriesResponse,
+  GarmentCatalogSearchResponse,
   ClientHeartbeatRequest,
   ClientRegistrationRequest,
   ClientRegistrationResponse,
@@ -134,6 +136,39 @@ export class TelegramCoordinatorClient {
         requesterType: "client",
         cacheKeys: params.cacheKeys,
         kinds: params.kinds,
+      },
+      this.headers(),
+      this.postOptions(),
+    );
+  }
+
+  listGarmentCatalogCategories(): Promise<GarmentCatalogCategoriesResponse> {
+    return postJson<GarmentCatalogCategoriesResponse>(
+      `${this.config.coordinatorUrl}/storage/catalog/garments/categories`,
+      {
+        requesterId: this.config.clientId,
+        requesterType: "client",
+      },
+      this.headers(),
+      this.postOptions(),
+    );
+  }
+
+  searchGarmentCatalog(params: {
+    categories?: string[];
+    tags?: string[];
+    text?: string;
+    limit?: number;
+  }): Promise<GarmentCatalogSearchResponse> {
+    return postJson<GarmentCatalogSearchResponse>(
+      `${this.config.coordinatorUrl}/storage/catalog/garments/search`,
+      {
+        requesterId: this.config.clientId,
+        requesterType: "client",
+        categories: params.categories,
+        tags: params.tags,
+        text: params.text,
+        limit: params.limit,
       },
       this.headers(),
       this.postOptions(),

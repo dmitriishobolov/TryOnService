@@ -30,7 +30,8 @@ export type TryOnModelProvider =
   | "openai";
 export type TryOnModelTask =
   | "try-on"
-  | "appearance-analysis";
+  | "appearance-analysis"
+  | "ideal-outfit";
 
 export interface TelegramClientRef {
   type: "telegram";
@@ -111,7 +112,8 @@ export interface StorageAccessResponse {
 
 export type StorageCatalogEntryKind =
   | "product-card-image"
-  | "product-card-metadata";
+  | "product-card-metadata"
+  | "garment-item";
 
 export interface StorageCatalogEntry {
   cacheKey: string;
@@ -163,6 +165,53 @@ export interface StorageCatalogLookupResponse {
   locations: StorageCatalogLocation[];
 }
 
+export interface GarmentCatalogCategory {
+  name: string;
+  count: number;
+}
+
+export interface GarmentCatalogCategoriesRequest {
+  requesterId: string;
+  requesterType: "client" | "worker";
+}
+
+export interface GarmentCatalogCategoriesResponse {
+  categories: GarmentCatalogCategory[];
+}
+
+export interface GarmentCatalogNodeSearchRequest {
+  categories?: string[];
+  tags?: string[];
+  text?: string;
+  limit?: number;
+}
+
+export interface GarmentCatalogSearchRequest extends GarmentCatalogNodeSearchRequest {
+  requesterId: string;
+  requesterType: "client" | "worker";
+}
+
+export interface GarmentCatalogItem {
+  id: string;
+  cacheKey: string;
+  storageId: string;
+  category: string;
+  title: string;
+  description?: string;
+  tags: string[];
+  price?: string;
+  currency?: string;
+  store?: string;
+  productUrl?: string;
+  image: StorageObjectRef;
+  imageUrl?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface GarmentCatalogSearchResponse {
+  items: GarmentCatalogItem[];
+}
+
 export interface TryOnModelSelection {
   provider: TryOnModelProvider;
   task?: TryOnModelTask;
@@ -190,6 +239,11 @@ export interface JobCancelRequest {
 export interface TryOnJobResult {
   message: string;
   files?: StorageObjectRef[];
+  garments?: GarmentCatalogItem[];
+  nextInput?: {
+    type: "photo";
+    message: string;
+  };
 }
 
 export interface TryOnJobError {
@@ -452,7 +506,8 @@ export function isTryOnModelProvider(
 function isTryOnModelTask(value: unknown): value is TryOnModelTask {
   return (
     value === "try-on" ||
-    value === "appearance-analysis"
+    value === "appearance-analysis" ||
+    value === "ideal-outfit"
   );
 }
 
@@ -539,7 +594,8 @@ export function isStorageCatalogEntryKind(
 ): value is StorageCatalogEntryKind {
   return (
     value === "product-card-image" ||
-    value === "product-card-metadata"
+    value === "product-card-metadata" ||
+    value === "garment-item"
   );
 }
 
@@ -603,6 +659,72 @@ export function isStorageCatalogLookupRequest(
     typeof value.requesterId === "string" &&
     value.requesterId.length > 0 &&
     (value.requesterType === "client" || value.requesterType === "worker")
+  );
+}
+
+export function isGarmentCatalogCategoriesRequest(
+  value: unknown,
+): value is GarmentCatalogCategoriesRequest {
+  return (
+    isObject(value) &&
+    typeof value.requesterId === "string" &&
+    value.requesterId.length > 0 &&
+    (value.requesterType === "client" || value.requesterType === "worker")
+  );
+}
+
+export function isGarmentCatalogNodeSearchRequest(
+  value: unknown,
+): value is GarmentCatalogNodeSearchRequest {
+  return (
+    isObject(value) &&
+    (value.categories === undefined ||
+      isNonEmptyStringArray(value.categories, 50)) &&
+    (value.tags === undefined || isNonEmptyStringArray(value.tags, 100)) &&
+    (value.text === undefined || typeof value.text === "string") &&
+    (value.limit === undefined ||
+      (typeof value.limit === "number" &&
+        Number.isInteger(value.limit) &&
+        value.limit > 0 &&
+        value.limit <= 100))
+  );
+}
+
+export function isGarmentCatalogSearchRequest(
+  value: unknown,
+): value is GarmentCatalogSearchRequest {
+  return (
+    isObject(value) &&
+    isGarmentCatalogNodeSearchRequest(value) &&
+    typeof value.requesterId === "string" &&
+    value.requesterId.length > 0 &&
+    (value.requesterType === "client" || value.requesterType === "worker")
+  );
+}
+
+export function isGarmentCatalogItem(value: unknown): value is GarmentCatalogItem {
+  return (
+    isObject(value) &&
+    typeof value.id === "string" &&
+    value.id.length > 0 &&
+    typeof value.cacheKey === "string" &&
+    value.cacheKey.length > 0 &&
+    typeof value.storageId === "string" &&
+    value.storageId.length > 0 &&
+    typeof value.category === "string" &&
+    value.category.length > 0 &&
+    typeof value.title === "string" &&
+    value.title.length > 0 &&
+    Array.isArray(value.tags) &&
+    value.tags.every((tag) => typeof tag === "string") &&
+    (value.description === undefined || typeof value.description === "string") &&
+    (value.price === undefined || typeof value.price === "string") &&
+    (value.currency === undefined || typeof value.currency === "string") &&
+    (value.store === undefined || typeof value.store === "string") &&
+    (value.productUrl === undefined || typeof value.productUrl === "string") &&
+    isStorageObjectRef(value.image) &&
+    (value.imageUrl === undefined || typeof value.imageUrl === "string") &&
+    (value.metadata === undefined || isObject(value.metadata))
   );
 }
 
@@ -749,6 +871,13 @@ export function isJobResultUpdateRequest(
         (value.result.files === undefined ||
           (Array.isArray(value.result.files) &&
             value.result.files.every(isStorageObjectRef))) &&
+      (value.result.garments === undefined ||
+          (Array.isArray(value.result.garments) &&
+            value.result.garments.every(isGarmentCatalogItem))) &&
+        (value.result.nextInput === undefined ||
+          (isObject(value.result.nextInput) &&
+            value.result.nextInput.type === "photo" &&
+            typeof value.result.nextInput.message === "string")) &&
       (value.status === "succeeded" ||
         (isObject(value.error) && typeof value.error.message === "string"))
     );
@@ -777,6 +906,21 @@ export function isTelegramJobCallbackRequest(
     typeof value.result.message === "string" &&
     (value.result.files === undefined ||
       (Array.isArray(value.result.files) &&
-        value.result.files.every(isStorageObjectRef)))
+        value.result.files.every(isStorageObjectRef))) &&
+    (value.result.garments === undefined ||
+      (Array.isArray(value.result.garments) &&
+        value.result.garments.every(isGarmentCatalogItem))) &&
+    (value.result.nextInput === undefined ||
+      (isObject(value.result.nextInput) &&
+        value.result.nextInput.type === "photo" &&
+        typeof value.result.nextInput.message === "string"))
+  );
+}
+
+function isNonEmptyStringArray(value: unknown, maxLength: number): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= maxLength &&
+    value.every((item) => typeof item === "string" && item.trim().length > 0)
   );
 }

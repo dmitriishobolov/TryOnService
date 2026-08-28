@@ -36,7 +36,7 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 8. Worker читает входные файлы по `StorageObjectRef`, запускает runner и вызывает adapter из `models`, выбранный клиентом в `payload.model.provider`. Конкретная модель provider-а берется из `payload.model.providerModel`.
 9. Worker использует storage-access из `workerRequest` или запрашивает новый через `POST /storage/access`, загружает generated files напрямую в storage-node, отправляет progress/final status в coordinator по `x-worker-service-key` и клиентский результат напрямую в callback клиента с `x-client-callback-token`.
 
-Если клиент не указал `payload.model.provider`, runner использует `mock` и возвращает текст `Ответ от сервера.`. Клиент может запросить `pruna`, `pixelcut`, `tryoncloud`, `genlook`, `wearfits` или `openai`; worker примет job только если у него есть соответствующая capability. Если `providerModel` не передан, adapter использует свой fallback из config. Подробности в [models](models/README.md) и [config](config/README.md).
+Если клиент не указал `payload.model.provider`, runner использует `mock` и возвращает текст `Ответ от сервера.`. Клиент может запросить `pruna`, `pixelcut`, `tryoncloud`, `genlook`, `wearfits` или `openai`; worker примет job только если у него есть соответствующая capability. Задача `payload.model.task=ideal-outfit` является отдельным runner pipeline: worker проверяет фото через OpenAI, читает garment catalog через coordinator, выбирает вещи, затем запускает TryOn через Pruna. Для этого worker должен иметь `OPENAI_API_KEY` и `PRUNA_API_KEY`. Если `providerModel` не передан, adapter использует свой fallback из config. Подробности в [models](models/README.md) и [config](config/README.md).
 
 ## Расширение Worker-А
 

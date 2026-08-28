@@ -11,6 +11,7 @@ API для клиентов и интеграций должен отвечат�
 - прием heartbeat от service client;
 - выдачу storage-access для прямого upload/download в storage-node;
 - lookup storage catalog по cacheKey товара/поиска без проксирования файлов;
+- выдачу списка категорий и поиск `garment-item` для сценария `Идеальный образ`;
 - получение статуса job;
 - получение состояния обработки без обязательного хранения клиентского результата;
 - отмену job, если сценарий это поддерживает.
@@ -24,6 +25,10 @@ API для клиентов и интеграций должен отвечат�
 `POST /storage/access` выдает клиенту или worker'у подходящий storage-node и scoped signed token. Если `storageId` не указан, coordinator выбирает свежий узел по минимальной доле `usedBytes/capacityBytes`, а при равной загрузке распределяет запросы между узлами. После этого файлы загружаются и читаются напрямую через storage-node, а coordinator получает только `StorageObjectRef` в payload/result.
 
 `POST /storage/catalog/lookup` принимает `requesterId`, `requesterType`, `cacheKeys` и optional `kinds`. Endpoint требует `x-client-key` или `x-worker-service-key`, опрашивает все свежие storage-node через `STORAGE_SERVICE_KEY` и возвращает `locations`: storageId, baseUrl, найденный catalog entry, read-only `StorageAccessAssignment` и signed `objectUrl` на referenced object. Если разные storage-node хранят дополняющие entries по одному cacheKey, coordinator вернет все locations.
+
+`POST /storage/catalog/garments/categories` принимает `requesterId` и `requesterType`, опрашивает все свежие storage-node и возвращает агрегированный список категорий `garment-item` с количеством записей.
+
+`POST /storage/catalog/garments/search` принимает `categories`, `tags`, `text` и `limit`, опрашивает свежие storage-node, дедуплицирует одинаковые товары по `productUrl` или `storageId:cacheKey` и возвращает `GarmentCatalogItem[]` со signed `imageUrl` для прямого чтения изображения вещи.
 
 Coordinator жестко нормализует и проверяет `keyPrefix`: client может получить доступ только к `clients/<clientId>` и вложенным ключам, worker - к `workers/<workerId>` или `jobs/...`. Запрос чужого prefix возвращает `403 storage_prefix_forbidden` и пишется в audit log.
 
@@ -46,6 +51,7 @@ Storage-node API на стороне coordinator отвечает за:
 - heartbeat через `POST /storage/:storageId/heartbeat` и `x-storage-service-key`;
 - выдачу storage-access через `POST /storage/access` для clients и worker'ов.
 - lookup cache entries через `POST /storage/catalog/lookup` для clients и worker'ов.
+- garment catalog categories/search через `POST /storage/catalog/garments/categories` и `POST /storage/catalog/garments/search`.
 
 Coordinator не принимает `dataBase64` и не отдает бинарные файлы. Его storage API - это control-plane: выбрать storage-node, проверить ключи, подписать token и сохранить registry state.
 
@@ -95,6 +101,7 @@ Security events пишутся в audit store; в Postgres это `tryon_securit
 - `x-storage-registration-key` - registration gate storage-node.
 - `x-storage-service-key` - heartbeat/health storage-node после регистрации.
 - `POST /storage/catalog/lookup` - lookup cached product/search locations; требует client или worker service key и не проксирует объект.
+- `POST /storage/catalog/garments/categories`, `POST /storage/catalog/garments/search` - чтение каталога вещей для clients/worker'ов через coordinator без проксирования файлов.
 - `POST /jobs/:jobId/cancel` - отмена собственной queued job клиентом; требует `x-client-key`.
 - `x-storage-access-token` - не используется coordinator-ом; с ним client/worker ходят напрямую в storage-node.
 - `x-admin-key` - debug/admin ручки `GET /health`, `GET /jobs`, `GET /jobs/:id`.

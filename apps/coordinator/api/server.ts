@@ -5,6 +5,9 @@ import {
   isClientHeartbeatRequest,
   isClientRegistrationRequest,
   isCreateTryOnJobRequest,
+  isGarmentCatalogCategoriesRequest,
+  isGarmentCatalogItem,
+  isGarmentCatalogSearchRequest,
   isJobCancelRequest,
   isJobProgressUpdateRequest,
   isJobResultUpdateRequest,
@@ -18,6 +21,9 @@ import {
   type ClientRegistrationRequest,
   type ClientRegistrationResponse,
   type CreateTryOnJobRequest,
+  type GarmentCatalogCategoriesResponse,
+  type GarmentCatalogItem,
+  type GarmentCatalogSearchResponse,
   type JobCancelResponse,
   type RegisteredWorker,
   type RegisteredStorageNode,
@@ -668,6 +674,110 @@ export function createCoordinatorServer(deps: CoordinatorServerDeps): Server {
             cacheKeys: body.cacheKeys.length,
             kinds: body.kinds,
             locations: payload.locations.length,
+          },
+        });
+
+        writeJson(response, 200, payload);
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/storage/catalog/garments/categories") {
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
+
+        if (!isGarmentCatalogCategoriesRequest(body)) {
+          writeError(
+            response,
+            400,
+            "invalid_garment_catalog_categories",
+            "Invalid garment catalog categories payload",
+          );
+          return;
+        }
+
+        if (
+          (body.requesterType === "client" &&
+            !hasClientKey(request.headers["x-client-key"], config)) ||
+          (body.requesterType === "worker" &&
+            !hasWorkerServiceKey(request.headers["x-worker-service-key"], config))
+        ) {
+          writeError(
+            response,
+            401,
+            "unauthorized_garment_catalog",
+            "Invalid garment catalog key",
+          );
+          return;
+        }
+
+        const payload = await listGarmentCatalogCategories(storageNodes, config);
+
+        recordSecurityEvent(audit, {
+          eventType: "garment_catalog_categories",
+          severity: "info",
+          ipAddress: requesterIp,
+          actorType: body.requesterType,
+          actorId: body.requesterId,
+          resourceType: "storage",
+          metadata: {
+            categories: payload.categories.length,
+          },
+        });
+
+        writeJson(response, 200, payload);
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/storage/catalog/garments/search") {
+        const body = await readJsonBody(request, {
+          maxBytes: config.maxJsonBodyBytes,
+        });
+
+        if (!isGarmentCatalogSearchRequest(body)) {
+          writeError(
+            response,
+            400,
+            "invalid_garment_catalog_search",
+            "Invalid garment catalog search payload",
+          );
+          return;
+        }
+
+        if (
+          (body.requesterType === "client" &&
+            !hasClientKey(request.headers["x-client-key"], config)) ||
+          (body.requesterType === "worker" &&
+            !hasWorkerServiceKey(request.headers["x-worker-service-key"], config))
+        ) {
+          writeError(
+            response,
+            401,
+            "unauthorized_garment_catalog",
+            "Invalid garment catalog key",
+          );
+          return;
+        }
+
+        const payload = await searchGarmentCatalog(storageNodes, config, {
+          requesterId: body.requesterId,
+          categories: body.categories,
+          tags: body.tags,
+          text: body.text,
+          limit: body.limit,
+        });
+
+        recordSecurityEvent(audit, {
+          eventType: "garment_catalog_search",
+          severity: "info",
+          ipAddress: requesterIp,
+          actorType: body.requesterType,
+          actorId: body.requesterId,
+          resourceType: "storage",
+          metadata: {
+            categories: body.categories,
+            tags: body.tags,
+            items: payload.items.length,
           },
         });
 
@@ -1773,6 +1883,11 @@ function resolveRequiredCapabilities(request: CreateTryOnJobRequest): string[] {
       provider ? ["try-on", `try-on.${provider}`] : ["try-on"],
     );
 
+    if (request.payload.model?.task === "ideal-outfit") {
+      required.add("try-on.openai");
+      required.add("try-on.pruna");
+    }
+
     return [...required];
   }
 
@@ -2055,6 +2170,166 @@ async function lookupStorageCatalog(
   }
 
   return { locations };
+}
+
+async function listGarmentCatalogCategories(
+  storageNodes: StorageRegistryStore,
+  config: CoordinatorConfig,
+): Promise<GarmentCatalogCategoriesResponse> {
+  const nodes = await findAvailableStorageNodes(
+    storageNodes,
+    config.storageHeartbeatTimeoutMs,
+  );
+  const settled = await Promise.allSettled(
+    nodes.map((node) =>
+      postJson<GarmentCatalogCategoriesResponse>(
+        `${node.baseUrl}/catalog/garments/categories`,
+        {},
+        {
+          "x-storage-service-key": config.storageServiceKey,
+        },
+        {
+          retries: config.httpClientRetries,
+          timeoutMs: config.httpClientTimeoutMs,
+        },
+      ),
+    ),
+  );
+  const counts = new Map<string, number>();
+
+  for (const result of settled) {
+    if (result.status === "rejected") {
+      logger.warn("Garment catalog categories failed on node", {
+        error: result.reason,
+      });
+      continue;
+    }
+
+    for (const category of result.value.categories ?? []) {
+      if (!category.name || category.count <= 0) {
+        continue;
+      }
+
+      counts.set(category.name, (counts.get(category.name) ?? 0) + category.count);
+    }
+  }
+
+  return {
+    categories: [...counts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  };
+}
+
+async function searchGarmentCatalog(
+  storageNodes: StorageRegistryStore,
+  config: CoordinatorConfig,
+  request: {
+    requesterId: string;
+    categories?: string[];
+    tags?: string[];
+    text?: string;
+    limit?: number;
+  },
+): Promise<GarmentCatalogSearchResponse> {
+  const nodes = await findAvailableStorageNodes(
+    storageNodes,
+    config.storageHeartbeatTimeoutMs,
+  );
+  const perNodeLimit = normalizeGarmentSearchLimit(request.limit);
+  const settled = await Promise.allSettled(
+    nodes.map(async (node) => {
+      const response = await postJson<GarmentCatalogSearchResponse>(
+        `${node.baseUrl}/catalog/garments/search`,
+        {
+          categories: request.categories,
+          tags: request.tags,
+          text: request.text,
+          limit: perNodeLimit,
+        },
+        {
+          "x-storage-service-key": config.storageServiceKey,
+        },
+        {
+          retries: config.httpClientRetries,
+          timeoutMs: config.httpClientTimeoutMs,
+        },
+      );
+
+      return {
+        node,
+        items: Array.isArray(response.items)
+          ? response.items.filter(isGarmentCatalogItem)
+          : [],
+      };
+    }),
+  );
+  const deduped = new Map<string, GarmentCatalogItem>();
+
+  for (const result of settled) {
+    if (result.status === "rejected") {
+      logger.warn("Garment catalog search failed on node", {
+        error: result.reason,
+      });
+      continue;
+    }
+
+    for (const item of result.value.items) {
+      const withAccess = attachGarmentAccess(
+        item,
+        result.value.node,
+        config,
+        request.requesterId,
+      );
+      const dedupeKey =
+        withAccess.productUrl ?? `${withAccess.storageId}:${withAccess.cacheKey}`;
+
+      if (!deduped.has(dedupeKey)) {
+        deduped.set(dedupeKey, withAccess);
+      }
+    }
+  }
+
+  return {
+    items: [...deduped.values()].slice(0, perNodeLimit),
+  };
+}
+
+function attachGarmentAccess(
+  item: GarmentCatalogItem,
+  node: RegisteredStorageNode,
+  config: CoordinatorConfig,
+  requesterId: string,
+): GarmentCatalogItem {
+  const objectKey = normalizeStorageKey(item.image.key);
+  const keyPrefix = dirnameStorageKey(objectKey) ?? objectKey;
+  const storage = createStorageAccessForNode(node, config, {
+    requesterId,
+    scope: "read",
+    keyPrefix,
+  });
+
+  return {
+    ...item,
+    storageId: node.storageId,
+    image: {
+      ...item.image,
+      storageId: node.storageId,
+    },
+    imageUrl: storageObjectAccessUrl(
+      storage.objectBaseUrl,
+      objectKey,
+      storage.accessToken,
+    ),
+  };
+}
+
+function normalizeGarmentSearchLimit(value: number | undefined): number {
+  if (!value || !Number.isFinite(value)) {
+    return 20;
+  }
+
+  return Math.max(1, Math.min(100, Math.floor(value)));
 }
 
 async function findAvailableStorageNodes(

@@ -1,4 +1,6 @@
 import type {
+  GarmentCatalogCategoriesResponse,
+  GarmentCatalogSearchResponse,
   JobProgressUpdateRequest,
   JobResultUpdateRequest,
   StorageAccessResponse,
@@ -96,6 +98,39 @@ export class CoordinatorClient {
         requesterType: "worker",
         cacheKeys: params.cacheKeys,
         kinds: params.kinds,
+      },
+      this.serviceHeaders(),
+      this.postOptions(),
+    );
+  }
+
+  listGarmentCatalogCategories(): Promise<GarmentCatalogCategoriesResponse> {
+    return postJson<GarmentCatalogCategoriesResponse>(
+      `${this.config.coordinatorUrl}/storage/catalog/garments/categories`,
+      {
+        requesterId: this.config.workerId,
+        requesterType: "worker",
+      },
+      this.serviceHeaders(),
+      this.postOptions(),
+    );
+  }
+
+  searchGarmentCatalog(params: {
+    categories?: string[];
+    tags?: string[];
+    text?: string;
+    limit?: number;
+  }): Promise<GarmentCatalogSearchResponse> {
+    return postJson<GarmentCatalogSearchResponse>(
+      `${this.config.coordinatorUrl}/storage/catalog/garments/search`,
+      {
+        requesterId: this.config.workerId,
+        requesterType: "worker",
+        categories: params.categories,
+        tags: params.tags,
+        text: params.text,
+        limit: params.limit,
       },
       this.serviceHeaders(),
       this.postOptions(),

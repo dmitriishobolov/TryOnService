@@ -5,14 +5,14 @@
 Выбор provider-а задается клиентом в `CreateTryOnJobRequest.payload.model.provider`. Конкретную модель provider-а клиент может передать в `payload.model.providerModel`. Coordinator использует provider для matchmaking по capability `try-on.<provider>`, а worker выбирает adapter уже при выполнении конкретной job.
 
 - `mock` - локальная проверка цепочки coordinator assignment -> direct client dispatch -> worker -> client callback.
-- `pruna` - Pruna P-Image-Try-On: worker скачивает входные файлы из storage, загружает их в Pruna `/v1/files`, запускает `/v1/predictions` и сохраняет result URL обратно в storage.
+- `pruna` - Pruna P-Image-Try-On: worker скачивает входные файлы из storage, загружает их в Pruna `/v1/files`, запускает `/v1/predictions` и сохраняет result URL обратно в storage. Adapter поддерживает несколько garment images через `payload.model.options.garmentFileIndexes`, поэтому выбран первым provider-ом для сценария `Идеальный образ`.
 - `pixelcut` - Pixelcut Try-On API: worker отправляет `person_image_url` и `garment_image_url`, поэтому входные `StorageObjectRef.url` должны быть публично доступны внешнему API.
 - `tryoncloud` - TryOnCloud Developer API или Platform API. `developer` отправляет файлы и получает raw PNG, `platform` отправляет `user_image` + публичный `product_image_url`.
 - `genlook` - Genlook Try-On API: worker загружает person image, создает generation и polling-ом ждет результат. Auth header и paths вынесены в env.
 - `wearfits` - WEARFITS Virtual Try-On API: worker отправляет sync submit на `/api/v1/virtual-fitting`, затем polling-ом ждет job result.
 - `openai` - OpenAI/ChatGPT vision adapter: worker отправляет фото пользователя в Responses API как data URL и возвращает текстовый анализ внешности/гардероба. Поддерживает per-job options: `imageDetail`, `textVerbosity`, `reasoningEffort`, `reasoningMode`, `maxOutputTokens`, `store`, `webSearch`, `inputImageUrls`, `maxInputImageUrls`, `imageGeneration`, `toolChoice`.
 
-Для virtual try-on provider-ов worker ожидает минимум два `payload.inputFiles`: `TRYON_PERSON_IMAGE_INDEX` указывает фото пользователя, `TRYON_GARMENT_IMAGE_INDEX` - фото одежды/товара. OpenAI adapter всегда использует person image как первое изображение и может дополнительно получить удаленные изображения через `inputImageUrls`. Результат генеративных provider-ов и OpenAI image generation сохраняется напрямую в object storage под `jobs/<jobId>/results/...`; coordinator получает только `StorageObjectRef` в `TryOnJobResult.files`.
+Для virtual try-on provider-ов worker ожидает минимум два `payload.inputFiles`: `TRYON_PERSON_IMAGE_INDEX` указывает фото пользователя, `TRYON_GARMENT_IMAGE_INDEX` - фото одежды/товара. Для Pruna можно передать несколько индексов одежды в `payload.model.options.garmentFileIndexes`; это используется, когда `ideal-outfit` примеряет цельный комплект из нескольких вещей. OpenAI adapter всегда использует person image как первое изображение и может дополнительно получить удаленные изображения через `inputImageUrls`. Результат генеративных provider-ов и OpenAI image generation сохраняется напрямую в object storage под `jobs/<jobId>/results/...`; coordinator получает только `StorageObjectRef` в `TryOnJobResult.files`.
 
 ## Структура
 
@@ -65,7 +65,7 @@ Runner выбирает adapter через `payload.model.provider`, а provider
 }
 ```
 
-`allowedDomains` опционален. Если он не передан, model сможет искать по открытой web выдаче. В текущем Telegram-сценарии web search не используется: бот передает только пользовательское фото и prompt анализа внешности.
+`allowedDomains` опционален. Если он не передан, model сможет искать по открытой web выдаче. В текущих Telegram-сценариях web search не используется: бот передает пользовательское фото, prompt анализа внешности или задачу `ideal-outfit`, где подбор товаров идет только по storage catalog.
 
 OpenAI не принимает `web_search` вместе с `reasoningEffort=minimal`, а некоторые модели, например `gpt-5.6-luna`, не принимают `minimal` вообще. Adapter автоматически поднимает такие запросы до `low`, а клиентские сценарии, которые используют web search или image generation, должны сразу задавать `low`.
 

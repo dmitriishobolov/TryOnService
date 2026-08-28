@@ -19,6 +19,17 @@ Deploy-пакет собирается командой `npm run build:dist` в 
 - [api](api/README.md) - HTTP API storage-node и client к coordinator для регистрации/heartbeat.
 - [config](config/README.md) - настройки storage-node, ключи, лимиты и адрес coordinator.
 
+## Garment Catalog
+
+Для сценария `Идеальный образ` storage-node хранит catalog entries с `kind=garment-item`. Такая запись указывает на уже загруженное изображение вещи и содержит metadata:
+
+- `category` - роль вещи в образе, например `рубашка`, `брюки`, `куртка`.
+- `title` и `description` - короткое название и описание товара.
+- `tags`, `colorTags`, `styleTags`, `materialTags` - признаки, по которым OpenAI выбирает вещи под пользователя.
+- `price`, `currency`, `store`, `productUrl` - данные для карточки товара в клиенте.
+
+Изображение должно быть чистым front-view на белом или контрастном фоне, без человека, лишней одежды и сильной обрезки. Worker получает категории через coordinator, ищет до 5 кандидатов на выбранную категорию и использует `imageUrl` этих записей для выбора и TryOn.
+
 ## Жизненный цикл
 
 1. Storage-node стартует, выбирает порт и backend `local` или `s3`.

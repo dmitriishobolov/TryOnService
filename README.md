@@ -11,7 +11,7 @@ TryOnService - сервис примерки на базе AI API. Проект 
 - coordinator регистрирует worker'ы и service clients, получает heartbeat, ведет очередь jobs, выбирает worker по capacity/capabilities, готовит assignment на worker-е и возвращает клиенту выбранный worker;
 - object storage node регистрируется в coordinator по отдельному ключу, отправляет heartbeat, принимает streaming upload/download от клиентов и worker'ов по короткоживущему signed storage token и ведет catalog index cache entries;
 - worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat с учетом running jobs и pending assignments, принимает jobs напрямую от клиентов только после prepare от coordinator и выбирает AI provider из `payload.model.provider` конкретной job;
-- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, по `/start` показывает меню `Анализ внешности`, умеет отменять сценарий, получает assignment или `queued`-ответ, polling-ом дожидается свободного worker'а, отправляет job worker'у напрямую и продолжает сценарий после callback; длинные ответы режутся на несколько сообщений и Markdown отображается форматированно; фото с подписью `/request openai:gpt-5.6-luna` также отправляется на OpenAI/ChatGPT vision adapter с выбранной моделью из запроса;
+- Telegram client подбирает свободный callback-порт, регистрируется в coordinator, по `/start` показывает меню `Анализ внешности` и `Идеальный образ`, умеет отменять сценарии, получает assignment или `queued`-ответ, polling-ом дожидается свободного worker'а, отправляет job worker'у напрямую и продолжает сценарий после callback; длинные ответы режутся на несколько сообщений и Markdown отображается форматированно; фото с подписью `/request openai:gpt-5.6-luna` также отправляется на OpenAI/ChatGPT vision adapter с выбранной моделью из запроса;
 - coordinator защищает регистрацию worker'ов, service clients и storage-node от перебора ключа: после достижения лимита неверных попыток IP блокируется; при `COORDINATOR_PERSISTENCE=postgres` ban сохраняется в БД и переживает restart;
 - registration, service-to-service, dispatch token, client callback, storage access и admin/debug доступ используют разные ключи;
 - clients, worker и storage-node регистрируются по общим registration keys для быстрого горизонтального масштабирования;
@@ -74,6 +74,8 @@ Coordinator не принимает и не отдает бинарные фай
 
 Для distributed cache используется `POST /storage/catalog/lookup`: client/worker передает cacheKeys и kinds, coordinator опрашивает все свежие storage-node через `STORAGE_SERVICE_KEY` и возвращает все locations с read-token на конкретный object prefix. Так несколько storage-node могут хранить разные версии или дополняющую metadata для одного переиспользуемого generated asset.
 
+Для сценария `Идеальный образ` storage catalog хранит записи `garment-item`: ссылка на товар, чистое фронтальное изображение вещи на белом/контрастном фоне, категория, теги, цена, валюта и магазин. Worker получает категории через coordinator, просит OpenAI выбрать подходящие категории/вещи, берет до 5 кандидатов на категорию из storage, затем отправляет фото пользователя и выбранные изображения одежды в TryOn provider. Первый provider для теста этого сценария - Pruna, потому что его модель принимает несколько garment images в одном запросе.
+
 Если job содержит несколько входных файлов, они должны лежать на одном storage-node и под общим prefix, например `clients/<clientId>/input/<requestId>/...`. Coordinator не выдает клиенту доступ за пределы `clients/<clientId>`; worker может получить доступ к `workers/<workerId>` или `jobs/<jobId>`/общему job prefix, который выдал coordinator.
 
 ## Структура репозитория
@@ -119,7 +121,7 @@ Worker:
 - держит pending assignments, принимает jobs от клиентов по signed dispatch token, запускает runner и обновляет статус выполнения;
 - выбирает adapter из `apps/worker/models` через `payload.model.provider`: доступны `mock`, `pruna`, `pixelcut`, `tryoncloud`, `genlook`, `wearfits`, `openai`;
 - объявляет provider-specific capabilities по доступным provider settings, чтобы coordinator не выдавал job на неподходящий worker;
-- для virtual try-on provider-ов ожидает в `payload.inputFiles` фото пользователя и фото одежды/товара, индексы задаются `TRYON_PERSON_IMAGE_INDEX` и `TRYON_GARMENT_IMAGE_INDEX`; OpenAI adapter использует фото пользователя для анализа внешности, принимает `providerModel`/`options` из job, поддерживает `webSearch`, `inputImageUrls`, `imageGeneration` и `toolChoice`, а generated files сохраняет в storage и возвращает в `result.files`;
+- для virtual try-on provider-ов ожидает в `payload.inputFiles` фото пользователя и фото одежды/товара, индексы задаются `TRYON_PERSON_IMAGE_INDEX` и `TRYON_GARMENT_IMAGE_INDEX`; Pruna adapter также поддерживает `options.garmentFileIndexes`, чтобы примерить несколько вещей одним комплектом; OpenAI adapter использует фото пользователя для анализа внешности и выбора вещей, принимает `providerModel`/`options` из job, поддерживает `webSearch`, `inputImageUrls`, `imageGeneration` и `toolChoice`, а generated files сохраняет в storage и возвращает в `result.files`;
 - отправляет клиентский результат напрямую в callback URL из assignment;
 - изолирует конкретные AI API в `apps/worker/models`.
 

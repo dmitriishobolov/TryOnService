@@ -12,6 +12,13 @@ npm run dev:catalog-ingestor
 
 По умолчанию sync выключен через `CATALOG_INGESTOR_ENABLED=false`. Сервис всё равно поднимает health endpoint, регистрируется в coordinator и отправляет heartbeat, чтобы можно было проверять deploy/lifecycle.
 
+Только parser без остальных сервисов можно запустить так:
+
+```bash
+npm run dev:catalog-parser
+```
+
+URL для этого режима меняется прямо в `catalog/providers/custom/parser.ts` в константе `DIRECT_RUN_URL`.
 Перед browser-парсингом на новой машине один раз установите Chromium:
 
 ```bash

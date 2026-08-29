@@ -19,7 +19,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev:catalog-ingestor": "tsx apps/catalog-ingestor/index.ts",
     "start:catalog-ingestor": "node dist/apps/catalog-ingestor/index.js",
-    "playwright:install": "playwright install chromium"
+    "playwright:install": "playwright install chromium",
+    "dev:catalog-parser": "tsx apps/catalog-ingestor/catalog/providers/custom/parser.ts"
   },
   "devDependencies": {
     "@types/node": "^22.13.1",

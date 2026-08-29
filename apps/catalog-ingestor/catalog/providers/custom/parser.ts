@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { readCatalogPage } from "../../../browser/pageReader.js";
 import { createLogger } from "../../../../shared/logger.js";
@@ -10,6 +11,10 @@ import type {
 } from "../../types.js";
 
 const logger = createLogger("catalog-ingestor");
+
+// Для ручной проверки parser-а без запуска coordinator/storage меняйте URL тут.
+const DIRECT_RUN_URL = "https://example.com";
+const DIRECT_RUN_BATCH_SIZE = 10;
 
 export async function collectCustomCatalog(
   context: CatalogProviderContext,
@@ -234,4 +239,33 @@ function contentTypeFromFilename(filename: string): string {
   }
 
   return "image/jpeg";
+}
+
+if (isDirectRun()) {
+  await runDirectParser();
+}
+
+async function runDirectParser(): Promise<void> {
+  const items = await collectCustomCatalog({
+    batchSize: DIRECT_RUN_BATCH_SIZE,
+    userAgent: "TryOnServiceCatalogIngestor/0.1",
+    customUrl: DIRECT_RUN_URL,
+    browserHeadless: true,
+    browserTimeoutMs: 30_000,
+    browserWaitUntil: "domcontentloaded",
+    browserTextMaxChars: 20_000,
+    browserLinksMaxCount: 100,
+  });
+
+  console.log(JSON.stringify(items, null, 2));
+}
+
+function isDirectRun(): boolean {
+  const scriptPath = process.argv[1];
+
+  if (!scriptPath) {
+    return false;
+  }
+
+  return resolve(scriptPath).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase();
 }

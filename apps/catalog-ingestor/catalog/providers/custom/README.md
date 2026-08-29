@@ -4,6 +4,15 @@
 
 Provider должен только собрать и вернуть нормализованные вещи. Он не регистрируется в coordinator, не получает storage token и не пишет файлы сам. Это делает общий `GarmentCatalogPublisher`.
 
+## Прямой запуск только parser-а
+
+Если нужно тестировать только этот файл без coordinator, storage и всего `catalog-ingestor`, поменяйте константу `DIRECT_RUN_URL` в `parser.ts` и запустите:
+
+```bash
+npm run dev:catalog-parser
+```
+
+Этот режим вызывает `collectCustomCatalog()` напрямую, открывает URL через Playwright, пишет snapshot страницы в лог и печатает возвращенный массив `CatalogGarmentDraft[]` в stdout. Пока вы не дописали извлечение товаров из `page.html`/`page.text`/`page.links`, массив будет пустым.
 ## Быстрый старт через Playwright URL
 
 Если нужно просто проверить, что parser умеет открыть страницу, укажите URL:

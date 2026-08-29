@@ -13,6 +13,7 @@ export const catalogProviderNames = [
 ] as const;
 
 export type CatalogProviderName = (typeof catalogProviderNames)[number];
+export type CatalogBrowserWaitUntil = "load" | "domcontentloaded" | "networkidle";
 
 export interface CatalogImageSource {
   url?: string;
@@ -44,6 +45,12 @@ export interface CatalogProviderContext {
   batchSize: number;
   userAgent: string;
   customSourceFile?: string;
+  customUrl?: string;
+  browserHeadless: boolean;
+  browserTimeoutMs: number;
+  browserWaitUntil: CatalogBrowserWaitUntil;
+  browserTextMaxChars: number;
+  browserLinksMaxCount: number;
   signal?: AbortSignal;
 }
 

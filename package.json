@@ -18,7 +18,8 @@
     "start:telegram": "node dist/apps/client/telegram/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev:catalog-ingestor": "tsx apps/catalog-ingestor/index.ts",
-    "start:catalog-ingestor": "node dist/apps/catalog-ingestor/index.js"
+    "start:catalog-ingestor": "node dist/apps/catalog-ingestor/index.js",
+    "playwright:install": "playwright install chromium"
   },
   "devDependencies": {
     "@types/node": "^22.13.1",
@@ -27,6 +28,7 @@
     "typescript": "^5.7.3"
   },
   "dependencies": {
-    "pg": "^8.23.0"
+    "pg": "^8.23.0",
+    "playwright": "^1.62.1"
   }
 }

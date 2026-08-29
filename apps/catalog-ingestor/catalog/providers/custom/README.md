@@ -4,6 +4,26 @@
 
 Provider должен только собрать и вернуть нормализованные вещи. Он не регистрируется в coordinator, не получает storage token и не пишет файлы сам. Это делает общий `GarmentCatalogPublisher`.
 
+## Быстрый старт через Playwright URL
+
+Если нужно просто проверить, что parser умеет открыть страницу, укажите URL:
+
+```env
+CATALOG_INGESTOR_ENABLED=true
+CATALOG_INGESTOR_PROVIDERS=custom
+CATALOG_INGESTOR_CUSTOM_URL=https://example.com/catalog
+CATALOG_INGESTOR_BROWSER_HEADLESS=true
+CATALOG_INGESTOR_BROWSER_WAIT_UNTIL=domcontentloaded
+```
+
+В таком режиме `custom/parser.ts` откроет страницу через Playwright, прочитает title, final URL, status, HTML, body text и первые ссылки, выведет краткий snapshot в лог и вернет пустой список товаров. Это специально сделано как чистая основа: вы сами будете превращать `page.html`, `page.text` или `page.links` в `CatalogGarmentDraft[]`.
+
+Перед первым запуском browser-парсера на новой машине установите Chromium:
+
+```bash
+npm run playwright:install
+```
+
 ## Быстрый старт через JSON
 
 Для первой проверки можно не писать код парсинга, а отдать товары из JSON-файла:
@@ -35,9 +55,9 @@ CATALOG_INGESTOR_CUSTOM_SOURCE_FILE=apps/catalog-ingestor/catalog/providers/cust
       "currency": "RUB",
       "store": "Example Store",
       "image": {
-        "url": "https://example.com/images/shop-shirt-1001-front.jpg",
-        "contentType": "image/jpeg",
-        "filename": "shop-shirt-1001-front.jpg"
+        "path": "apps/catalog-ingestor/catalog/providers/custom/example-shirt.svg",
+        "contentType": "image/svg+xml",
+        "filename": "demo-white-shirt-front.svg"
       },
       "metadata": {
         "gender": "men",
@@ -75,6 +95,7 @@ export async function collectCustomCatalog(
   context: CatalogProviderContext,
 ): Promise<CatalogGarmentDraft[]> {
   // 1. Получите страницу, файл, API-ответ или локальный dataset.
+  //    Для браузерной страницы используйте readCatalogPage().
   // 2. Нормализуйте каждую вещь в CatalogGarmentDraft.
   // 3. Верните массив. Запись в storage сделает общий publisher.
 }
@@ -85,6 +106,12 @@ export async function collectCustomCatalog(
 - `batchSize` - сколько товаров максимум стоит вернуть за цикл;
 - `userAgent` - User-Agent для HTTP-запросов вашего парсера;
 - `customSourceFile` - путь из `CATALOG_INGESTOR_CUSTOM_SOURCE_FILE`, если вы используете JSON/dataset;
+- `customUrl` - URL из `CATALOG_INGESTOR_CUSTOM_URL` для Playwright-чтения страницы;
+- `browserHeadless` - запускать Chromium без окна;
+- `browserTimeoutMs` - timeout открытия страницы;
+- `browserWaitUntil` - `load`, `domcontentloaded` или `networkidle`;
+- `browserTextMaxChars` - сколько символов body text вернуть в snapshot;
+- `browserLinksMaxCount` - сколько ссылок вернуть в snapshot;
 - `signal` - reserved AbortSignal для будущей отмены долгих обходов.
 
 Минимальный `CatalogGarmentDraft`:

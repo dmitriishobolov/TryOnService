@@ -72,6 +72,12 @@ export class CatalogSyncRunner {
           batchSize: this.config.batchSize,
           userAgent: this.config.userAgent,
           customSourceFile: this.config.customSourceFile,
+          customUrl: this.config.customUrl,
+          browserHeadless: this.config.browserHeadless,
+          browserTimeoutMs: this.config.browserTimeoutMs,
+          browserWaitUntil: this.config.browserWaitUntil,
+          browserTextMaxChars: this.config.browserTextMaxChars,
+          browserLinksMaxCount: this.config.browserLinksMaxCount,
         });
         const limitedDrafts = drafts.slice(0, this.config.batchSize);
         collected += limitedDrafts.length;

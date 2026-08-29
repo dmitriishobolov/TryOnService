@@ -389,7 +389,7 @@ npm run build:dist
 - `TELEGRAM_CLIENT_PUBLIC_URL` - опциональный ручной override для Telegram callback endpoint, если автоопределение по IP/port не подходит.
 - `CATALOG_INGESTOR_CLIENT_ID`, `CATALOG_INGESTOR_PORT`, `CATALOG_INGESTOR_PUBLIC_URL` - identity и endpoint catalog ingestor как service client.
 - `CATALOG_INGESTOR_ENABLED`, `CATALOG_INGESTOR_RUN_ON_START`, `CATALOG_INGESTOR_SYNC_INTERVAL_MS`, `CATALOG_INGESTOR_BATCH_SIZE` - управление периодическим сбором каталога.
-- `CATALOG_INGESTOR_PROVIDERS`, `CATALOG_INGESTOR_STORAGE_PREFIX`, `CATALOG_INGESTOR_USER_AGENT`, `CATALOG_INGESTOR_CUSTOM_SOURCE_FILE`, `CATALOG_INGESTOR_IMAGE_DOWNLOAD_TIMEOUT_MS`, `CATALOG_INGESTOR_MAX_IMAGE_BYTES` - список источников, namespace storage, JSON-файл для custom provider-а и лимиты подготовки изображений.
+- `CATALOG_INGESTOR_PROVIDERS`, `CATALOG_INGESTOR_STORAGE_PREFIX`, `CATALOG_INGESTOR_USER_AGENT`, `CATALOG_INGESTOR_CUSTOM_SOURCE_FILE`, `CATALOG_INGESTOR_CUSTOM_URL`, `CATALOG_INGESTOR_BROWSER_*`, `CATALOG_INGESTOR_IMAGE_DOWNLOAD_TIMEOUT_MS`, `CATALOG_INGESTOR_MAX_IMAGE_BYTES` - список источников, namespace storage, JSON-файл или Playwright URL для custom provider-а и лимиты подготовки изображений.
 
 ## Production readiness
 

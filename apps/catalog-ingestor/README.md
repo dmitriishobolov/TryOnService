@@ -12,7 +12,23 @@ npm run dev:catalog-ingestor
 
 По умолчанию sync выключен через `CATALOG_INGESTOR_ENABLED=false`. Сервис всё равно поднимает health endpoint, регистрируется в coordinator и отправляет heartbeat, чтобы можно было проверять deploy/lifecycle.
 
-Для проверки custom provider-а включите sync и укажите файл с товарами:
+Перед browser-парсингом на новой машине один раз установите Chromium:
+
+```bash
+npm run playwright:install
+```
+
+Для проверки чтения страницы через Playwright включите sync и укажите URL:
+
+```env
+CATALOG_INGESTOR_ENABLED=true
+CATALOG_INGESTOR_PROVIDERS=custom
+CATALOG_INGESTOR_CUSTOM_URL=https://example.com/catalog
+```
+
+Пока JSON-файл не задан, custom provider прочитает страницу, выведет snapshot в лог и вернет пустой список товаров. Это удобно для ручной разработки parser-а.
+
+Для проверки custom provider-а через готовый JSON включите sync и укажите файл с товарами:
 
 ```env
 CATALOG_INGESTOR_ENABLED=true
@@ -34,6 +50,7 @@ CATALOG_INGESTOR_CUSTOM_SOURCE_FILE=apps/catalog-ingestor/catalog/providers/cust
 
 - `api` - registration/heartbeat client к coordinator и маленький health/callback server.
 - `config` - env-настройки сервиса.
+- `browser` - базовый Playwright helper для чтения страниц по URL.
 - `catalog` - контракты provider-ов, sync runner и общий publisher в storage.
 - `catalog/providers` - место для будущих реализаций парсинга каталогов.
 - `catalog/providers/custom` - основа для вашего кастомного parser-а и пример входного JSON.

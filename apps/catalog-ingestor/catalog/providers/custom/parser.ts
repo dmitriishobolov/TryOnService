@@ -1,11 +1,15 @@
 import { readFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 
+import { readCatalogPage } from "../../../browser/pageReader.js";
+import { createLogger } from "../../../../shared/logger.js";
 import type {
   CatalogGarmentDraft,
   CatalogImageSource,
   CatalogProviderContext,
 } from "../../types.js";
+
+const logger = createLogger("catalog-ingestor");
 
 export async function collectCustomCatalog(
   context: CatalogProviderContext,
@@ -13,6 +17,7 @@ export async function collectCustomCatalog(
   const sourceFile = context.customSourceFile?.trim();
 
   if (!sourceFile) {
+    await readCustomUrlIfConfigured(context);
     return [];
   }
 
@@ -22,6 +27,41 @@ export async function collectCustomCatalog(
   return Promise.all(
     items.map((item, index) => normalizeCustomCatalogItem(item, index)),
   );
+}
+
+async function readCustomUrlIfConfigured(context: CatalogProviderContext): Promise<void> {
+  const url = context.customUrl?.trim();
+
+  if (!url) {
+    return;
+  }
+
+  const page = await readCatalogPage({
+    url,
+    userAgent: context.userAgent,
+    headless: context.browserHeadless,
+    timeoutMs: context.browserTimeoutMs,
+    waitUntil: context.browserWaitUntil,
+    textMaxChars: context.browserTextMaxChars,
+    linksMaxCount: context.browserLinksMaxCount,
+  });
+
+  logger.info("Custom parser page read", {
+    requestedUrl: page.requestedUrl,
+    finalUrl: page.url,
+    status: page.status,
+    ok: page.ok,
+    title: page.title,
+    htmlLength: page.html.length,
+    textLength: page.text.length,
+    links: page.links.length,
+  });
+
+  logger.debug("Custom parser page text preview", {
+    title: page.title,
+    textPreview: page.text.slice(0, 1_000),
+    firstLinks: page.links.slice(0, 10),
+  });
 }
 
 async function normalizeCustomCatalogItem(

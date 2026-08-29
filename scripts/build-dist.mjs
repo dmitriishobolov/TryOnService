@@ -105,11 +105,19 @@ const services = [
       "HTTP_CLIENT_RETRIES",
       "MAX_JSON_BODY_BYTES",
     ],
-  },  {
+  },
+  {
     name: "catalog-ingestor",
     title: "TryOnService Catalog Ingestor",
     entry: "app/apps/catalog-ingestor/index.js",
     directories: ["catalog-ingestor", "shared"],
+    includeNodeModules: true,
+    dependencies: rootPackage.dependencies ?? {},
+    extraScripts: {
+      "playwright:install": "playwright install chromium",
+    },
+    packageReadmeNote:
+      "For Playwright parser mode, run `npm run playwright:install` once on a new server before starting the service.",
     envKeys: [
       "LOG_LEVEL",
       "CATALOG_INGESTOR_CLIENT_ID",
@@ -124,6 +132,12 @@ const services = [
       "CATALOG_INGESTOR_STORAGE_PREFIX",
       "CATALOG_INGESTOR_USER_AGENT",
       "CATALOG_INGESTOR_CUSTOM_SOURCE_FILE",
+      "CATALOG_INGESTOR_CUSTOM_URL",
+      "CATALOG_INGESTOR_BROWSER_HEADLESS",
+      "CATALOG_INGESTOR_BROWSER_TIMEOUT_MS",
+      "CATALOG_INGESTOR_BROWSER_WAIT_UNTIL",
+      "CATALOG_INGESTOR_BROWSER_TEXT_MAX_CHARS",
+      "CATALOG_INGESTOR_BROWSER_LINKS_MAX_COUNT",
       "CATALOG_INGESTOR_IMAGE_DOWNLOAD_TIMEOUT_MS",
       "CATALOG_INGESTOR_MAX_IMAGE_BYTES",
       "COORDINATOR_URL",
@@ -286,6 +300,7 @@ function writeServicePackage(service) {
         type: "module",
         scripts: {
           start: `node ${service.entry}`,
+          ...(service.extraScripts ?? {}),
         },
         dependencies: service.dependencies,
         engines: {
@@ -350,7 +365,7 @@ npm start
 
 Runtime settings are stored in \`.env\` in this package. The file was generated from \`${envFileName}\` during build.
 
-Entry point: \`${service.entry}\`
+Entry point: \`${service.entry}\`${service.packageReadmeNote ? `\n\n## Service note\n\n${service.packageReadmeNote}` : ""}
 `;
 }
 

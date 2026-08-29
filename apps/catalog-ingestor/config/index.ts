@@ -2,7 +2,7 @@ import {
   CLIENT_HEARTBEAT_INTERVAL_MS,
   type PublicProtocol,
 } from "../../shared/contracts/index.js";
-import type { CatalogProviderName } from "../catalog/types.js";
+import type { CatalogBrowserWaitUntil, CatalogProviderName } from "../catalog/types.js";
 import { catalogProviderNames } from "../catalog/types.js";
 
 export interface CatalogIngestorConfig {
@@ -22,6 +22,12 @@ export interface CatalogIngestorConfig {
   storagePrefix: string;
   userAgent: string;
   customSourceFile?: string;
+  customUrl?: string;
+  browserHeadless: boolean;
+  browserTimeoutMs: number;
+  browserWaitUntil: CatalogBrowserWaitUntil;
+  browserTextMaxChars: number;
+  browserLinksMaxCount: number;
   imageDownloadTimeoutMs: number;
   maxImageBytes: number;
   httpClientTimeoutMs: number;
@@ -93,6 +99,16 @@ function readPublicProtocol(): PublicProtocol {
   return value;
 }
 
+function readBrowserWaitUntil(): CatalogBrowserWaitUntil {
+  const value = readString("CATALOG_INGESTOR_BROWSER_WAIT_UNTIL", "domcontentloaded");
+
+  if (value === "load" || value === "domcontentloaded" || value === "networkidle") {
+    return value;
+  }
+
+  throw new Error("CATALOG_INGESTOR_BROWSER_WAIT_UNTIL must be load, domcontentloaded or networkidle");
+}
+
 function readProviders(): CatalogProviderName[] {
   const raw = readString(
     "CATALOG_INGESTOR_PROVIDERS",
@@ -151,6 +167,12 @@ export function loadCatalogIngestorConfig(): CatalogIngestorConfig {
       "TryOnServiceCatalogIngestor/0.1",
     ),
     customSourceFile: readOptionalString("CATALOG_INGESTOR_CUSTOM_SOURCE_FILE"),
+    customUrl: readOptionalString("CATALOG_INGESTOR_CUSTOM_URL"),
+    browserHeadless: readBoolean("CATALOG_INGESTOR_BROWSER_HEADLESS", true),
+    browserTimeoutMs: readNumber("CATALOG_INGESTOR_BROWSER_TIMEOUT_MS", 30_000),
+    browserWaitUntil: readBrowserWaitUntil(),
+    browserTextMaxChars: readInteger("CATALOG_INGESTOR_BROWSER_TEXT_MAX_CHARS", 20_000),
+    browserLinksMaxCount: readInteger("CATALOG_INGESTOR_BROWSER_LINKS_MAX_COUNT", 100),
     imageDownloadTimeoutMs: readNumber(
       "CATALOG_INGESTOR_IMAGE_DOWNLOAD_TIMEOUT_MS",
       120_000,

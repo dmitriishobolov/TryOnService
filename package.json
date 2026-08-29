@@ -21,7 +21,8 @@
     "start:catalog-ingestor": "node dist/apps/catalog-ingestor/index.js",
     "playwright:install": "playwright install chromium",
     "dev:catalog-parser": "tsx apps/catalog-ingestor/catalog/providers/custom/parser.ts",
-    "dev:catalog-parser:tsum": "tsx apps/catalog-ingestor/catalog/providers/tsum/parser.ts"
+    "dev:catalog-parser:tsum": "tsx apps/catalog-ingestor/catalog/providers/tsum/parser.ts",
+    "monolith:ingest:tsum:male": "npm --prefix monolith run ingest:tsum:male"
   },
   "devDependencies": {
     "@types/node": "^22.13.1",

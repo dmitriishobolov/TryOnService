@@ -1,0 +1,5 @@
+.env
+.env.local
+.monolith-data/
+dist/
+node_modules/

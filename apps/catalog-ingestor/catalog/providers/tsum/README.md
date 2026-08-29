@@ -2,7 +2,7 @@
 
 `providers/tsum` - отдельное место под уникальный parser сайта ЦУМ.
 
-Сейчас parser делает только базовое чтение страницы через Playwright и возвращает пустой массив товаров. Это намеренно: дальше сюда можно спокойно писать уникальную логику извлечения карточек ЦУМа, не трогая `custom` provider и общий storage pipeline.
+Сейчас parser открывает страницу через Playwright, читает JSON из `__INITIAL_STATE__`, берет товары из `catalogs.list.<catalog-slug>.data.list` и нормализует их в общий формат. Дальше сюда можно добавлять уникальные правила ЦУМа: пагинацию, обход категорий, фильтрацию изображений и дополнительные теги, не трогая `custom` provider и общий storage pipeline.
 
 ## Запустить только TSUM parser
 
@@ -45,7 +45,7 @@ CATALOG_INGESTOR_TSUM_START_URL=https://www.tsum.ru/catalog/odezhda-18413/
 Основные места в `parser.ts`:
 
 - `readTsumCatalogPage()` - открывает страницу через Playwright и возвращает `CatalogPageSnapshot`.
-- `parseTsumCatalogPage()` - сюда пишем извлечение карточек ЦУМа из `page.html`, `page.text` или `page.links`.
+- `parseTsumCatalogPage()` - извлекает `__INITIAL_STATE__`, выбирает список товаров текущего каталога и передает их в нормализацию.
 - `TsumProductCandidate` - промежуточный формат сырой карточки ЦУМа.
 - `normalizeTsumCandidates()` - превращает кандидатов в общий `CatalogGarmentDraft`.
 
@@ -60,6 +60,18 @@ CATALOG_INGESTOR_TSUM_START_URL=https://www.tsum.ru/catalog/odezhda-18413/
 ```
 
 Если `externalId` не указан, parser попытается взять его из URL товара или создать стабильный hash. `category` по умолчанию станет `одежда`, `store` - `ЦУМ`, `currency` - `RUB`.
+## Что мы увидели в HTML ЦУМ
+
+Каталог одежды отдает SSR/initial-state данные прямо в HTML:
+
+- `script#__INITIAL_STATE__` содержит большой JSON состояния страницы;
+- товары первой страницы лежат по пути `catalogs.list.odezhda-18413.data.list`;
+- в каждом товаре есть `id`, `ext_id`, `slug`, `title`, `brand_name`, `category_slug`, `colorConcrete`, `photos`, `skuList`, `inStock` и `season`;
+- URL товара собирается как `/product/<slug>/`;
+- цену берем из `skuList[].price_discount`/`price_original`;
+- изображение берем из первого объекта `photos`, сейчас с приоритетом больших размеров `large`, `w1320`, `middle`, `w600`.
+
+Поэтому CSS-селекторы карточек сейчас не основной источник данных. Они могут пригодиться позже как fallback, если ЦУМ поменяет initial state.
 
 ## Что вернет parser дальше по pipeline
 

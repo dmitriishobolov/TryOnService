@@ -12,6 +12,7 @@ TryOnService - сервис примерки на базе AI API. Проект 
 - object storage node регистрируется в coordinator по отдельному ключу, отправляет heartbeat, принимает streaming upload/download от клиентов, worker'ов и catalog ingestor по короткоживущему signed storage token и ведет catalog index cache entries;
 - worker при запуске подбирает свободный порт, регистрируется в coordinator, каждые 5 секунд отправляет heartbeat с учетом running jobs и pending assignments, принимает jobs напрямую от клиентов только после prepare от coordinator и выбирает AI provider из `payload.model.provider` конкретной job;
 - Telegram client подбирает свободный callback-порт, регистрируется в coordinator, по `/start` показывает меню `Анализ внешности` и `Идеальный образ`, умеет отменять сценарии, получает assignment или `queued`-ответ, polling-ом дожидается свободного worker'а, отправляет job worker'у напрямую и продолжает сценарий после callback; длинные ответы режутся на несколько сообщений и Markdown отображается форматированно; фото с подписью `/request openai:gpt-5.6-luna` также отправляется на OpenAI/ChatGPT vision adapter с выбранной моделью из запроса;
+- monolith MVP полностью изолирован в `monolith/`: у него свой `package.json`, `tsconfig.json`, `.env.example`, локальный runtime и команды запуска из этой папки; корневая distributed-сборка его не включает;
 - coordinator защищает регистрацию worker'ов, service clients и storage-node от перебора ключа: после достижения лимита неверных попыток IP блокируется; при `COORDINATOR_PERSISTENCE=postgres` ban сохраняется в БД и переживает restart;
 - registration, service-to-service, dispatch token, client callback, storage access и admin/debug доступ используют разные ключи;
 - clients, worker и storage-node регистрируются по общим registration keys для быстрого горизонтального масштабирования;
@@ -81,6 +82,7 @@ Coordinator не принимает и не отдает бинарные фай
 ## Структура репозитория
 
 - [apps](apps/README.md) - все приложения и общие пакеты монорепозитория.
+- [monolith](monolith/README.md) - отдельный мини MVP проект: Telegram bot, локальное хранение, ChatGPT/OpenAI анализ и прямой TryOn API вызов; запускается и собирается из папки `monolith/`.
 - [apps/coordinator](apps/coordinator/README.md) - сервис-координатор: API assignment, jobs state, registry worker'ов/service clients, assignment cleanup и coordinator utilities.
 - [apps/storage](apps/storage/README.md) - object storage node: самостоятельная регистрация в coordinator, heartbeat и прямой upload/download файлов.
 - [apps/catalog-ingestor](apps/catalog-ingestor/README.md) - отдельный сервис сбора каталогов одежды и публикации `garment-item` в storage; внутри есть [custom parser scaffold](apps/catalog-ingestor/catalog/providers/custom/README.md) и [TSUM parser scaffold](apps/catalog-ingestor/catalog/providers/tsum/README.md).
@@ -139,6 +141,22 @@ Shared:
 - хранит типы запросов, ответов, статусов jobs и worker'ов;
 - задает единый контракт между coordinator, worker и клиентами;
 - должен изменяться первым, если меняется публичный формат данных.
+
+## Изолированный Monolith MVP
+
+Monolith теперь живет как самостоятельный мини-проект внутри `monolith/`. Корневые distributed-команды, `.env.example`, `tsconfig.json` и `build:dist` не собирают его. Это сделано специально, чтобы MVP не смешивался с распределенной архитектурой в `apps/`.
+
+Запускать бота нужно из собственной папки:
+
+```bash
+cd monolith
+npm install
+npm run dev
+```
+
+Медленный сбор всех страниц мужского каталога TSUM можно запускать из `monolith/` командой `npm run ingest:tsum:male` или из корня репозитория командой `npm run monolith:ingest:tsum:male`.
+
+Каталог товаров и пользовательские файлы по умолчанию лежат в `monolith/.monolith-data/`. Настройки берутся из `monolith/.env`, пример лежит в [monolith/.env.example](monolith/.env.example). Подробнее: [monolith/README.md](monolith/README.md).
 
 ## Локальный запуск
 

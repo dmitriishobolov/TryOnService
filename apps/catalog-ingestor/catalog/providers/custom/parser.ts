@@ -13,7 +13,7 @@ import type {
 const logger = createLogger("catalog-ingestor");
 
 // Для ручной проверки parser-а без запуска coordinator/storage меняйте URL тут.
-const DIRECT_RUN_URL = "https://example.com";
+const DIRECT_RUN_URL = "https://www.tsum.ru/catalog/odezhda-18413/";
 const DIRECT_RUN_BATCH_SIZE = 10;
 
 export async function collectCustomCatalog(

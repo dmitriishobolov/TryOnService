@@ -23,6 +23,7 @@ export interface CatalogIngestorConfig {
   userAgent: string;
   customSourceFile?: string;
   customUrl?: string;
+  tsumStartUrl?: string;
   browserHeadless: boolean;
   browserTimeoutMs: number;
   browserWaitUntil: CatalogBrowserWaitUntil;
@@ -168,6 +169,7 @@ export function loadCatalogIngestorConfig(): CatalogIngestorConfig {
     ),
     customSourceFile: readOptionalString("CATALOG_INGESTOR_CUSTOM_SOURCE_FILE"),
     customUrl: readOptionalString("CATALOG_INGESTOR_CUSTOM_URL"),
+    tsumStartUrl: readOptionalString("CATALOG_INGESTOR_TSUM_START_URL"),
     browserHeadless: readBoolean("CATALOG_INGESTOR_BROWSER_HEADLESS", true),
     browserTimeoutMs: readNumber("CATALOG_INGESTOR_BROWSER_TIMEOUT_MS", 30_000),
     browserWaitUntil: readBrowserWaitUntil(),

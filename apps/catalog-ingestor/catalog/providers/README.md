@@ -2,18 +2,18 @@
 
 Здесь лежат реализации источников каталога. Provider отвечает только за добычу и нормализацию данных магазина. Общий sync runner вызывает `CatalogProvider.collect()`, ограничивает batch, а `storagePublisher` загружает clean image и создает `garment-item` в storage.
 
-Сейчас подключены архитектурные no-op заглушки для будущих парсеров:
+Магазинные parser-ы живут в отдельных папках по имени provider-а. Сейчас:
 
 - `wildberries`
 - `ozon`
 - `aliexpress`
-- `tsum`
+- [tsum](tsum/README.md) - отдельная Playwright-заготовка parser-а ЦУМ.
 - `tsum-outlet`
 - `ostin`
 - `2mood`
 - `lime`
 
-Дополнительно есть рабочая заготовка [custom](custom/README.md). Она умеет читать нормализованные товары из JSON-файла и служит местом для вашего кастомного parser-а.
+Для ручных экспериментов есть рабочая заготовка [custom](custom/README.md). Она умеет читать нормализованные товары из JSON-файла и может открывать страницу через Playwright.
 
 ## Контракт provider-а
 

@@ -5,15 +5,13 @@ import type {
 } from "../types.js";
 import { catalogProviderNames } from "../types.js";
 import { createCustomProvider } from "./custom/index.js";
+import { createTsumProvider } from "./tsum/index.js";
 
 export function createCatalogProviders(
   names: CatalogProviderName[],
 ): CatalogProvider[] {
   const knownEntries: [CatalogProviderName, CatalogProvider][] =
-    catalogProviderNames.map((name) => [
-      name,
-      name === "custom" ? createCustomProvider() : createStubProvider(name),
-    ]);
+    catalogProviderNames.map((name) => [name, createKnownProvider(name)]);
   const known = new Map<CatalogProviderName, CatalogProvider>(knownEntries);
 
   return names.map((name) => {
@@ -25,6 +23,18 @@ export function createCatalogProviders(
 
     return provider;
   });
+}
+
+function createKnownProvider(name: CatalogProviderName): CatalogProvider {
+  if (name === "custom") {
+    return createCustomProvider();
+  }
+
+  if (name === "tsum") {
+    return createTsumProvider();
+  }
+
+  return createStubProvider(name);
 }
 
 function createStubProvider(name: CatalogProviderName): CatalogProvider {

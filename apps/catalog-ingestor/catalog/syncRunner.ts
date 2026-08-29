@@ -73,6 +73,7 @@ export class CatalogSyncRunner {
           userAgent: this.config.userAgent,
           customSourceFile: this.config.customSourceFile,
           customUrl: this.config.customUrl,
+          tsumStartUrl: this.config.tsumStartUrl,
           browserHeadless: this.config.browserHeadless,
           browserTimeoutMs: this.config.browserTimeoutMs,
           browserWaitUntil: this.config.browserWaitUntil,

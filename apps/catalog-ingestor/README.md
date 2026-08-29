@@ -2,7 +2,7 @@
 
 `apps/catalog-ingestor` - отдельный сервис сбора каталога одежды. Его можно положить на любую машину с доступом к coordinator и интернету: сервис регистрируется как service client, отправляет heartbeat, получает прямой доступ к object storage и публикует записи `garment-item`.
 
-Сейчас реализована архитектура без реального парсинга сайтов. Провайдеры `wildberries`, `ozon`, `aliexpress`, `tsum`, `tsum-outlet`, `ostin`, `2mood` и `lime` подключены как no-op заглушки. Provider `custom` уже готов как основа под ваш parser: он умеет читать нормализованные товары из JSON-файла, а его `parser.ts` можно заменить на реальный обход нужного источника.
+Сейчас реализована архитектура без production-парсинга сайтов. Для постоянных магазинов используем отдельные папки provider-ов: TSUM уже выделен в providers/tsum как Playwright-заготовка, остальные магазинные provider-ы пока остаются no-op заглушками. Provider custom нужен для быстрых экспериментов и JSON-import без привязки к конкретному магазину.
 
 ## Запуск
 
@@ -18,7 +18,9 @@ npm run dev:catalog-ingestor
 npm run dev:catalog-parser
 ```
 
-URL для этого режима меняется прямо в `catalog/providers/custom/parser.ts` в константе `DIRECT_RUN_URL`.
+URL для custom-режима меняется прямо в `catalog/providers/custom/parser.ts` в константе `DIRECT_RUN_URL`.
+
+Отдельно TSUM parser можно гонять командой `npm run dev:catalog-parser:tsum`. URL для него задается в `catalog/providers/tsum/parser.ts` через `DIRECT_RUN_URL`.
 Перед browser-парсингом на новой машине один раз установите Chromium:
 
 ```bash
@@ -61,6 +63,7 @@ CATALOG_INGESTOR_CUSTOM_SOURCE_FILE=apps/catalog-ingestor/catalog/providers/cust
 - `catalog` - контракты provider-ов, sync runner и общий publisher в storage.
 - `catalog/providers` - место для будущих реализаций парсинга каталогов.
 - `catalog/providers/custom` - основа для вашего кастомного parser-а и пример входного JSON.
+- `catalog/providers/tsum` - отдельная заготовка parser-а ЦУМ, которую можно дописывать независимо от custom.
 
 ## Как добавить свой parser
 

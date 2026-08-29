@@ -11,11 +11,12 @@ Catalog ingestor читает общий `.env` через `loadEnvFile()` и и
 - `CATALOG_INGESTOR_RUN_ON_START` - запускать sync сразу после старта.
 - `CATALOG_INGESTOR_SYNC_INTERVAL_MS` - период повторного обхода provider-ов.
 - `CATALOG_INGESTOR_BATCH_SIZE` - лимит товаров за цикл на provider.
-- `CATALOG_INGESTOR_PROVIDERS` - список подключенных provider-ов. Для вашего parser-а используйте `custom`.
+- `CATALOG_INGESTOR_PROVIDERS` - список подключенных provider-ов. Для быстрого ручного parser-а используйте `custom`, для ЦУМ используйте `tsum`.
 - `CATALOG_INGESTOR_STORAGE_PREFIX` - root prefix для объектов и catalog entries. Если пусто, используется `clients/<clientId>/catalog`.
 - `CATALOG_INGESTOR_USER_AGENT` - User-Agent для будущих provider HTTP-запросов и скачивания изображений.
 - `CATALOG_INGESTOR_CUSTOM_SOURCE_FILE` - optional JSON dataset для provider-а `custom`; удобно для тестового наполнения каталога без реального парсинга.
 - `CATALOG_INGESTOR_CUSTOM_URL` - optional URL, который provider `custom` откроет через Playwright, если JSON-файл не задан.
+- `CATALOG_INGESTOR_TSUM_START_URL` - стартовая страница provider-а `tsum`, по умолчанию каталог одежды ЦУМ.
 - `CATALOG_INGESTOR_BROWSER_HEADLESS` - запускать Chromium в headless-режиме.
 - `CATALOG_INGESTOR_BROWSER_TIMEOUT_MS` - timeout открытия страницы Playwright helper-ом.
 - `CATALOG_INGESTOR_BROWSER_WAIT_UNTIL` - состояние загрузки `load`, `domcontentloaded` или `networkidle`.

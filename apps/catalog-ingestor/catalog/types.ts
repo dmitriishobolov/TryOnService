@@ -46,6 +46,7 @@ export interface CatalogProviderContext {
   userAgent: string;
   customSourceFile?: string;
   customUrl?: string;
+  tsumStartUrl?: string;
   browserHeadless: boolean;
   browserTimeoutMs: number;
   browserWaitUntil: CatalogBrowserWaitUntil;

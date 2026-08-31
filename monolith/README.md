@@ -362,6 +362,8 @@ npm run ingest:tsum:male:enrich
 npm run ingest:tsum:female:enrich
 ```
 
+Мужской и женский TSUM ingest можно запускать параллельно отдельными командами. Оба процесса пишут в общий `.monolith-data/catalog/items.json`, но сохранение идет через `items.json.lock`: перед записью процесс перечитывает свежий каталог, сливает свои товары по `id` и атомарно заменяет файл. Checkpoint у `male` и `female` раздельный, поэтому прогресс сегментов не мешает друг другу.
+
 После каждой страницы команда:
 
 - добавляет найденные товары в `.monolith-data/catalog/items.json`;

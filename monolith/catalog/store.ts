@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import type { MonolithConfig } from "../config.js";
@@ -95,6 +95,9 @@ const categoryInferenceRules: Array<[RegExp, string]> = [
 const canonicalCategoryNames = new Set(Object.keys(categoryAliasesByCanonical));
 const sizePreferences: SizePreference[] = ["any", "xs-s", "m-l", "xl-xxl"];
 const pricePreferences: PricePreference[] = ["any", "under-10k", "under-30k", "under-100k", "over-100k"];
+const catalogWriteLockPollMs = 100;
+const catalogWriteLockTimeoutMs = 30_000;
+const catalogWriteLockStaleMs = 120_000;
 
 export class LocalCatalogStore {
   private items = new Map<string, GarmentCatalogItem>();
@@ -108,24 +111,7 @@ export class LocalCatalogStore {
     }
 
     this.loaded = true;
-
-    if (!existsSync(this.config.catalog.cachePath)) {
-      return [];
-    }
-
-    const raw = await readFile(this.config.catalog.cachePath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-
-    if (!Array.isArray(parsed)) {
-      throw new Error("Monolith catalog cache must contain an array");
-    }
-
-    this.items = new Map(
-      parsed
-        .filter(isCatalogItem)
-        .map(normalizeCatalogItem)
-        .map((item) => [item.id, item]),
-    );
+    this.items = await this.readCacheMap();
 
     return this.list();
   }
@@ -133,51 +119,132 @@ export class LocalCatalogStore {
   async upsertMany(items: GarmentCatalogItem[]): Promise<GarmentCatalogItem[]> {
     await this.load();
 
-    for (const item of items) {
-      const existing = this.items.get(item.id);
-      this.items.set(item.id, normalizeCatalogItem({
-        ...existing,
-        ...item,
-        imageFile: item.imageFile ?? existing?.imageFile,
-        createdAt: existing?.createdAt ?? item.createdAt,
-        updatedAt: new Date().toISOString(),
-      }));
-    }
+    const incoming = items.map(normalizeCatalogItem);
 
-    await this.save();
+    await this.withCatalogWriteLock(async () => {
+      const current = await this.readCacheMap();
+      const now = new Date().toISOString();
+
+      for (const item of incoming) {
+        const existing = current.get(item.id);
+        current.set(item.id, normalizeCatalogItem({
+          ...existing,
+          ...item,
+          imageFile: item.imageFile ?? existing?.imageFile,
+          createdAt: existing?.createdAt ?? item.createdAt,
+          updatedAt: now,
+        }));
+      }
+
+      await this.writeCacheMap(current);
+      this.items = current;
+    });
 
     return this.list();
   }
 
   async replaceAll(items: GarmentCatalogItem[]): Promise<GarmentCatalogItem[]> {
     await this.load();
-    this.items = new Map(
+    const replacement = new Map(
       items
         .map(normalizeCatalogItem)
-        .map((item) => [item.id, item]),
+        .map((item) => [item.id, item] as const),
     );
-    await this.save();
+
+    await this.withCatalogWriteLock(async () => {
+      await this.writeCacheMap(replacement);
+      this.items = replacement;
+    });
 
     return this.list();
   }
 
   async updateItem(item: GarmentCatalogItem): Promise<void> {
-    await this.load();
-    this.items.set(item.id, normalizeCatalogItem({
+    await this.upsertMany([{
       ...item,
       updatedAt: new Date().toISOString(),
-    }));
-    await this.save();
+    }]);
   }
 
   async save(): Promise<void> {
-    await mkdir(dirname(this.config.catalog.cachePath), { recursive: true });
-    await writeFile(
-      this.config.catalog.cachePath,
-      `${JSON.stringify(this.list(), null, 2)}\n`,
+    await this.withCatalogWriteLock(async () => {
+      await this.writeCacheMap(this.items);
+    });
+  }
+
+  private async readCacheMap(): Promise<Map<string, GarmentCatalogItem>> {
+    if (!existsSync(this.config.catalog.cachePath)) {
+      return new Map();
+    }
+
+    const raw = await readFile(this.config.catalog.cachePath, "utf8");
+
+    if (!raw.trim()) {
+      return new Map();
+    }
+
+    const parsed = JSON.parse(raw) as unknown;
+
+    if (!Array.isArray(parsed)) {
+      throw new Error("Monolith catalog cache must contain an array");
+    }
+
+    return new Map(
+      parsed
+        .filter(isCatalogItem)
+        .map(normalizeCatalogItem)
+        .map((item) => [item.id, item] as const),
     );
   }
 
+  private async writeCacheMap(items: Map<string, GarmentCatalogItem>): Promise<void> {
+    await mkdir(dirname(this.config.catalog.cachePath), { recursive: true });
+    const snapshot = [...items.values()].sort((a, b) => a.title.localeCompare(b.title, "ru"));
+    const tempPath = `${this.config.catalog.cachePath}.${process.pid}.${Date.now()}.tmp`;
+
+    await writeFile(
+      tempPath,
+      `${JSON.stringify(snapshot, null, 2)}\n`,
+      "utf8",
+    );
+    await rename(tempPath, this.config.catalog.cachePath);
+  }
+
+  private async withCatalogWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+    await mkdir(dirname(this.config.catalog.cachePath), { recursive: true });
+    const lockPath = `${this.config.catalog.cachePath}.lock`;
+    const startedAt = Date.now();
+    let staleLockRemoved = false;
+
+    while (true) {
+      try {
+        const handle = await open(lockPath, "wx");
+
+        try {
+          return await operation();
+        } finally {
+          await handle.close();
+          await rm(lockPath, { force: true });
+        }
+      } catch (error) {
+        if (!isFileExistsError(error)) {
+          throw error;
+        }
+
+        if (!staleLockRemoved && await isStaleCatalogLock(lockPath)) {
+          staleLockRemoved = true;
+          await rm(lockPath, { force: true });
+          continue;
+        }
+
+        if (Date.now() - startedAt > catalogWriteLockTimeoutMs) {
+          throw new Error(`Timed out waiting for catalog cache lock: ${lockPath}`);
+        }
+
+        await sleep(catalogWriteLockPollMs);
+      }
+    }
+  }
   list(): GarmentCatalogItem[] {
     return [...this.items.values()].sort((a, b) =>
       a.title.localeCompare(b.title, "ru"),
@@ -282,6 +349,26 @@ export class LocalCatalogStore {
   }
 }
 
+async function isStaleCatalogLock(lockPath: string): Promise<boolean> {
+  try {
+    const lockStats = await stat(lockPath);
+
+    return Date.now() - lockStats.mtimeMs > catalogWriteLockStaleMs;
+  } catch (error) {
+    return !isFileExistsError(error);
+  }
+}
+
+function isFileExistsError(error: unknown): boolean {
+  return typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "EEXIST";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 function matchesCatalogPreferenceFilter(
   item: GarmentCatalogItem,
   filter: CatalogPreferenceFilter,

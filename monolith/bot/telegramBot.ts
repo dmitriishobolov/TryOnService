@@ -121,6 +121,11 @@ interface ProcessingState {
   flow: ProcessingFlow;
   startedAt: number;
 }
+interface IdealOptionAvailability {
+  option: IdealOutfitOption;
+  groups: OutfitCandidateGroup[];
+  missing: OutfitCandidateGroup[];
+}
 
 const appearanceAnalysisButtonText = "Анализ внешности";
 const idealOutfitButtonText = "Идеальный образ";
@@ -579,7 +584,7 @@ export class TelegramMonolithBot {
       statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("читаю каталог", 18));
 
       const items = await this.catalog.ensureReady();
-      const catalogHints = await this.catalog.categoryTagHints();
+      const catalogHints = await this.catalog.categoryTagHints(preferences);
 
       if (!this.config.catalog.enabled || items.length === 0 || catalogHints.length === 0) {
         throw new Error("Monolith catalog is empty");
@@ -613,10 +618,22 @@ export class TelegramMonolithBot {
         return;
       }
 
+      statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("проверяю наличие вещей", 70));
+      const availability = await this.checkIdealOptionsAvailability(chatId, options);
+      const availableOptions = availability
+        .filter((entry) => entry.missing.length === 0)
+        .map((entry) => entry.option)
+        .slice(0, 3);
+
+      if (availableOptions.length === 0) {
+        await this.offerIdealPlanCatalogFallback(chatId, stored, options, availability, preferences, statusMessageId);
+        return;
+      }
+
       this.sessions.set(chatId, {
         mode: "awaiting-ideal-style",
         person: stored,
-        options,
+        options: availableOptions,
         userWish: preferences.userWish,
         sizePreference: preferences.sizePreference,
         pricePreference: preferences.pricePreference,
@@ -624,8 +641,8 @@ export class TelegramMonolithBot {
       statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("варианты готовы", 100));
       await this.sendMessage(
         chatId,
-        renderIdealStyleOptionsMessage(options),
-        idealStyleOptionsMarkup(options),
+        renderIdealStyleOptionsMessage(availableOptions, options.length),
+        idealStyleOptionsMarkup(availableOptions),
       );
     } catch (error) {
       logger.error("Ideal outfit plan failed", {
@@ -832,7 +849,7 @@ export class TelegramMonolithBot {
 
       statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("читаю каталог", 18));
       const items = await this.catalog.ensureReady();
-      const catalogHints = await this.catalog.categoryTagHints();
+      const catalogHints = await this.catalog.categoryTagHints(preferences);
 
       if (!this.config.catalog.enabled || items.length === 0 || catalogHints.length === 0) {
         throw new Error("Monolith catalog is empty");
@@ -865,10 +882,22 @@ export class TelegramMonolithBot {
         await this.sendMessage(chatId, "Пришлите другое фото или нажмите «Отмена».", cancelMarkup());
         return;
       }
+      statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("проверяю наличие вещей", 70));
+      const availability = await this.checkIdealOptionsAvailability(chatId, options);
+      const availableOptions = availability
+        .filter((entry) => entry.missing.length === 0)
+        .map((entry) => entry.option)
+        .slice(0, 3);
+
+      if (availableOptions.length === 0) {
+        await this.offerIdealPlanCatalogFallback(chatId, stored, options, availability, preferences, statusMessageId);
+        return;
+      }
+
       this.sessions.set(chatId, {
         mode: "awaiting-ideal-style",
         person: stored,
-        options,
+        options: availableOptions,
         userWish: preferences.userWish,
         sizePreference: preferences.sizePreference,
         pricePreference: preferences.pricePreference,
@@ -878,12 +907,12 @@ export class TelegramMonolithBot {
         chatId,
         [
           preferences.userWish
-            ? "Я учёл новое пожелание и подготовил варианты по фото, размеру и бюджету."
-            : "Я убрал прежнее пожелание и подготовил варианты по фото, размеру и бюджету.",
+            ? "Я учёл новое пожелание и подготовил доступные варианты по фото, размеру и бюджету."
+            : "Я убрал прежнее пожелание и подготовил доступные варианты по фото, размеру и бюджету.",
           "",
-          renderIdealStyleOptionsMessage(options),
+          renderIdealStyleOptionsMessage(availableOptions, options.length),
         ].join("\n"),
-        idealStyleOptionsMarkup(options),
+        idealStyleOptionsMarkup(availableOptions),
       );
     } catch (error) {
       logger.error("Ideal outfit relaxed fallback failed", {
@@ -975,7 +1004,7 @@ export class TelegramMonolithBot {
       const missing = groups.filter((group) => group.candidates.length === 0);
       const usableGroups = groups.filter((group) => group.candidates.length > 0);
 
-      if (usableGroups.length === 0) {
+      if (missing.length > 0) {
         await this.offerIdealCatalogFallback(chatId, person, option, groups, statusMessageId);
         return;
       }
@@ -1080,8 +1109,81 @@ export class TelegramMonolithBot {
     }
   }
 
-  private async buildCandidateGroups(
-    requests: OutfitCategoryRequest[],
+  private async checkIdealOptionsAvailability(
+    chatId: string,
+    options: IdealOutfitOption[],
+  ): Promise<IdealOptionAvailability[]> {
+    const availability: IdealOptionAvailability[] = [];
+
+    for (const option of options.slice(0, 3)) {
+      const groups = await this.buildCandidateGroups(option.categories);
+      const missing = groups.filter((group) => group.candidates.length === 0);
+
+      logger.info("Ideal outfit option availability checked", {
+        chatId,
+        styleName: option.styleName,
+        available: missing.length === 0,
+        categories: groups.map((group) => ({
+          category: group.request.category,
+          gender: group.request.gender,
+          sizePreference: group.request.sizePreference,
+          pricePreference: group.request.pricePreference,
+          requiredTags: group.request.requiredTags,
+          color: group.request.color,
+          candidates: group.candidates.length,
+          prices: group.candidates.slice(0, 3).map((item) => item.price?.amount ?? null),
+        })),
+      });
+
+      availability.push({ option, groups, missing });
+    }
+
+    return availability;
+  }
+
+  private async offerIdealPlanCatalogFallback(
+    chatId: string,
+    person: StoredImage,
+    options: IdealOutfitOption[],
+    availability: IdealOptionAvailability[],
+    preferences: IdealOutfitPreferences,
+    statusMessageId?: number,
+  ): Promise<void> {
+    this.sessions.set(chatId, {
+      mode: "awaiting-ideal-catalog-fallback",
+      person,
+      preferences,
+    });
+    logger.info("Ideal outfit plan catalog fallback offered", {
+      chatId,
+      preferences,
+      options: availability.map((entry) => ({
+        styleName: entry.option.styleName,
+        available: entry.missing.length === 0,
+        missing: entry.missing.map((group) => ({
+          category: group.request.category,
+          query: group.request.query,
+          requiredTags: group.request.requiredTags,
+          color: group.request.color,
+        })),
+      })),
+    });
+
+    statusMessageId = await this.updateStatusMessage(
+      chatId,
+      statusMessageId,
+      renderIdealPlanCatalogFallbackMessage(options, availability, preferences),
+    );
+    await this.sendMessage(
+      chatId,
+      preferences.userWish
+        ? "Могу предложить новый вариант без этого пожелания на том же фото. Размер и бюджет оставлю такими же."
+        : "Можно изменить пожелание, ослабить фильтры через новый сценарий или отменить подбор." ,
+      idealCatalogFallbackMarkup(),
+    );
+  }
+
+  private async buildCandidateGroups(    requests: OutfitCategoryRequest[],
   ): Promise<OutfitCandidateGroup[]> {
     const groups: OutfitCandidateGroup[] = [];
 
@@ -1854,6 +1956,39 @@ function renderIdealCatalogFallbackMessage(
   ].filter(Boolean).join("\n");
 }
 
+function renderIdealPlanCatalogFallbackMessage(
+  options: IdealOutfitOption[],
+  availability: IdealOptionAvailability[],
+  preferences: IdealOutfitPreferences,
+): string {
+  const unavailable = availability.filter((entry) => entry.missing.length > 0);
+  const lines = unavailable.flatMap((entry) => {
+    const styleName = entry.option.styleName ?? "вариант";
+
+    return entry.missing.map((group) => {
+      const tags = [
+        ...(group.request.requiredTags ?? []),
+        ...(group.request.color ? [group.request.color] : []),
+      ].filter(Boolean).slice(0, 5);
+      const tagText = tags.length ? "; признаки: " + tags.join(", ") : "";
+
+      return "- " + styleName + ", " + group.request.category + ": " + group.request.query + tagText;
+    });
+  }).slice(0, 9);
+
+  return [
+    "Фото подходит, но доступные варианты не собрались по текущему каталогу.",
+    "",
+    "Фильтры: " + renderIdealPreferenceSummary(preferences),
+    preferences.userWish
+      ? "Похоже, каталог сейчас не закрывает пожелание достаточно точно. Я не буду показывать стиль, который потом развалится на отсутствующей вещи."
+      : "Похоже, в каталоге не хватает вещей под выбранный размер, бюджет и категории.",
+    "",
+    options.length ? "Проверено вариантов: " + options.length + ". Доступных полностью: 0." : undefined,
+    lines.length ? "Что не сошлось:" : undefined,
+    ...lines,
+  ].filter(Boolean).join("\n");
+}
 function normalizeIdealStyleOptions(
   plan: IdealOutfitPlan,
   preferences: IdealOutfitPreferences,
@@ -1900,9 +2035,16 @@ function normalizeIdealStyleOptions(
     });
 }
 
-function renderIdealStyleOptionsMessage(options: IdealOutfitOption[]): string {
+function renderIdealStyleOptionsMessage(
+  options: IdealOutfitOption[],
+  originalCount = options.length,
+): string {
+  const header = options.length < originalCount
+    ? "Фото подходит. Показываю только варианты, которые реально собираются из каталога:"
+    : "Фото подходит. Выберите один из доступных вариантов стиля:";
+
   return [
-    "Фото подходит. Выберите один из вариантов стиля:",
+    header,
     "",
     ...options.map((option, index) => {
       const categories = option.categories.map((entry) => entry.category).join(", ");

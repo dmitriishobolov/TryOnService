@@ -188,10 +188,13 @@ export class LocalCatalogStore {
     return uniqueStrings(this.list().map((item) => item.category));
   }
 
-  categoryTagHints(limitPerField = Number.MAX_SAFE_INTEGER): CatalogCategoryTagHints[] {
+  categoryTagHints(
+    filter: CatalogPreferenceFilter = {},
+    limitPerField = Number.MAX_SAFE_INTEGER,
+  ): CatalogCategoryTagHints[] {
     const grouped = new Map<string, GarmentCatalogItem[]>();
 
-    for (const item of this.list()) {
+    for (const item of this.list().filter((entry) => matchesCatalogPreferenceFilter(entry, filter))) {
       const bucket = grouped.get(item.category) ?? [];
       bucket.push(item);
       grouped.set(item.category, bucket);

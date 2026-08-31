@@ -82,10 +82,12 @@ export class MonolithCatalog {
     return this.store.categories();
   }
 
-  async categoryTagHints(): Promise<CatalogCategoryTagHints[]> {
+  async categoryTagHints(
+    filter: CatalogPreferenceFilter = {},
+  ): Promise<CatalogCategoryTagHints[]> {
     await this.ensureReady();
 
-    return this.store.categoryTagHints();
+    return this.store.categoryTagHints(filter);
   }
 
   async findCandidates(

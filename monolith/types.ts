@@ -1,5 +1,13 @@
 export type ImageKind = "telegram-input" | "tryon-result" | "catalog-image";
 export type GarmentGender = "male" | "female" | "unisex";
+export type SizePreference = "any" | "xs-s" | "m-l" | "xl-xxl";
+export type PricePreference = "any" | "under-10k" | "under-30k" | "under-100k" | "over-100k";
+
+export interface IdealOutfitPreferences {
+  userWish?: string;
+  sizePreference: SizePreference;
+  pricePreference: PricePreference;
+}
 
 export interface StoredImage {
   id: string;
@@ -19,31 +27,32 @@ export interface ImageData {
   filename: string;
 }
 
+export interface GarmentCatalogPrice {
+  amount: number;
+  currency: string;
+  oldAmount?: number;
+}
+
 export interface GarmentCatalogItem {
   id: string;
-  provider: string;
-  externalId: string;
-  productUrl: string;
-  title: string;
   category: string;
   gender: GarmentGender;
-  genderLabel: string;
+  title: string;
   description?: string;
-  brand?: string;
-  store: string;
-  price?: number;
-  currency?: string;
-  imageUrl: string;
-  imageFilename: string;
-  imageContentType?: string;
-  localImagePath?: string;
+  sizes: string[];
+  colors: string[];
+  price?: GarmentCatalogPrice;
   tags: string[];
-  colorTags: string[];
-  styleTags: string[];
-  materialTags: string[];
-  metadata?: Record<string, unknown>;
+  productUrl: string;
+  imageUrl: string;
+  imageFile?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CatalogPreferenceFilter {
+  sizePreference?: SizePreference;
+  pricePreference?: PricePreference;
 }
 
 export interface CatalogCategoryTagHints {
@@ -51,16 +60,18 @@ export interface CatalogCategoryTagHints {
   itemCount: number;
   aliases: string[];
   colors: string[];
-  styles: string[];
-  materials: string[];
   tags: string[];
 }
 
 export interface OutfitCategoryRequest {
   category: string;
   query: string;
+  gender?: GarmentGender;
   color?: string;
   notes?: string;
+  userWish?: string;
+  sizePreference?: SizePreference;
+  pricePreference?: PricePreference;
   requiredTags?: string[];
   preferredTags?: string[];
   avoidTags?: string[];
@@ -69,12 +80,20 @@ export interface OutfitCategoryRequest {
 export interface IdealOutfitOption {
   styleName?: string;
   summary?: string;
+  targetGender?: GarmentGender;
+  userWish?: string;
+  sizePreference?: SizePreference;
+  pricePreference?: PricePreference;
   categories: OutfitCategoryRequest[];
 }
 
 export interface IdealOutfitPlan {
   accepted: boolean;
   rejectionMessage?: string;
+  targetGender?: GarmentGender;
+  userWish?: string;
+  sizePreference?: SizePreference;
+  pricePreference?: PricePreference;
   styleName?: string;
   summary?: string;
   categories: OutfitCategoryRequest[];

@@ -5,9 +5,12 @@ import { dirname } from "node:path";
 import type { MonolithConfig } from "../config.js";
 import type {
   CatalogCategoryTagHints,
+  CatalogPreferenceFilter,
   GarmentCatalogItem,
   GarmentGender,
   OutfitCategoryRequest,
+  PricePreference,
+  SizePreference,
 } from "../types.js";
 
 const ignoredHintTags = new Set([
@@ -27,9 +30,11 @@ const ignoredHintTags = new Set([
   "tsumruonly",
   "эксклюзивно в цуме",
 ]);
+
 const categoryAliasesByCanonical: Record<string, string[]> = {
   "брюки": ["штаны", "чиносы", "чинос", "джоггеры", "джоггер", "pants", "trousers", "slacks", "chinos"],
   "джинсы": ["джинсовые брюки", "denim pants", "jeans"],
+  "комбинезон": ["jumpsuit", "overall", "overalls", "kombinezon"],
   "куртка": ["бомбер", "ветровка", "парка", "пуховик", "джинсовая куртка", "джинсовка", "jacket", "bomber"],
   "пиджак": ["жакет", "блейзер", "blazer", "suit jacket"],
   "рубашка": ["сорочка", "shirt"],
@@ -63,6 +68,7 @@ const categoryInferenceRules: Array<[RegExp, string]> = [
   [/kurtk|jacket|bomber|ветровк|парка|пуховик|джинсовк|куртк|бомбер/, "куртка"],
   [/palto|coat|пальто/, "пальто"],
   [/plash|trench|плащ|тренч/, "плащ"],
+  [/kombinezon|jumpsuit|overall|комбинезон/, "комбинезон"],
   [/dzhins|jeans|джинс/, "джинсы"],
   [/bryuk|trouser|pants|slacks|chino|чинос|брюк|джоггер|штан/, "брюки"],
   [/rubash|shirt|сорочк|рубаш|bluzy|блуз/, "рубашка"],
@@ -87,6 +93,8 @@ const categoryInferenceRules: Array<[RegExp, string]> = [
 ];
 
 const canonicalCategoryNames = new Set(Object.keys(categoryAliasesByCanonical));
+const sizePreferences: SizePreference[] = ["any", "xs-s", "m-l", "xl-xxl"];
+const pricePreferences: PricePreference[] = ["any", "under-10k", "under-30k", "under-100k", "over-100k"];
 
 export class LocalCatalogStore {
   private items = new Map<string, GarmentCatalogItem>();
@@ -130,8 +138,8 @@ export class LocalCatalogStore {
       this.items.set(item.id, normalizeCatalogItem({
         ...existing,
         ...item,
-        imageContentType: item.imageContentType ?? existing?.imageContentType,
-        localImagePath: item.localImagePath ?? existing?.localImagePath,
+        imageFile: item.imageFile ?? existing?.imageFile,
+        createdAt: existing?.createdAt ?? item.createdAt,
         updatedAt: new Date().toISOString(),
       }));
     }
@@ -194,15 +202,7 @@ export class LocalCatalogStore {
         category,
         aliases: aliasesForCategory(category),
         itemCount: items.length,
-        colors: topValues(items.flatMap((item) => item.colorTags), limitPerField),
-        styles: topValues(
-          items.flatMap((item) => item.styleTags.filter(isUsefulTaxonomyHint)),
-          limitPerField,
-        ),
-        materials: topValues(
-          items.flatMap((item) => item.materialTags.filter(isUsefulTaxonomyHint)),
-          limitPerField,
-        ),
+        colors: topValues(items.flatMap((item) => item.colors), limitPerField),
         tags: topValues(
           items.flatMap((item) => item.tags.filter((tag) => isUsefulHintTag(tag, item))),
           limitPerField,
@@ -221,14 +221,29 @@ export class LocalCatalogStore {
   ): GarmentCatalogItem[] {
     const normalizedRequest = normalizeOutfitRequest(request);
     const queryWords = tokenize([
-      normalizedRequest.category,
       normalizedRequest.query,
-      normalizedRequest.color,
       normalizedRequest.notes,
-      ...(normalizedRequest.requiredTags ?? []),
-      ...(normalizedRequest.preferredTags ?? []),
+      normalizedRequest.userWish,
     ].filter(Boolean).join(" "));
-    const scored = this.list()
+    const genderMatched = this.list().filter((item) => matchesRequestedGender(item, normalizedRequest.gender));
+    const categoryMatched = genderMatched.filter((item) => {
+      const itemCategory = normalizeText(item.category);
+      const requestedCategory = normalizeText(normalizedRequest.category);
+
+      return itemCategory === requestedCategory ||
+        aliasesForCategory(item.category).some((alias) => normalizeText(alias) === requestedCategory);
+    });
+    const hardFiltered = categoryMatched.filter((item) =>
+      matchesCatalogPreferenceFilter(item, {
+        sizePreference: normalizedRequest.sizePreference,
+        pricePreference: normalizedRequest.pricePreference,
+      }),
+    );
+    const intentTags = meaningfulRequiredIntentTags(normalizedRequest);
+    const pool = normalizedRequest.userWish && intentTags.length > 0
+      ? hardFiltered.filter((item) => catalogItemMatchesAnyTag(item, intentTags))
+      : hardFiltered;
+    const scored = pool
       .map((item) => ({
         item,
         score: scoreCatalogItem(item, normalizedRequest, queryWords),
@@ -238,6 +253,112 @@ export class LocalCatalogStore {
 
     return scored.slice(0, limit).map((entry) => entry.item);
   }
+
+  countForPreferences(filter: CatalogPreferenceFilter = {}): number {
+    return this.list().filter((item) => matchesCatalogPreferenceFilter(item, filter)).length;
+  }
+
+  sizePreferenceCounts(baseFilter: CatalogPreferenceFilter = {}): Record<SizePreference, number> {
+    return Object.fromEntries(sizePreferences.map((sizePreference) => [
+      sizePreference,
+      this.countForPreferences({
+        ...baseFilter,
+        sizePreference,
+      }),
+    ])) as Record<SizePreference, number>;
+  }
+
+  pricePreferenceCounts(baseFilter: CatalogPreferenceFilter = {}): Record<PricePreference, number> {
+    return Object.fromEntries(pricePreferences.map((pricePreference) => [
+      pricePreference,
+      this.countForPreferences({
+        ...baseFilter,
+        pricePreference,
+      }),
+    ])) as Record<PricePreference, number>;
+  }
+}
+
+function matchesCatalogPreferenceFilter(
+  item: GarmentCatalogItem,
+  filter: CatalogPreferenceFilter,
+): boolean {
+  return isSelectableCatalogItem(item) &&
+    matchesSizePreference(item, filter.sizePreference) &&
+    matchesPricePreference(item, filter.pricePreference);
+}
+
+function isSelectableCatalogItem(item: GarmentCatalogItem): boolean {
+  return Boolean(item.productUrl && (item.imageFile || item.imageUrl));
+}
+
+function matchesSizePreference(item: GarmentCatalogItem, preference: SizePreference | undefined): boolean {
+  if (!preference || preference === "any") {
+    return true;
+  }
+
+  if (item.sizes.length === 0) {
+    return false;
+  }
+
+  const normalizedSizes = new Set(item.sizes.flatMap(expandSizeTokens));
+
+  return sizePreferenceTokens[preference].some((size) => normalizedSizes.has(size));
+}
+
+function matchesPricePreference(item: GarmentCatalogItem, preference: PricePreference | undefined): boolean {
+  if (!preference || preference === "any") {
+    return true;
+  }
+
+  const amount = item.price?.amount;
+
+  if (typeof amount !== "number" || !Number.isFinite(amount)) {
+    return false;
+  }
+
+  if (preference === "over-100k") {
+    return amount >= 100_000;
+  }
+
+  const threshold = pricePreferenceThresholds[preference];
+
+  return typeof threshold === "number" && amount <= threshold;
+}
+
+function meaningfulRequiredIntentTags(request: OutfitCategoryRequest): string[] {
+  return uniqueStrings([
+    ...(request.requiredTags ?? []),
+    ...(request.color ? [request.color] : []),
+  ]).filter((tag) => !isCategoryIntentTag(tag, request.category));
+}
+
+function isCategoryIntentTag(tag: string, category: string): boolean {
+  const normalizedTag = normalizeText(tag);
+  const normalizedCategory = normalizeText(category);
+
+  if (!normalizedTag || !normalizedCategory) {
+    return false;
+  }
+
+  return normalizedTag === normalizedCategory ||
+    aliasesForCategory(category).some((alias) => normalizeText(alias) === normalizedTag);
+}
+
+function catalogItemMatchesAnyTag(item: GarmentCatalogItem, tags: string[]): boolean {
+  const haystackParts = [
+    item.category,
+    item.title,
+    item.description,
+    item.gender,
+    ...item.sizes,
+    ...item.colors,
+    ...item.tags,
+  ].filter(Boolean).join(" ");
+  const haystackText = normalizeText(haystackParts);
+  const haystackWords = new Set(tokenize(haystackParts));
+
+  return tags.some((tag) => tagMatches(tag, haystackText, haystackWords));
 }
 
 function scoreCatalogItem(
@@ -249,14 +370,10 @@ function scoreCatalogItem(
     item.category,
     item.title,
     item.description,
-    item.store,
-    item.brand,
     item.gender,
-    item.genderLabel,
+    ...item.sizes,
+    ...item.colors,
     ...item.tags,
-    ...item.colorTags,
-    ...item.styleTags,
-    ...item.materialTags,
   ].filter(Boolean).join(" ");
   const haystackText = normalizeText(haystackParts);
   const haystackWords = new Set(tokenize(haystackParts));
@@ -294,13 +411,16 @@ function scoreCatalogItem(
     score += 24;
   }
 
+  score += scoreSizePreference(request.sizePreference, item.sizes);
+  score += scorePricePreference(request.pricePreference, item.price?.amount);
+
   for (const word of queryWords) {
     if (haystackWords.has(word) || haystackText.includes(word)) {
       score += 8;
     }
   }
 
-  if (item.localImagePath) {
+  if (item.imageFile) {
     score += 12;
   } else if (item.imageUrl) {
     score += 2;
@@ -311,6 +431,80 @@ function scoreCatalogItem(
   }
 
   return score;
+}
+
+const sizePreferenceTokens: Record<Exclude<SizePreference, "any">, string[]> = {
+  "xs-s": ["xxs", "xs", "s", "40", "42", "44"],
+  "m-l": ["m", "l", "46", "48", "50", "52"],
+  "xl-xxl": ["xl", "xxl", "2xl", "3xl", "54", "56", "58", "60", "62"],
+};
+
+const pricePreferenceThresholds: Partial<Record<PricePreference, number>> = {
+  "under-10k": 10_000,
+  "under-30k": 30_000,
+  "under-100k": 100_000,
+};
+
+function scoreSizePreference(preference: SizePreference | undefined, sizes: string[]): number {
+  if (!preference || preference === "any") {
+    return 0;
+  }
+
+  if (sizes.length === 0) {
+    return -3;
+  }
+
+  const normalizedSizes = new Set(sizes.flatMap(expandSizeTokens));
+  const expected = sizePreferenceTokens[preference];
+
+  return expected.some((size) => normalizedSizes.has(size)) ? 28 : -32;
+}
+
+function scorePricePreference(preference: PricePreference | undefined, amount: number | undefined): number {
+  if (!preference || preference === "any") {
+    return 0;
+  }
+
+  if (typeof amount !== "number" || !Number.isFinite(amount)) {
+    return -4;
+  }
+
+  const priceAmount = amount;
+
+  if (preference === "over-100k") {
+    return priceAmount >= 100_000 ? 18 : priceAmount >= 80_000 ? -6 : -24;
+  }
+
+  const threshold = pricePreferenceThresholds[preference];
+
+  if (!threshold) {
+    return 0;
+  }
+
+  if (priceAmount <= threshold) {
+    return 22;
+  }
+
+  return priceAmount <= threshold * 1.2 ? -8 : -32;
+}
+
+function expandSizeTokens(size: string): string[] {
+  const compact = normalizeText(size)
+    .replace(/\s+/g, "")
+    .replace(/^(?:ru|rus|it|fr|eu|us|uk)/, "");
+  const tokens = [compact];
+  const letterMatches = compact.match(/xxs|xs|s|m|l|xl|xxl|2xl|3xl/g) ?? [];
+  const numericMatches = compact.match(/\d{2}/g) ?? [];
+
+  return uniqueStrings([...tokens, ...letterMatches, ...numericMatches]);
+}
+
+function normalizeSizePreference(value: SizePreference | undefined): SizePreference | undefined {
+  return value === "any" || value === "xs-s" || value === "m-l" || value === "xl-xxl" ? value : undefined;
+}
+
+function normalizePricePreference(value: PricePreference | undefined): PricePreference | undefined {
+  return value === "any" || value === "under-10k" || value === "under-30k" || value === "under-100k" || value === "over-100k" ? value : undefined;
 }
 
 function countTagMatches(
@@ -363,17 +557,6 @@ function topValues(values: string[], limit: number): string[] {
     .map((entry) => entry.value);
 }
 
-function isUsefulTaxonomyHint(tag: string): boolean {
-  const normalized = normalizeText(tag);
-
-  return Boolean(
-    normalized &&
-    !ignoredHintTags.has(normalized) &&
-    !/\d/.test(normalized) &&
-    !normalized.includes("_")
-  );
-}
-
 function isUsefulHintTag(tag: string, item: GarmentCatalogItem): boolean {
   const normalized = normalizeText(tag);
 
@@ -381,8 +564,7 @@ function isUsefulHintTag(tag: string, item: GarmentCatalogItem): boolean {
     !normalized ||
     ignoredHintTags.has(normalized) ||
     normalized === normalizeText(item.category) ||
-    normalized === normalizeText(item.genderLabel) ||
-    normalized === normalizeText(item.brand ?? "") ||
+    normalized === normalizeText(item.gender) ||
     normalized === normalizeText(item.title) ||
     /\d/.test(normalized) ||
     normalized.includes("-")
@@ -402,8 +584,6 @@ function isCatalogItem(value: unknown): value is GarmentCatalogItem {
 
   return (
     typeof item.id === "string" &&
-    typeof item.provider === "string" &&
-    typeof item.externalId === "string" &&
     typeof item.productUrl === "string" &&
     typeof item.title === "string" &&
     typeof item.category === "string" &&
@@ -414,31 +594,40 @@ function isCatalogItem(value: unknown): value is GarmentCatalogItem {
 
 function normalizeCatalogItem(item: GarmentCatalogItem): GarmentCatalogItem {
   const gender = normalizeGender(item.gender);
-  const genderLabel = item.genderLabel?.trim() || labelForGender(gender);
   const category = normalizeCatalogCategory(item);
 
   return {
     ...item,
     category,
     gender,
-    genderLabel,
+    sizes: uniqueStrings(item.sizes ?? []),
+    colors: uniqueStrings(item.colors ?? []),
     tags: uniqueStrings([
       ...item.tags.filter((tag) => shouldKeepCatalogTag(tag, category)),
       category,
       ...aliasesForCategory(category),
       gender,
-      genderLabel.toLowerCase(),
+      ...item.colors,
+      ...item.sizes,
     ]),
-    colorTags: uniqueStrings(item.colorTags ?? []),
-    styleTags: uniqueStrings(item.styleTags ?? []),
-    materialTags: uniqueStrings(item.materialTags ?? []),
   };
+}
+
+function matchesRequestedGender(item: GarmentCatalogItem, requestedGender: GarmentGender | undefined): boolean {
+  if (!requestedGender || requestedGender === "unisex") {
+    return true;
+  }
+
+  return item.gender === requestedGender || item.gender === "unisex";
 }
 
 function normalizeOutfitRequest(request: OutfitCategoryRequest): OutfitCategoryRequest {
   return {
     ...request,
+    gender: request.gender ? normalizeGender(request.gender) : undefined,
     category: canonicalizeCategoryText(request.category) ?? request.category,
+    sizePreference: normalizeSizePreference(request.sizePreference),
+    pricePreference: normalizePricePreference(request.pricePreference),
     requiredTags: normalizeRequestTags(request.requiredTags),
     preferredTags: normalizeRequestTags(request.preferredTags),
     avoidTags: normalizeRequestTags(request.avoidTags),
@@ -454,12 +643,9 @@ function normalizeRequestTags(tags: string[] | undefined): string[] | undefined 
 }
 
 function normalizeCatalogCategory(item: GarmentCatalogItem): string {
-  const categorySlug = readMetadataString(item.metadata, "categorySlug");
-
   return (
-    canonicalizeCategoryText(categorySlug) ??
-    canonicalizeCategoryText(item.category) ??
     canonicalizeCategoryText(item.title) ??
+    canonicalizeCategoryText(item.category) ??
     item.category
   );
 }
@@ -520,29 +706,12 @@ function canonicalizeCategoryText(value: string | undefined): string | undefined
   return undefined;
 }
 
-function readMetadataString(metadata: Record<string, unknown> | undefined, key: string): string | undefined {
-  const value = metadata?.[key];
-
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 function normalizeGender(value: unknown): GarmentGender {
   if (value === "male" || value === "female" || value === "unisex") {
     return value;
   }
 
   return "unisex";
-}
-
-function labelForGender(gender: GarmentGender): string {
-  if (gender === "male") {
-    return "Мужское";
-  }
-
-  if (gender === "female") {
-    return "Женское";
-  }
-
-  return "Унисекс";
 }
 
 function tokenize(value: string): string[] {

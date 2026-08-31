@@ -5,14 +5,19 @@ import { join } from "node:path";
 import type { MonolithConfig } from "../config.js";
 import type {
   CatalogCategoryTagHints,
+  CatalogPreferenceFilter,
   GarmentCatalogItem,
   ImageData,
   OutfitCategoryRequest,
+  PricePreference,
+  SizePreference,
   StoredImage,
 } from "../types.js";
+import { sleep } from "../utils/http.js";
 import { createLogger } from "../utils/logger.js";
 import { LocalFileStorage } from "../storage/localFileStorage.js";
 import { LocalCatalogStore } from "./store.js";
+import { parseLamodaCatalogUrl } from "./providers/lamoda/parser.js";
 import { downloadCatalogImage, parseTsumCatalogUrl } from "./providers/tsum/parser.js";
 
 const logger = createLogger("monolith");
@@ -92,16 +97,32 @@ export class MonolithCatalog {
     return this.store.findCandidates(request, limit);
   }
 
+  async sizePreferenceCounts(
+    baseFilter: CatalogPreferenceFilter = {},
+  ): Promise<Record<SizePreference, number>> {
+    await this.store.load();
+
+    return this.store.sizePreferenceCounts(baseFilter);
+  }
+
+  async pricePreferenceCounts(
+    baseFilter: CatalogPreferenceFilter = {},
+  ): Promise<Record<PricePreference, number>> {
+    await this.store.load();
+
+    return this.store.pricePreferenceCounts(baseFilter);
+  }
+
   async getImage(item: GarmentCatalogItem): Promise<ImageData> {
-    const localImagePath = item.localImagePath
-      ? join(this.config.storageRoot, item.localImagePath)
+    const imageFilePath = item.imageFile
+      ? join(this.config.storageRoot, item.imageFile)
       : undefined;
 
-    if (localImagePath && existsSync(localImagePath)) {
+    if (imageFilePath && existsSync(imageFilePath)) {
       return {
-        buffer: await readFile(localImagePath),
-        contentType: item.imageContentType ?? contentTypeFromFilename(item.imageFilename),
-        filename: item.imageFilename,
+        buffer: await readFile(imageFilePath),
+        contentType: contentTypeFromFilename(catalogImageFilename(item)),
+        filename: catalogImageFilename(item),
       };
     }
 
@@ -109,9 +130,7 @@ export class MonolithCatalog {
 
     await this.store.updateItem({
       ...item,
-      imageFilename: stored.filename,
-      imageContentType: stored.contentType,
-      localImagePath: stored.relativePath,
+      imageFile: stored.relativePath,
     });
 
     return image;
@@ -142,14 +161,28 @@ export class MonolithCatalog {
 
     const parsed: GarmentCatalogItem[] = [];
 
-    for (const source of this.config.catalog.tsumSources) {
+    const sources = [
+      ...this.config.catalog.tsumSources,
+      ...this.config.catalog.lamodaSources,
+    ];
+
+    for (const source of sources) {
       if (!this.config.catalog.providers.includes(source.provider)) {
         continue;
       }
 
-      parsed.push(...await parseTsumCatalogUrl(source.url, this.config, {
-        gender: source.gender,
-      }));
+      if (source.provider === "tsum") {
+        parsed.push(...await parseTsumCatalogUrl(source.url, this.config, {
+          gender: source.gender,
+        }));
+        continue;
+      }
+
+      if (source.provider === "lamoda") {
+        parsed.push(...await parseLamodaCatalogUrl(source.url, this.config, {
+          gender: source.gender,
+        }));
+      }
     }
 
     const result = this.config.catalog.downloadImagesOnRefresh
@@ -158,9 +191,9 @@ export class MonolithCatalog {
 
     logger.info("Monolith catalog refresh parsed items", {
       providers: this.config.catalog.providers,
-      sources: this.config.catalog.tsumSources.length,
+      sources: sources.length,
       parsedItems: parsed.length,
-      readyItems: result.items.length,
+      savedItems: result.items.length,
       downloadedImages: result.downloaded,
       reusedImages: result.reused,
       failedImages: result.failed,
@@ -202,12 +235,10 @@ export class MonolithCatalog {
         const existing = this.store.getById(item.id);
 
         if (existing && this.hasLocalImage(existing)) {
-          readyItems.push({
+          readyItems.push(markReadyLocalImage({
             ...item,
-            imageFilename: existing.imageFilename,
-            imageContentType: existing.imageContentType,
-            localImagePath: existing.localImagePath,
-          });
+            imageFile: existing.imageFile,
+          }));
           reused += 1;
           continue;
         }
@@ -215,12 +246,10 @@ export class MonolithCatalog {
         try {
           const { stored } = await this.downloadAndStoreCatalogImage(item);
 
-          readyItems.push({
+          readyItems.push(markReadyLocalImage({
             ...item,
-            imageFilename: stored.filename,
-            imageContentType: stored.contentType,
-            localImagePath: stored.relativePath,
-          });
+            imageFile: stored.relativePath,
+          }));
           downloaded += 1;
 
           if (logImageProgress && downloaded % 500 === 0) {
@@ -232,13 +261,20 @@ export class MonolithCatalog {
             });
           }
         } catch (error) {
+          const errorText = error instanceof Error ? error.message : String(error);
+
           failed += 1;
+          readyItems.push(markMissingLocalImage(item, errorText));
           logger.warn("Monolith catalog image download failed", {
             itemId: item.id,
             productUrl: item.productUrl,
             imageUrl: item.imageUrl,
-            error: error instanceof Error ? error.message : String(error),
+            error: errorText,
           });
+        }
+
+        if (this.config.catalog.imageDownloadDelayMs > 0) {
+          await sleep(this.config.catalog.imageDownloadDelayMs);
         }
       }
     };
@@ -251,7 +287,7 @@ export class MonolithCatalog {
     if (logImageSummary) {
       logger.info("Monolith catalog images materialized", {
         total: items.length,
-        ready: readyItems.length,
+        savedItems: readyItems.length,
         downloaded,
         reused,
         failed,
@@ -268,7 +304,7 @@ export class MonolithCatalog {
 
   private hasLocalImage(item: GarmentCatalogItem): boolean {
     return Boolean(
-      item.localImagePath && existsSync(join(this.config.storageRoot, item.localImagePath)),
+      item.imageFile && existsSync(join(this.config.storageRoot, item.imageFile)),
     );
   }
 
@@ -279,11 +315,10 @@ export class MonolithCatalog {
     const image: ImageData = {
       buffer: downloaded.image,
       contentType: downloaded.contentType,
-      filename: item.imageFilename,
+      filename: catalogImageFilename(item),
     };
     const stored = await this.storage.saveImage("catalog-image", image, {
       catalogItemId: item.id,
-      provider: item.provider,
       productUrl: item.productUrl,
     });
 
@@ -295,6 +330,37 @@ export class MonolithCatalog {
       stored,
     };
   }
+}
+
+function markReadyLocalImage(item: GarmentCatalogItem): GarmentCatalogItem {
+  return item;
+}
+
+function markMissingLocalImage(item: GarmentCatalogItem, _error: string): GarmentCatalogItem {
+  return {
+    ...item,
+    imageFile: undefined,
+  };
+}
+
+function catalogImageFilename(item: GarmentCatalogItem): string {
+  return filenameFromPath(item.imageFile) ?? filenameFromUrl(item.imageUrl) ?? safeFilename(item.id) + ".jpg";
+}
+
+function filenameFromPath(value: string | undefined): string | undefined {
+  return value?.split(/[\\/]/).filter(Boolean).at(-1);
+}
+
+function filenameFromUrl(value: string): string | undefined {
+  try {
+    return new URL(value).pathname.split("/").filter(Boolean).at(-1) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeFilename(value: string): string {
+  return value.replace(/[^a-z0-9а-яё._-]+/gi, "-").replace(/^-+|-+$/g, "") || "image";
 }
 
 function contentTypeFromFilename(filename: string): string {

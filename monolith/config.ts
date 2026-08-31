@@ -13,8 +13,11 @@ export type OpenAiReasoningEffort =
   | "xhigh"
   | "max";
 export type MonolithTryOnProvider = "mock" | "pruna";
-export type MonolithCatalogProvider = "tsum";
+export type MonolithCatalogProvider = "tsum" | "lamoda";
 export type MonolithBrowserWaitUntil = "load" | "domcontentloaded" | "networkidle";
+export type MonolithTsumProductEnrichment = "off" | "missing" | "all";
+export type MonolithLamodaProductEnrichment = "off" | "missing" | "all";
+export type MonolithLamodaBrowserChannel = "chromium" | "chrome" | "msedge" | "opera";
 
 export interface MonolithOpenAiConfig {
   apiKey?: string;
@@ -55,12 +58,34 @@ export interface MonolithCatalogConfig {
   refreshOnStart: boolean;
   providers: MonolithCatalogProvider[];
   tsumSources: MonolithCatalogSource[];
+  lamodaSources: MonolithCatalogSource[];
   batchSize: number;
   tsumMaxPages: number;
   tsumPageDelayMs: number;
   tsumPageRetryAttempts: number;
   tsumRetryDelayMs: number;
   tsumProgressLogEveryPages: number;
+  lamodaMaxPages: number;
+  lamodaPageDelayMs: number;
+  lamodaPageRetryAttempts: number;
+  lamodaRetryDelayMs: number;
+  lamodaProgressLogEveryPages: number;
+  lamodaSecurityWaitMs: number;
+  lamodaUserDataDir: string;
+  lamodaBrowserChannel: MonolithLamodaBrowserChannel;
+  lamodaBrowserExecutablePath?: string;
+  lamodaProductEnrichment: MonolithLamodaProductEnrichment;
+  lamodaProductConcurrency: number;
+  lamodaProductPageDelayMs: number;
+  lamodaProductPageTimeoutMs: number;
+  lamodaProductPageRetryAttempts: number;
+  lamodaProductRetryDelayMs: number;
+  tsumProductEnrichment: MonolithTsumProductEnrichment;
+  tsumProductConcurrency: number;
+  tsumProductPageDelayMs: number;
+  tsumProductPageTimeoutMs: number;
+  tsumProductPageRetryAttempts: number;
+  tsumProductRetryDelayMs: number;
   downloadImagesOnRefresh: boolean;
   imageDownloadConcurrency: number;
   imageDownloadDelayMs: number;
@@ -148,12 +173,34 @@ export function loadMonolithConfig(
       refreshOnStart: readBoolean("MONOLITH_CATALOG_REFRESH_ON_START", false),
       providers: readCatalogProviders(),
       tsumSources: readTsumSources(),
+      lamodaSources: readLamodaSources(),
       batchSize: readNonNegativeNumber("MONOLITH_CATALOG_BATCH_SIZE", 0),
       tsumMaxPages: readNonNegativeNumber("MONOLITH_CATALOG_TSUM_MAX_PAGES", 0),
       tsumPageDelayMs: readNonNegativeNumber("MONOLITH_CATALOG_TSUM_PAGE_DELAY_MS", 250),
       tsumPageRetryAttempts: readNumber("MONOLITH_CATALOG_TSUM_PAGE_RETRY_ATTEMPTS", 3),
       tsumRetryDelayMs: readNonNegativeNumber("MONOLITH_CATALOG_TSUM_RETRY_DELAY_MS", 5_000),
       tsumProgressLogEveryPages: readNumber("MONOLITH_CATALOG_TSUM_PROGRESS_EVERY_PAGES", 25),
+      lamodaMaxPages: readNonNegativeNumber("MONOLITH_CATALOG_LAMODA_MAX_PAGES", 0),
+      lamodaPageDelayMs: readNonNegativeNumber("MONOLITH_CATALOG_LAMODA_PAGE_DELAY_MS", 2_000),
+      lamodaPageRetryAttempts: readNumber("MONOLITH_CATALOG_LAMODA_PAGE_RETRY_ATTEMPTS", 3),
+      lamodaRetryDelayMs: readNonNegativeNumber("MONOLITH_CATALOG_LAMODA_RETRY_DELAY_MS", 5_000),
+      lamodaProgressLogEveryPages: readNumber("MONOLITH_CATALOG_LAMODA_PROGRESS_EVERY_PAGES", 5),
+      lamodaSecurityWaitMs: readNonNegativeNumber("MONOLITH_CATALOG_LAMODA_SECURITY_WAIT_MS", 0),
+      lamodaUserDataDir: resolve(readString("MONOLITH_CATALOG_LAMODA_USER_DATA_DIR", storageRoot + "/browser/lamoda")),
+      lamodaBrowserChannel: readLamodaBrowserChannel("MONOLITH_CATALOG_LAMODA_BROWSER_CHANNEL", "chromium"),
+      lamodaBrowserExecutablePath: readOptionalString("MONOLITH_CATALOG_LAMODA_BROWSER_EXECUTABLE_PATH"),
+      lamodaProductEnrichment: readLamodaProductEnrichment("MONOLITH_CATALOG_LAMODA_PRODUCT_ENRICHMENT", "off"),
+      lamodaProductConcurrency: readNumber("MONOLITH_CATALOG_LAMODA_PRODUCT_CONCURRENCY", 1),
+      lamodaProductPageDelayMs: readNonNegativeNumber("MONOLITH_CATALOG_LAMODA_PRODUCT_PAGE_DELAY_MS", 1_000),
+      lamodaProductPageTimeoutMs: readNumber("MONOLITH_CATALOG_LAMODA_PRODUCT_PAGE_TIMEOUT_MS", 20_000),
+      lamodaProductPageRetryAttempts: readNumber("MONOLITH_CATALOG_LAMODA_PRODUCT_PAGE_RETRY_ATTEMPTS", 2),
+      lamodaProductRetryDelayMs: readNonNegativeNumber("MONOLITH_CATALOG_LAMODA_PRODUCT_RETRY_DELAY_MS", 3_000),
+      tsumProductEnrichment: readTsumProductEnrichment("MONOLITH_CATALOG_TSUM_PRODUCT_ENRICHMENT", "off"),
+      tsumProductConcurrency: readNumber("MONOLITH_CATALOG_TSUM_PRODUCT_CONCURRENCY", 1),
+      tsumProductPageDelayMs: readNonNegativeNumber("MONOLITH_CATALOG_TSUM_PRODUCT_PAGE_DELAY_MS", 250),
+      tsumProductPageTimeoutMs: readNumber("MONOLITH_CATALOG_TSUM_PRODUCT_PAGE_TIMEOUT_MS", 15_000),
+      tsumProductPageRetryAttempts: readNumber("MONOLITH_CATALOG_TSUM_PRODUCT_PAGE_RETRY_ATTEMPTS", 2),
+      tsumProductRetryDelayMs: readNonNegativeNumber("MONOLITH_CATALOG_TSUM_PRODUCT_RETRY_DELAY_MS", 3_000),
       downloadImagesOnRefresh: readBoolean("MONOLITH_CATALOG_DOWNLOAD_IMAGES_ON_REFRESH", true),
       imageDownloadConcurrency: readNumber("MONOLITH_CATALOG_IMAGE_DOWNLOAD_CONCURRENCY", 3),
       imageDownloadDelayMs: readNonNegativeNumber("MONOLITH_CATALOG_IMAGE_DOWNLOAD_DELAY_MS", 0),
@@ -186,8 +233,8 @@ function readCatalogProviders(): MonolithCatalogProvider[] {
   const providers = readStringList("MONOLITH_CATALOG_PROVIDERS", "tsum");
 
   for (const provider of providers) {
-    if (provider !== "tsum") {
-      throw new Error("MONOLITH_CATALOG_PROVIDERS currently supports only tsum");
+    if (provider !== "tsum" && provider !== "lamoda") {
+      throw new Error("MONOLITH_CATALOG_PROVIDERS currently supports tsum and lamoda");
     }
   }
 
@@ -218,6 +265,30 @@ function readTsumSources(): MonolithCatalogSource[] {
   });
 }
 
+function readLamodaSources(): MonolithCatalogSource[] {
+  const genericGender = readGarmentGender("MONOLITH_CATALOG_LAMODA_DEFAULT_GENDER", "unisex");
+  const sources: MonolithCatalogSource[] = [
+    ...readStringList("MONOLITH_CATALOG_LAMODA_MALE_URLS", "https://www.lamoda.ru/c/477/clothes-muzhskaya-odezhda")
+      .map((url) => ({ provider: "lamoda" as const, url, gender: "male" as const })),
+    ...readStringList("MONOLITH_CATALOG_LAMODA_FEMALE_URLS", "https://www.lamoda.ru/c/355/clothes-zhenskaya-odezhda")
+      .map((url) => ({ provider: "lamoda" as const, url, gender: "female" as const })),
+    ...readStringList("MONOLITH_CATALOG_LAMODA_URLS", "")
+      .map((url) => ({ provider: "lamoda" as const, url, gender: genericGender })),
+  ];
+  const seen = new Set<string>();
+
+  return sources.filter((source) => {
+    const key = source.gender + ":" + source.url;
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
 function readGarmentGender(name: string, fallback: GarmentGender): GarmentGender {
   const value = readString(name, fallback).toLowerCase();
 
@@ -236,6 +307,45 @@ function readBrowserWaitUntil(): MonolithBrowserWaitUntil {
   }
 
   throw new Error("MONOLITH_CATALOG_BROWSER_WAIT_UNTIL must be load, domcontentloaded or networkidle");
+}
+
+function readLamodaBrowserChannel(
+  name: string,
+  fallback: MonolithLamodaBrowserChannel,
+): MonolithLamodaBrowserChannel {
+  const value = readString(name, fallback).toLowerCase();
+
+  if (value === "chromium" || value === "chrome" || value === "msedge" || value === "opera") {
+    return value;
+  }
+
+  throw new Error(name + " must be chromium, chrome, msedge or opera");
+}
+
+function readLamodaProductEnrichment(
+  name: string,
+  fallback: MonolithLamodaProductEnrichment,
+): MonolithLamodaProductEnrichment {
+  const value = readString(name, fallback).toLowerCase();
+
+  if (value === "off" || value === "missing" || value === "all") {
+    return value;
+  }
+
+  throw new Error(name + " must be off, missing or all");
+}
+
+function readTsumProductEnrichment(
+  name: string,
+  fallback: MonolithTsumProductEnrichment,
+): MonolithTsumProductEnrichment {
+  const value = readString(name, fallback).toLowerCase();
+
+  if (value === "off" || value === "missing" || value === "all") {
+    return value;
+  }
+
+  throw new Error(name + " must be off, missing or all");
 }
 
 function readOpenAiImageDetail(): OpenAiImageDetail {

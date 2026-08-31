@@ -6,11 +6,28 @@
   "scripts": {
     "dev": "tsx index.ts",
     "dev:catalog": "tsx catalog/runIngest.ts",
-    "ingest:tsum:male": "tsx catalog/runTsumMaleSlowIngest.ts",
+    "ingest:tsum:male": "tsx catalog/runTsumSlowIngest.ts --mode=male",
+    "ingest:tsum:female": "tsx catalog/runTsumSlowIngest.ts --mode=female",
+    "ingest:tsum:all": "tsx catalog/runTsumSlowIngest.ts --mode=all",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/index.js",
-    "playwright:install": "playwright install chromium"
+    "playwright:install": "playwright install chromium",
+    "ingest:tsum:fast": "tsx catalog/runTsumSlowIngest.ts --mode=all --profile=fast",
+    "ingest:tsum:male:fast": "tsx catalog/runTsumSlowIngest.ts --mode=male --profile=fast",
+    "ingest:tsum:female:fast": "tsx catalog/runTsumSlowIngest.ts --mode=female --profile=fast",
+    "ingest:tsum:all:fast": "tsx catalog/runTsumSlowIngest.ts --mode=all --profile=fast",
+    "ingest:tsum:male:enrich": "tsx catalog/runTsumSlowIngest.ts --mode=male --profile=safe --product-enrichment=all --product-concurrency=1",
+    "ingest:tsum:female:enrich": "tsx catalog/runTsumSlowIngest.ts --mode=female --profile=safe --product-enrichment=all --product-concurrency=1",
+    "ingest:tsum:all:enrich": "tsx catalog/runTsumSlowIngest.ts --mode=all --profile=safe --product-enrichment=all --product-concurrency=1",
+    "ingest:lamoda:male": "tsx catalog/runLamodaIngest.ts --mode=male",
+    "ingest:lamoda:female": "tsx catalog/runLamodaIngest.ts --mode=female",
+    "ingest:lamoda:all": "tsx catalog/runLamodaIngest.ts --mode=all",
+    "lamoda:session": "tsx catalog/runLamodaSession.ts",
+    "ingest:lamoda:male:opera": "tsx catalog/runLamodaIngest.ts --mode=male --browser-channel=opera",
+    "ingest:lamoda:female:opera": "tsx catalog/runLamodaIngest.ts --mode=female --browser-channel=opera",
+    "ingest:lamoda:all:opera": "tsx catalog/runLamodaIngest.ts --mode=all --browser-channel=opera",
+    "lamoda:session:opera": "tsx catalog/runLamodaSession.ts --browser-channel=opera"
   },
   "dependencies": {
     "playwright": "^1.62.1"

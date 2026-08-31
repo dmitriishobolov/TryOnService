@@ -3,6 +3,8 @@ import type { MonolithConfig } from "../config.js";
 import type {
   CatalogCategoryTagHints,
   GarmentCatalogItem,
+  GarmentGender,
+  IdealOutfitPreferences,
   IdealOutfitOption,
   IdealOutfitPlan,
   ImageData,
@@ -10,6 +12,8 @@ import type {
   OutfitCategoryRequest,
   OutfitSelection,
   OutfitSelectionItem,
+  PricePreference,
+  SizePreference,
 } from "../types.js";
 import { fetchWithTimeout, joinUrl, responseError } from "../utils/http.js";
 
@@ -66,16 +70,17 @@ export class OpenAiVisionService {
   async planIdealOutfit(
     image: ImageData,
     catalogHints: CatalogCategoryTagHints[],
+    preferences: IdealOutfitPreferences,
   ): Promise<IdealOutfitPlan> {
     const text = await this.requestResponsesText({
       operation: "ideal-outfit-plan",
-      prompt: buildIdealOutfitPlanPrompt(catalogHints),
+      prompt: buildIdealOutfitPlanPrompt(catalogHints, preferences),
       images: [image],
       maxOutputTokens: Math.max(this.config.openai.maxOutputTokens, 1_400),
     });
     const parsed = parseJsonObject(text);
 
-    return normalizeIdealOutfitPlan(parsed);
+    return normalizeIdealOutfitPlan(parsed, preferences);
   }
 
   async chooseOutfitItems(
@@ -209,19 +214,73 @@ function buildUserContent(
   ];
 }
 
-function buildIdealOutfitPlanPrompt(catalogHints: CatalogCategoryTagHints[]): string {
+function formatIdealPreferences(preferences: IdealOutfitPreferences): Record<string, string> {
+  return {
+    userWish: preferences.userWish?.trim() || "не указано, стилист свободен в подборе",
+    sizePreference: sizePreferenceLabel(preferences.sizePreference),
+    pricePreference: pricePreferenceLabel(preferences.pricePreference),
+  };
+}
+
+function sizePreferenceLabel(preference: SizePreference): string {
+  switch (preference) {
+    case "xs-s":
+      return "XS-S";
+    case "m-l":
+      return "M-L";
+    case "xl-xxl":
+      return "XL-XXL";
+    case "any":
+      return "любой размер";
+  }
+}
+
+function pricePreferenceLabel(preference: PricePreference): string {
+  switch (preference) {
+    case "under-10k":
+      return "до 10 000 рублей за вещь";
+    case "under-30k":
+      return "до 30 000 рублей за вещь";
+    case "under-100k":
+      return "до 100 000 рублей за вещь";
+    case "over-100k":
+      return "100 000 рублей и выше за вещь";
+    case "any":
+      return "любой бюджет";
+  }
+}
+
+function buildIdealOutfitPlanPrompt(
+  catalogHints: CatalogCategoryTagHints[],
+  preferences: IdealOutfitPreferences,
+): string {
   return [
     "Ты стилист внутри MVP TryOnService.",
     "Это единственный GPT-вызов для проверки фото и плана образа. Не проси дополнительных запросов.",
     "Нужно проверить фото человека и предложить ровно 3 разных варианта стиля. В каждом варианте выбери 2-3 категории одежды из локального каталога.",
     "Фото подходит, если человек виден в полный рост или хотя бы по колено. Обувь/ступни могут быть не видны, тогда не выбирай обувь.",
+    "Обязательно определи targetGender: male, female или unisex. Это сегмент локального каталога одежды для подбора вещей, а не вывод о личности человека.",
     "Если фото не подходит, верни JSON с accepted=false и коротким rejectionMessage на русском.",
-    "Если подходит, верни options из 3 вариантов. У каждого варианта должен быть свой styleName, summary и categories. category должен быть ровно одним из catalogHints.c. aliases помогают понять синонимы, но в category возвращай только каноническое catalogHints.c. Теги бери из colors/styles/materials/tags или aliases каталога.",
+    "Если пользовательское пожелание нельзя превратить в одежду, оно не про стиль, выглядит как набор случайных символов или небезопасный запрос, верни accepted=false и попроси коротко переформулировать пожелание.",
+    "Если пожелание необычное, но применимое, не отказывай. Адаптируй его под реальный носибельный образ и доступный каталог, а причину адаптации коротко упомяни в summary одного или нескольких вариантов.",
+    "Если подходит, верни targetGender и options из 3 вариантов. У каждого варианта должен быть свой styleName, summary, targetGender, userWish, sizePreference, pricePreference и categories. У каждой category тоже укажи gender, userWish, sizePreference и pricePreference.",
+    "category должен быть ровно одним из catalogHints.c. aliases помогают понять синонимы, но в category возвращай только каноническое catalogHints.c. Теги бери из colors/tags или aliases каталога.",
     "requiredTags: 0-4 главных признака, которые сильно нужны для вещи: цвет, материал, крой, сезонность или категория.",
+    "Если userWish содержит конкретный мотив, рисунок, цвет или материал, добавь это в requiredTags; каталог будет считать такие признаки обязательными.",
     "preferredTags: 2-6 мягких признаков: стиль, посадка, оттенок, настроение образа.",
     "avoidTags: 0-4 признака, которых лучше избегать.",
     "Не указывай бренды как requiredTags. Не выбирай два одинаковых типа вещи. Для низа используй канон каталога, например брюки или джинсы, а не разговорное штаны. Для обычного публичного образа не выбирай нижнее белье, носки, пижаму, халат или плавки, если пользователь явно не просит. Не используй длинное тире.",
     "Не устанавливай личность и не делай выводы о чувствительных признаках.",
+    "Учитывай пользовательские ограничения как сильные предпочтения, но если каталог пуст по точному размеру или бюджету, оставь шанс лучшим близким товарам.",
+    "",
+    "Пожелания пользователя:",
+    JSON.stringify(formatIdealPreferences(preferences)),
+    "",
+    "Hard constraints:",
+    "pricePreference is a strict catalog limit. For under-10k, under-30k and under-100k never plan an item above the selected amount.",
+    "If the selected budget has too few exact items, choose a broader query or another available category inside that budget instead of planning expensive fallback items.",
+    "userWish must visibly influence styleName, summary, query, preferredTags and avoidTags when it is present.",
+    "sizePreference is a catalog filter. If it is any, do not restrict sizes; otherwise prefer categories likely to have that size.",
     "",
     "catalogHints JSON:",
     JSON.stringify(serializeCatalogHints(catalogHints)),
@@ -229,23 +288,39 @@ function buildIdealOutfitPlanPrompt(catalogHints: CatalogCategoryTagHints[]): st
     "Верни только JSON без markdown:",
     JSON.stringify({
       accepted: true,
+      targetGender: "male",
+      userWish: preferences.userWish ?? undefined,
+      sizePreference: preferences.sizePreference,
+      pricePreference: preferences.pricePreference,
       options: [
         {
           styleName: "спокойный smart casual",
-          summary: "мягкий собранный образ на каждый день",
+          targetGender: "male",
+          userWish: preferences.userWish ?? undefined,
+          sizePreference: preferences.sizePreference,
+          pricePreference: preferences.pricePreference,
+          summary: "мягкий собранный образ на каждый день с учетом пожелания и бюджета",
           categories: [
             {
               category: "рубашка",
+              gender: "male",
               query: "голубая хлопковая рубашка прямого кроя",
               color: "голубой",
+              userWish: preferences.userWish ?? undefined,
+              sizePreference: preferences.sizePreference,
+              pricePreference: preferences.pricePreference,
               requiredTags: ["рубашка", "голубой"],
               preferredTags: ["хлопок", "прямой крой", "smart casual"],
               avoidTags: ["яркий принт"],
             },
             {
               category: "брюки",
+              gender: "male",
               query: "темно-синие прямые брюки",
               color: "темно-синий",
+              userWish: preferences.userWish ?? undefined,
+              sizePreference: preferences.sizePreference,
+              pricePreference: preferences.pricePreference,
               requiredTags: ["брюки", "темно-синий"],
               preferredTags: ["прямой крой", "smart casual"],
               avoidTags: [],
@@ -254,12 +329,20 @@ function buildIdealOutfitPlanPrompt(catalogHints: CatalogCategoryTagHints[]): st
         },
         {
           styleName: "городской минимализм",
+          targetGender: "male",
+          userWish: preferences.userWish ?? undefined,
+          sizePreference: preferences.sizePreference,
+          pricePreference: preferences.pricePreference,
           summary: "лаконичный контрастный образ с чистыми линиями",
           categories: [
             {
               category: "куртка",
+              gender: "male",
               query: "черная лаконичная куртка",
               color: "черный",
+              userWish: preferences.userWish ?? undefined,
+              sizePreference: preferences.sizePreference,
+              pricePreference: preferences.pricePreference,
               requiredTags: ["куртка", "черный"],
               preferredTags: ["минимализм"],
               avoidTags: ["крупный логотип"],
@@ -268,12 +351,20 @@ function buildIdealOutfitPlanPrompt(catalogHints: CatalogCategoryTagHints[]): st
         },
         {
           styleName: "расслабленный casual",
+          targetGender: "male",
+          userWish: preferences.userWish ?? undefined,
+          sizePreference: preferences.sizePreference,
+          pricePreference: preferences.pricePreference,
           summary: "более мягкая посадка и спокойная палитра",
           categories: [
             {
               category: "футболка",
+              gender: "male",
               query: "белая плотная футболка прямого кроя",
               color: "белый",
+              userWish: preferences.userWish ?? undefined,
+              sizePreference: preferences.sizePreference,
+              pricePreference: preferences.pricePreference,
               requiredTags: ["футболка", "белый"],
               preferredTags: ["хлопок", "casual"],
               avoidTags: ["яркий принт"],
@@ -299,6 +390,8 @@ function buildOutfitSelectionPrompt(
     "План:",
     JSON.stringify(plan),
     "",
+    "Hard constraints for selection: never choose an item that violates request.pricePreference or request.sizePreference. userWish must influence the reason when present.",
+    "",
     "Кандидаты:",
     JSON.stringify(groups.map(serializeCandidateGroup)),
   ].join("\n");
@@ -310,8 +403,6 @@ function serializeCatalogHints(hints: CatalogCategoryTagHints[]): unknown[] {
     aliases: hint.aliases,
     n: hint.itemCount,
     colors: hint.colors,
-    styles: hint.styles,
-    materials: hint.materials,
     tags: hint.tags,
   }));
 }
@@ -325,21 +416,17 @@ function serializeCandidateGroup(group: OutfitCandidateGroup): unknown {
 function serializeCatalogItem(item: GarmentCatalogItem): unknown {
   return {
     id: item.id,
-    title: item.title,
     category: item.category,
     gender: item.gender,
-    genderLabel: item.genderLabel,
-    hasLocalImage: Boolean(item.localImagePath),
-    brand: item.brand,
-    store: item.store,
-    price: item.price,
-    currency: item.currency,
+    title: item.title,
     description: item.description,
-    tags: item.tags.slice(0, 12),
-    colorTags: item.colorTags.slice(0, 8),
-    styleTags: item.styleTags.slice(0, 8),
-    materialTags: item.materialTags.slice(0, 8),
+    sizes: item.sizes.slice(0, 12),
+    colors: item.colors.slice(0, 8),
+    price: item.price,
+    tags: item.tags.slice(0, 16),
     productUrl: item.productUrl,
+    imageUrl: item.imageUrl,
+    hasImageFile: Boolean(item.imageFile),
   };
 }
 
@@ -405,10 +492,22 @@ function parseJsonObject(text: string): Record<string, unknown> {
   throw new Error("OpenAI response did not contain a JSON object");
 }
 
-function normalizeIdealOutfitPlan(value: Record<string, unknown>): IdealOutfitPlan {
+function sizePreferenceValue(value: unknown): SizePreference | undefined {
+  return value === "any" || value === "xs-s" || value === "m-l" || value === "xl-xxl" ? value : undefined;
+}
+
+function pricePreferenceValue(value: unknown): PricePreference | undefined {
+  return value === "any" || value === "under-10k" || value === "under-30k" || value === "under-100k" || value === "over-100k" ? value : undefined;
+}
+
+function normalizeIdealOutfitPlan(
+  value: Record<string, unknown>,
+  preferences: IdealOutfitPreferences,
+): IdealOutfitPlan {
   const accepted = value.accepted === true;
+  const targetGender = garmentGenderValue(value.targetGender) ?? garmentGenderValue(value.gender);
   const legacyCategories = Array.isArray(value.categories)
-    ? value.categories.flatMap(normalizeCategoryRequest).slice(0, 3)
+    ? value.categories.flatMap((entry) => normalizeCategoryRequest(entry, targetGender, preferences)).slice(0, 3)
     : [];
   const rawOptions = Array.isArray(value.options)
     ? value.options
@@ -416,13 +515,17 @@ function normalizeIdealOutfitPlan(value: Record<string, unknown>): IdealOutfitPl
       ? value.styles
       : [];
   const normalizedOptions = rawOptions
-    .flatMap(normalizeIdealOutfitOption)
+    .flatMap((option) => normalizeIdealOutfitOption(option, targetGender, preferences))
     .slice(0, 3);
   const fallbackOption = legacyCategories.length
     ? [
         {
           styleName: stringValue(value.styleName),
           summary: stringValue(value.summary),
+          targetGender,
+          userWish: stringValue(value.userWish) ?? preferences.userWish,
+          sizePreference: sizePreferenceValue(value.sizePreference) ?? preferences.sizePreference,
+          pricePreference: pricePreferenceValue(value.pricePreference) ?? preferences.pricePreference,
           categories: legacyCategories,
         },
       ]
@@ -433,6 +536,10 @@ function normalizeIdealOutfitPlan(value: Record<string, unknown>): IdealOutfitPl
   return {
     accepted,
     rejectionMessage: stringValue(value.rejectionMessage),
+    targetGender: first?.targetGender ?? targetGender,
+    userWish: first?.userWish ?? stringValue(value.userWish) ?? preferences.userWish,
+    sizePreference: first?.sizePreference ?? sizePreferenceValue(value.sizePreference) ?? preferences.sizePreference,
+    pricePreference: first?.pricePreference ?? pricePreferenceValue(value.pricePreference) ?? preferences.pricePreference,
     styleName: first?.styleName ?? stringValue(value.styleName),
     summary: first?.summary ?? stringValue(value.summary),
     categories: first?.categories ?? legacyCategories,
@@ -440,13 +547,18 @@ function normalizeIdealOutfitPlan(value: Record<string, unknown>): IdealOutfitPl
   };
 }
 
-function normalizeIdealOutfitOption(value: unknown): IdealOutfitOption[] {
+function normalizeIdealOutfitOption(
+  value: unknown,
+  fallbackGender: GarmentGender | undefined,
+  preferences: IdealOutfitPreferences,
+): IdealOutfitOption[] {
   if (!isRecord(value)) {
     return [];
   }
 
+  const targetGender = garmentGenderValue(value.targetGender) ?? garmentGenderValue(value.gender) ?? fallbackGender;
   const categories = Array.isArray(value.categories)
-    ? value.categories.flatMap(normalizeCategoryRequest).slice(0, 3)
+    ? value.categories.flatMap((entry) => normalizeCategoryRequest(entry, targetGender, preferences)).slice(0, 3)
     : [];
 
   if (categories.length === 0) {
@@ -457,12 +569,20 @@ function normalizeIdealOutfitOption(value: unknown): IdealOutfitOption[] {
     {
       styleName: stringValue(value.styleName),
       summary: stringValue(value.summary),
+      targetGender,
+      userWish: stringValue(value.userWish) ?? preferences.userWish,
+      sizePreference: sizePreferenceValue(value.sizePreference) ?? preferences.sizePreference,
+      pricePreference: pricePreferenceValue(value.pricePreference) ?? preferences.pricePreference,
       categories,
     },
   ];
 }
 
-function normalizeCategoryRequest(value: unknown): OutfitCategoryRequest[] {
+function normalizeCategoryRequest(
+  value: unknown,
+  fallbackGender: GarmentGender | undefined,
+  preferences: IdealOutfitPreferences,
+): OutfitCategoryRequest[] {
   if (!isRecord(value)) {
     return [];
   }
@@ -478,15 +598,18 @@ function normalizeCategoryRequest(value: unknown): OutfitCategoryRequest[] {
     {
       category,
       query,
+      gender: garmentGenderValue(value.gender) ?? garmentGenderValue(value.targetGender) ?? fallbackGender,
       color: stringValue(value.color),
       notes: stringValue(value.notes),
+      userWish: stringValue(value.userWish) ?? preferences.userWish,
+      sizePreference: sizePreferenceValue(value.sizePreference) ?? preferences.sizePreference,
+      pricePreference: pricePreferenceValue(value.pricePreference) ?? preferences.pricePreference,
       requiredTags: stringArrayValue(value.requiredTags).slice(0, 4),
       preferredTags: stringArrayValue(value.preferredTags).slice(0, 8),
       avoidTags: stringArrayValue(value.avoidTags).slice(0, 5),
     },
   ];
 }
-
 function normalizeOutfitSelection(
   value: Record<string, unknown>,
   plan: IdealOutfitPlan,
@@ -545,6 +668,27 @@ function fallbackSelection(groups: OutfitCandidateGroup[]): OutfitSelectionItem[
   }).slice(0, 3);
 }
 
+function garmentGenderValue(value: unknown): GarmentGender | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+
+  if (normalized === "male" || normalized === "мужское" || normalized === "men" || normalized === "man") {
+    return "male";
+  }
+
+  if (normalized === "female" || normalized === "женское" || normalized === "women" || normalized === "woman") {
+    return "female";
+  }
+
+  if (normalized === "unisex" || normalized === "унисекс") {
+    return "unisex";
+  }
+
+  return undefined;
+}
 function stringArrayValue(value: unknown): string[] {
   if (Array.isArray(value)) {
     return uniqueStrings(value.flatMap((item) => typeof item === "string" ? [item] : []));

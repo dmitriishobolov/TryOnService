@@ -4,6 +4,7 @@ import type { MonolithConfig } from "../config.js";
 import { MonolithCatalog } from "../catalog/catalog.js";
 import type {
   GarmentCatalogItem,
+  IdealOutfitPreferences,
   IdealOutfitOption,
   IdealOutfitPlan,
   ImageData,
@@ -11,6 +12,8 @@ import type {
   OutfitCategoryRequest,
   OutfitSelection,
   OutfitSelectionItem,
+  PricePreference,
+  SizePreference,
   StoredImage,
 } from "../types.js";
 import { OpenAiVisionService } from "../providers/openaiVision.js";
@@ -74,22 +77,38 @@ type ChatSession =
       mode: "awaiting-appearance-photo";
     }
   | {
+      mode: "awaiting-ideal-wish";
+    }
+  | {
+      mode: "awaiting-ideal-size";
+      userWish?: string;
+    }
+  | {
+      mode: "awaiting-ideal-price";
+      userWish?: string;
+      sizePreference: SizePreference;
+    }
+  | {
       mode: "awaiting-ideal-photo";
+      userWish?: string;
+      sizePreference: SizePreference;
+      pricePreference: PricePreference;
     }
   | {
       mode: "awaiting-ideal-style";
       person: StoredImage;
       options: IdealOutfitOption[];
+      userWish?: string;
+      sizePreference: SizePreference;
+      pricePreference: PricePreference;
     }
   | {
-      mode: "awaiting-tryon-person-photo";
-    }
-  | {
-      mode: "awaiting-tryon-garment-photo";
+      mode: "awaiting-ideal-catalog-fallback";
       person: StoredImage;
+      preferences: IdealOutfitPreferences;
     };
 
-type ProcessingFlow = "appearance" | "ideal" | "tryon" | "catalog";
+type ProcessingFlow = "appearance" | "ideal";
 
 interface ProcessingState {
   flow: ProcessingFlow;
@@ -98,11 +117,20 @@ interface ProcessingState {
 
 const appearanceAnalysisButtonText = "Анализ внешности";
 const idealOutfitButtonText = "Идеальный образ";
-const manualTryOnButtonText = "Ручная примерка";
-const catalogRefreshButtonText = "Обновить каталог";
 const legacyAppearanceAnalysisButtonText = "Разбор внешности";
-const legacyTryOnButtonText = "Примерка TryOn";
 const cancelButtonText = "Отмена";
+const skipWishButtonText = "Пропустить";
+const relaxIdealWishButtonText = "Предложить без пожелания";
+const changeIdealWishButtonText = "Изменить пожелание";
+const anySizeButtonText = "Любой размер";
+const sizeSmallButtonText = "XS-S";
+const sizeMediumButtonText = "M-L";
+const sizeLargeButtonText = "XL-XXL";
+const anyBudgetButtonText = "Любой бюджет";
+const budgetUnder10kButtonText = "до 10 000 ₽";
+const budgetUnder30kButtonText = "до 30 000 ₽";
+const budgetUnder100kButtonText = "до 100 000 ₽";
+const budgetOver100kButtonText = "100 000 ₽+";
 
 export class TelegramMonolithBot {
   private updateOffset = 0;
@@ -153,17 +181,12 @@ export class TelegramMonolithBot {
     const processing = this.processing.get(chatId);
 
     if (processing) {
-      logger.info("Telegram update blocked while monolith flow is running", {
+      logger.info("Telegram update ignored while monolith flow is running", {
         chatId,
         flow: processing.flow,
         text,
         hasPhoto: Boolean(message.photo?.length),
       });
-      await this.sendMessage(
-        chatId,
-        `Сейчас уже выполняю **${describeProcessingFlow(processing.flow)}**. Дождитесь результата, чтобы не сбить шаги бота.`,
-        processingMarkup(),
-      );
       return;
     }
 
@@ -214,20 +237,11 @@ export class TelegramMonolithBot {
       return;
     }
 
-    if (text && isTryOnCommand(text)) {
-      await this.startTryOn(chatId);
-      return;
-    }
-
-    if (text && isCatalogCommand(text)) {
-      await this.startCatalogRefresh(chatId);
-      return;
-    }
 
     if (!text && message.photo?.length) {
       await this.sendMessage(
         chatId,
-        "Сначала выберите сценарий: анализ внешности, идеальный образ или ручная примерка.",
+        "Сначала выберите сценарий: анализ внешности или идеальный образ.",
         mainMenuMarkup(),
       );
       return;
@@ -245,8 +259,23 @@ export class TelegramMonolithBot {
       return;
     }
 
+    if (session.mode === "awaiting-ideal-wish") {
+      await this.handleIdealWishStep(message);
+      return;
+    }
+
+    if (session.mode === "awaiting-ideal-size") {
+      await this.handleIdealSizeStep(message, session);
+      return;
+    }
+
+    if (session.mode === "awaiting-ideal-price") {
+      await this.handleIdealPriceStep(message, session);
+      return;
+    }
+
     if (session.mode === "awaiting-ideal-photo") {
-      await this.handleIdealOutfitPhotoStep(message);
+      await this.handleIdealOutfitPhotoStep(message, session);
       return;
     }
 
@@ -255,23 +284,23 @@ export class TelegramMonolithBot {
       return;
     }
 
-    if (session.mode === "awaiting-tryon-person-photo") {
-      await this.handleTryOnPersonPhotoStep(message);
+    if (session.mode === "awaiting-ideal-catalog-fallback") {
+      await this.handleIdealCatalogFallbackStep(message, session);
       return;
     }
 
-    await this.handleTryOnGarmentPhotoStep(message, session.person);
+    const exhaustive: never = session;
+    void exhaustive;
   }
 
   private sendStartMessage(chatId: string): Promise<unknown> {
     return this.sendMessage(
       chatId,
       [
-        "Привет! Это отдельный MVP-монолит TryOnService: один Telegram-бот сам хранит фото, читает каталог одежды, вызывает ChatGPT API и отправляет выбранные вещи в TryOn API.",
+        "Привет! Это отдельный MVP-монолит TryOnService: один Telegram-бот сам хранит фото, читает каталог одежды, подбирает вещи и собирает примерку.",
         "",
         "**Анализ внешности**: пришлите фото с видимым лицом, я дам компактный разбор.",
         "**Идеальный образ**: пришлите фото в полный рост или по колено, я выберу стиль, найду вещи в локальном каталоге и сделаю примерку.",
-        "**Ручная примерка**: пришлите фото человека и отдельное фото вещи.",
         "",
         "Выберите сценарий кнопкой ниже.",
       ].join("\n"),
@@ -307,7 +336,7 @@ export class TelegramMonolithBot {
     this.processing.set(chatId, { flow: "appearance", startedAt: Date.now() });
     await this.sendMessage(
       chatId,
-      "Фото принято. Делаю разбор внешности через ChatGPT API.",
+      "Фото принято. Делаю разбор внешности.",
       processingMarkup(),
     );
 
@@ -355,18 +384,138 @@ export class TelegramMonolithBot {
 
   private startIdealOutfit(chatId: string): Promise<unknown> {
     this.sessions.set(chatId, {
-      mode: "awaiting-ideal-photo",
+      mode: "awaiting-ideal-wish",
     });
 
     return this.sendMessage(
       chatId,
-      "Пришлите фото в полный рост или хотя бы по колено. Обувь может быть не видна, тогда я просто не буду подбирать обувь.",
+      [
+        "Сначала напишите пожелание к образу: случай, настроение, стиль, цвета или ограничения.",
+        "Можно просто нажать «Пропустить», тогда я подберу образ сам.",
+      ].join("\n"),
+      idealWishMarkup(),
+    );
+  }
+
+  private async handleIdealWishStep(message: TelegramMessage): Promise<void> {
+    const chatId = String(message.chat.id);
+    const text = message.text?.trim() ?? message.caption?.trim();
+
+    if (!text) {
+      await this.sendMessage(
+        chatId,
+        "Напишите короткое пожелание к образу или нажмите «Пропустить».",
+        idealWishMarkup(),
+      );
+      return;
+    }
+
+    const userWish = isSkipWishCommand(text) ? undefined : text;
+
+    if (userWish && userWish.length > 500) {
+      await this.sendMessage(
+        chatId,
+        "Пожелание слишком длинное. Напишите короче: стиль, случай и пару важных деталей.",
+        idealWishMarkup(),
+      );
+      return;
+    }
+
+    if (userWish && !looksLikeMeaningfulIdealWish(userWish)) {
+      await this.sendMessage(
+        chatId,
+        "Не понял пожелание к образу. Напишите обычными словами: для какого случая нужен образ, какие цвета/стиль хотите, или нажмите «Пропустить».",
+        idealWishMarkup(),
+      );
+      return;
+    }
+
+    this.sessions.set(chatId, {
+      mode: "awaiting-ideal-size",
+      userWish,
+    });
+
+    await this.sendMessage(
+      chatId,
+      [
+        "Выберите размерный диапазон.",
+        "Если не уверены или хотите больше вариантов, выбирайте «Любой размер».",
+      ].join("\n"),
+      await this.buildSizePreferenceMarkup(),
+    );
+  }
+
+  private async handleIdealSizeStep(
+    message: TelegramMessage,
+    session: Extract<ChatSession, { mode: "awaiting-ideal-size" }>,
+  ): Promise<void> {
+    const chatId = String(message.chat.id);
+    const text = message.text?.trim() ?? message.caption?.trim();
+    const sizePreference = text ? parseSizePreference(text) : undefined;
+
+    if (!sizePreference) {
+      await this.sendMessage(chatId, "Выберите размер кнопкой ниже или нажмите «Отмена».", await this.buildSizePreferenceMarkup());
+      return;
+    }
+
+    this.sessions.set(chatId, {
+      mode: "awaiting-ideal-price",
+      userWish: session.userWish,
+      sizePreference,
+    });
+
+    await this.sendMessage(
+      chatId,
+      "Выберите бюджет на одну вещь. Это фильтр для каталога, не общая сумма образа.",
+      await this.buildPricePreferenceMarkup(sizePreference),
+    );
+  }
+
+  private async handleIdealPriceStep(
+    message: TelegramMessage,
+    session: Extract<ChatSession, { mode: "awaiting-ideal-price" }>,
+  ): Promise<void> {
+    const chatId = String(message.chat.id);
+    const text = message.text?.trim() ?? message.caption?.trim();
+    const pricePreference = text ? parsePricePreference(text) : undefined;
+
+    if (!pricePreference) {
+      await this.sendMessage(chatId, "Выберите бюджет кнопкой ниже или нажмите «Отмена».", await this.buildPricePreferenceMarkup(session.sizePreference));
+      return;
+    }
+
+    this.sessions.set(chatId, {
+      mode: "awaiting-ideal-photo",
+      userWish: session.userWish,
+      sizePreference: session.sizePreference,
+      pricePreference,
+    });
+
+    await this.sendMessage(
+      chatId,
+      [
+        "Теперь пришлите фото в полный рост или хотя бы по колено.",
+        "Обувь может быть не видна, тогда я просто не буду подбирать обувь.",
+        "Фильтры: " + renderIdealPreferenceSummary({
+          userWish: session.userWish,
+          sizePreference: session.sizePreference,
+          pricePreference,
+        }),
+      ].join("\n"),
       cancelMarkup(),
     );
   }
 
-  private async handleIdealOutfitPhotoStep(message: TelegramMessage): Promise<void> {
+  private async handleIdealOutfitPhotoStep(
+    message: TelegramMessage,
+    session: Extract<ChatSession, { mode: "awaiting-ideal-photo" }>,
+  ): Promise<void> {
     const chatId = String(message.chat.id);
+    const preferences: IdealOutfitPreferences = {
+      userWish: session.userWish,
+      sizePreference: session.sizePreference,
+      pricePreference: session.pricePreference,
+    };
 
     if (!message.photo?.length) {
       await this.sendMessage(
@@ -384,7 +533,7 @@ export class TelegramMonolithBot {
       renderIdealProgress("готовлю фото", 8),
     );
 
-    void this.runIdealOutfit(message, status?.message_id).catch((error) => {
+    void this.runIdealOutfit(message, preferences, status?.message_id).catch((error) => {
       logger.error("Ideal outfit background task crashed", {
         chatId,
         error,
@@ -394,6 +543,7 @@ export class TelegramMonolithBot {
 
   private async runIdealOutfit(
     message: TelegramMessage,
+    preferences: IdealOutfitPreferences,
     statusMessageId?: number,
   ): Promise<void> {
     const chatId = String(message.chat.id);
@@ -404,6 +554,9 @@ export class TelegramMonolithBot {
         chatId,
         flow: "ideal",
         username: message.from?.username,
+        userWish: preferences.userWish,
+        sizePreference: preferences.sizePreference,
+        pricePreference: preferences.pricePreference,
       });
 
       logger.info("Ideal outfit photo saved", {
@@ -411,7 +564,7 @@ export class TelegramMonolithBot {
         path: stored.relativePath,
         sizeBytes: stored.sizeBytes,
       });
-      await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("читаю каталог", 18));
+      statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("читаю каталог", 18));
 
       const items = await this.catalog.ensureReady();
       const catalogHints = await this.catalog.categoryTagHints();
@@ -420,13 +573,18 @@ export class TelegramMonolithBot {
         throw new Error("Monolith catalog is empty");
       }
 
-      await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("анализирую фото и собираю варианты", 44));
-      const plan = await this.openai.planIdealOutfit(image, catalogHints);
-      const options = normalizeIdealStyleOptions(plan);
+      statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("анализирую фото и собираю варианты", 44));
+      const plan = await this.openai.planIdealOutfit(image, catalogHints, preferences);
+      const options = normalizeIdealStyleOptions(plan, preferences);
 
       if (!plan.accepted || options.length === 0) {
-        this.sessions.set(chatId, { mode: "awaiting-ideal-photo" });
-        await this.updateStatusMessage(
+        this.sessions.set(chatId, {
+          mode: "awaiting-ideal-photo",
+          userWish: preferences.userWish,
+          sizePreference: preferences.sizePreference,
+          pricePreference: preferences.pricePreference,
+        });
+        statusMessageId = await this.updateStatusMessage(
           chatId,
           statusMessageId,
           plan.rejectionMessage ??
@@ -440,8 +598,11 @@ export class TelegramMonolithBot {
         mode: "awaiting-ideal-style",
         person: stored,
         options,
+        userWish: preferences.userWish,
+        sizePreference: preferences.sizePreference,
+        pricePreference: preferences.pricePreference,
       });
-      await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("варианты готовы", 100));
+      statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("варианты готовы", 100));
       await this.sendMessage(
         chatId,
         renderIdealStyleOptionsMessage(options),
@@ -453,10 +614,10 @@ export class TelegramMonolithBot {
         provider: this.tryOn.name,
         error,
       });
-      await this.updateStatusMessage(
+      statusMessageId = await this.updateStatusMessage(
         chatId,
         statusMessageId,
-        friendlyErrorMessage(error, "Не удалось подготовить варианты образа. Попробуйте другое фото или обновите каталог."),
+        friendlyErrorMessage(error, "Не удалось подготовить варианты образа. Попробуйте другое фото или проверьте локальный каталог."),
         mainMenuMarkup(),
       );
     } finally {
@@ -496,6 +657,156 @@ export class TelegramMonolithBot {
     });
   }
 
+  private async handleIdealCatalogFallbackStep(
+    message: TelegramMessage,
+    session: Extract<ChatSession, { mode: "awaiting-ideal-catalog-fallback" }>,
+  ): Promise<void> {
+    const chatId = String(message.chat.id);
+    const text = message.text?.trim() ?? message.caption?.trim();
+
+    if (text && isRelaxIdealWishCommand(text)) {
+      const relaxedPreferences: IdealOutfitPreferences = {
+        ...session.preferences,
+        userWish: undefined,
+      };
+      this.sessions.delete(chatId);
+      this.processing.set(chatId, { flow: "ideal", startedAt: Date.now() });
+      const status = await this.sendStatusMessage(
+        chatId,
+        renderIdealProgress("подбираю без пожелания", 8),
+      );
+
+      void this.runRelaxedIdealOutfitFromStoredPhoto(chatId, session.person, relaxedPreferences, status?.message_id).catch((error) => {
+        logger.error("Ideal outfit relaxed fallback background task crashed", {
+          chatId,
+          error,
+        });
+      });
+      return;
+    }
+
+    if (text && isChangeIdealWishCommand(text)) {
+      this.sessions.set(chatId, { mode: "awaiting-ideal-wish" });
+      await this.sendMessage(
+        chatId,
+        "Ок, напишите новое пожелание к образу или нажмите «Пропустить».",
+        idealWishMarkup(),
+      );
+      return;
+    }
+
+    await this.sendMessage(
+      chatId,
+      "Выберите: предложить новый вариант без пожелания, изменить пожелание или отменить сценарий.",
+      idealCatalogFallbackMarkup(),
+    );
+  }
+
+  private async runRelaxedIdealOutfitFromStoredPhoto(
+    chatId: string,
+    stored: StoredImage,
+    preferences: IdealOutfitPreferences,
+    statusMessageId?: number,
+  ): Promise<void> {
+    try {
+      const image = await this.storage.readImage(stored);
+
+      statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("читаю каталог", 18));
+      const items = await this.catalog.ensureReady();
+      const catalogHints = await this.catalog.categoryTagHints();
+
+      if (!this.config.catalog.enabled || items.length === 0 || catalogHints.length === 0) {
+        throw new Error("Monolith catalog is empty");
+      }
+
+      statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("собираю варианты без пожелания", 44));
+      const plan = await this.openai.planIdealOutfit(image, catalogHints, preferences);
+      const options = normalizeIdealStyleOptions(plan, preferences);
+
+      if (!plan.accepted || options.length === 0) {
+        this.sessions.set(chatId, { mode: "awaiting-ideal-wish" });
+        statusMessageId = await this.updateStatusMessage(
+          chatId,
+          statusMessageId,
+          plan.rejectionMessage ?? "Не получилось предложить образ даже без пожелания. Попробуйте написать другое пожелание или отправить другое фото.",
+        );
+        await this.sendMessage(chatId, "Напишите новое пожелание или нажмите «Пропустить».", idealWishMarkup());
+        return;
+      }
+
+      this.sessions.set(chatId, {
+        mode: "awaiting-ideal-style",
+        person: stored,
+        options,
+        userWish: preferences.userWish,
+        sizePreference: preferences.sizePreference,
+        pricePreference: preferences.pricePreference,
+      });
+      statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("варианты готовы", 100));
+      await this.sendMessage(
+        chatId,
+        [
+          "Я убрал прежнее пожелание и подготовил варианты по фото, размеру и бюджету.",
+          "",
+          renderIdealStyleOptionsMessage(options),
+        ].join("\n"),
+        idealStyleOptionsMarkup(options),
+      );
+    } catch (error) {
+      logger.error("Ideal outfit relaxed fallback failed", {
+        chatId,
+        provider: this.tryOn.name,
+        error,
+      });
+      statusMessageId = await this.updateStatusMessage(
+        chatId,
+        statusMessageId,
+        friendlyErrorMessage(error, "Не удалось подготовить вариант без пожелания. Попробуйте другое фото или проверьте локальный каталог."),
+        mainMenuMarkup(),
+      );
+    } finally {
+      this.processing.delete(chatId);
+    }
+  }
+
+  private async offerIdealCatalogFallback(
+    chatId: string,
+    person: StoredImage,
+    option: IdealOutfitOption,
+    groups: OutfitCandidateGroup[],
+    statusMessageId?: number,
+  ): Promise<void> {
+    const preferences = preferencesFromIdealOption(option);
+    this.sessions.set(chatId, {
+      mode: "awaiting-ideal-catalog-fallback",
+      person,
+      preferences,
+    });
+    logger.info("Ideal outfit catalog fallback offered", {
+      chatId,
+      styleName: option.styleName,
+      preferences,
+      categories: groups.map((group) => ({
+        category: group.request.category,
+        query: group.request.query,
+        requiredTags: group.request.requiredTags,
+        color: group.request.color,
+        candidates: group.candidates.length,
+      })),
+    });
+
+    statusMessageId = await this.updateStatusMessage(
+      chatId,
+      statusMessageId,
+      renderIdealCatalogFallbackMessage(option, groups, preferences),
+    );
+    await this.sendMessage(
+      chatId,
+      "Могу предложить новый вариант без этого пожелания на том же фото. Размер и бюджет оставлю такими же.",
+      idealCatalogFallbackMarkup(),
+    );
+  }
+
   private async runSelectedIdealOutfit(
     chatId: string,
     person: StoredImage,
@@ -505,20 +816,35 @@ export class TelegramMonolithBot {
     try {
       const image = await this.storage.readImage(person);
 
-      await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("читаю каталог", 18));
+      statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("читаю каталог", 18));
       const items = await this.catalog.ensureReady();
 
       if (!this.config.catalog.enabled || items.length === 0) {
         throw new Error("Monolith catalog is empty");
       }
 
-      await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("подбираю вещи", 46));
+      statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("подбираю вещи", 46));
       const groups = await this.buildCandidateGroups(option.categories);
+      logger.info("Ideal outfit candidates built", {
+        chatId,
+        styleName: option.styleName,
+        categories: groups.map((group) => ({
+          category: group.request.category,
+          gender: group.request.gender,
+          sizePreference: group.request.sizePreference,
+          pricePreference: group.request.pricePreference,
+          userWish: group.request.userWish?.slice(0, 160),
+          candidates: group.candidates.length,
+          prices: group.candidates.slice(0, 5).map((item) => item.price?.amount ?? null),
+          itemIds: group.candidates.slice(0, 5).map((item) => item.id),
+        })),
+      });
       const missing = groups.filter((group) => group.candidates.length === 0);
       const usableGroups = groups.filter((group) => group.candidates.length > 0);
 
       if (usableGroups.length === 0) {
-        throw new Error("Monolith catalog did not contain candidates for selected outfit categories");
+        await this.offerIdealCatalogFallback(chatId, person, option, groups, statusMessageId);
+        return;
       }
 
       const selection = buildLocalOutfitSelection(option, usableGroups);
@@ -528,12 +854,12 @@ export class TelegramMonolithBot {
         throw new Error("Local catalog scoring did not select catalog items");
       }
 
-      await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("готовлю изображения", 70));
+      statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("готовлю изображения", 70));
       const garmentImages = await Promise.all(
         selected.map((entry) => this.catalog.getImage(entry.item)),
       );
 
-      await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("делаю примерку", 86));
+      statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("делаю примерку", 86));
       const result = await this.tryOn.run({ person: image, garments: garmentImages });
 
       if (result.image) {
@@ -550,7 +876,7 @@ export class TelegramMonolithBot {
           sizeBytes: resultStored.sizeBytes,
           selectedItems: selected.map((entry) => entry.item.id),
         });
-        await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("готово", 100));
+        statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("готово", 100));
         await this.sendPhotoBuffer(
           chatId,
           result.image,
@@ -558,16 +884,15 @@ export class TelegramMonolithBot {
             `**${selection.styleName}**`,
             selection.summary,
             "",
-            result.message,
-            `Файл сохранен локально: ${resultStored.relativePath}`,
+            "Готово, собрал примерку по выбранному образу.",
           ].join("\n"),
           mainMenuMarkup(),
         );
       } else {
-        await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("готово", 100));
+        statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("готово", 100));
         await this.sendMessage(
           chatId,
-          `**${selection.styleName}**\n${selection.summary}\n\n${result.message}`,
+          `**${selection.styleName}**\n${selection.summary}\n\nГотово, подборка товаров ниже. Изображение примерки пока не получилось собрать.`,
           mainMenuMarkup(),
         );
       }
@@ -592,16 +917,36 @@ export class TelegramMonolithBot {
         provider: this.tryOn.name,
         error,
       });
-      await this.updateStatusMessage(
+      statusMessageId = await this.updateStatusMessage(
         chatId,
         statusMessageId,
-        friendlyErrorMessage(error, "Не удалось собрать идеальный образ. Попробуйте другой вариант стиля, другое фото или обновите каталог."),
+        friendlyErrorMessage(error, "Не удалось собрать идеальный образ. Попробуйте другой вариант стиля, другое фото или проверьте локальный каталог."),
         mainMenuMarkup(),
       );
     } finally {
       this.processing.delete(chatId);
     }
   }
+  private async buildSizePreferenceMarkup(): Promise<TelegramReplyMarkup> {
+    try {
+      return sizePreferenceMarkup(await this.catalog.sizePreferenceCounts());
+    } catch (error) {
+      logger.warn("Telegram could not build size counts; falling back to plain buttons", { error });
+      return sizePreferenceMarkup();
+    }
+  }
+
+  private async buildPricePreferenceMarkup(
+    sizePreference: SizePreference,
+  ): Promise<TelegramReplyMarkup> {
+    try {
+      return pricePreferenceMarkup(await this.catalog.pricePreferenceCounts({ sizePreference }));
+    } catch (error) {
+      logger.warn("Telegram could not build price counts; falling back to plain buttons", { error });
+      return pricePreferenceMarkup();
+    }
+  }
+
   private async buildCandidateGroups(
     requests: OutfitCategoryRequest[],
   ): Promise<OutfitCandidateGroup[]> {
@@ -624,15 +969,31 @@ export class TelegramMonolithBot {
     reason?: string,
   ): Promise<void> {
     const caption = [
-      `**${item.category}: ${item.title}**`,
-      item.brand ? `Бренд: ${item.brand}` : undefined,
+      "**" + item.category + ": " + item.title + "**",
+      "Сегмент: " + labelForGender(item.gender),
+      item.sizes.length ? "Размеры: " + item.sizes.slice(0, 8).join(", ") : undefined,
+      item.colors.length ? "Цвета: " + item.colors.slice(0, 5).join(", ") : undefined,
       formatPrice(item),
-      `Магазин: ${item.store}`,
-      reason ? `Почему подходит: ${reason}` : undefined,
+      reason ? "Почему подходит: " + reason : undefined,
     ]
       .filter(Boolean)
       .join("\n");
     const markup = productLinkMarkup(item.productUrl);
+
+    if (item.imageFile) {
+      try {
+        const image = await this.catalog.getImage(item);
+        await this.sendPhotoBuffer(chatId, image, caption, markup);
+        return;
+      } catch (error) {
+        logger.warn("Telegram could not send local catalog image from buffer", {
+          chatId,
+          itemId: item.id,
+          imageFile: item.imageFile,
+          error,
+        });
+      }
+    }
 
     try {
       await this.callApi("sendPhoto", {
@@ -665,206 +1026,11 @@ export class TelegramMonolithBot {
 
     await this.sendMessage(
       chatId,
-      `${caption}\n[Перейти к товару](${item.productUrl})`,
+      caption + "\n[Перейти к товару](" + item.productUrl + ")",
       mainMenuMarkup(),
     );
   }
-
-  private startTryOn(chatId: string): Promise<unknown> {
-    this.sessions.set(chatId, {
-      mode: "awaiting-tryon-person-photo",
-    });
-
-    return this.sendMessage(
-      chatId,
-      "Пришлите фото человека для примерки. Лучше полный рост или по колено, с хорошим светом.",
-      cancelMarkup(),
-    );
-  }
-
-  private async handleTryOnPersonPhotoStep(message: TelegramMessage): Promise<void> {
-    const chatId = String(message.chat.id);
-
-    if (!message.photo?.length) {
-      await this.sendMessage(
-        chatId,
-        "Нужно фото человека. Пришлите изображение или нажмите «Отмена».",
-        cancelMarkup(),
-      );
-      return;
-    }
-
-    try {
-      const image = await this.downloadTelegramPhoto(message);
-      const stored = await this.storage.saveImage("telegram-input", image, {
-        chatId,
-        flow: "tryon",
-        role: "person",
-        username: message.from?.username,
-      });
-
-      this.sessions.set(chatId, {
-        mode: "awaiting-tryon-garment-photo",
-        person: stored,
-      });
-      await this.sendMessage(
-        chatId,
-        "Фото человека сохранил. Теперь пришлите фото вещи для примерки, желательно фронтально на чистом фоне.",
-        cancelMarkup(),
-      );
-    } catch (error) {
-      logger.error("TryOn person photo save failed", {
-        chatId,
-        error,
-      });
-      await this.sendMessage(
-        chatId,
-        friendlyErrorMessage(error, "Не удалось сохранить фото. Попробуйте отправить его еще раз."),
-        cancelMarkup(),
-      );
-    }
-  }
-
-  private async handleTryOnGarmentPhotoStep(
-    message: TelegramMessage,
-    person: StoredImage,
-  ): Promise<void> {
-    const chatId = String(message.chat.id);
-
-    if (!message.photo?.length) {
-      await this.sendMessage(
-        chatId,
-        "Теперь нужно фото вещи. Пришлите изображение одежды или нажмите «Отмена».",
-        cancelMarkup(),
-      );
-      return;
-    }
-
-    this.sessions.delete(chatId);
-    this.processing.set(chatId, { flow: "tryon", startedAt: Date.now() });
-    await this.sendMessage(
-      chatId,
-      `Фото вещи принято. Отправляю пару в TryOn provider: **${this.tryOn.name}**.`,
-      processingMarkup(),
-    );
-
-    void this.runTryOn(message, person).catch((error) => {
-      logger.error("TryOn background task crashed", {
-        chatId,
-        error,
-      });
-    });
-  }
-
-  private async runTryOn(
-    message: TelegramMessage,
-    personStored: StoredImage,
-  ): Promise<void> {
-    const chatId = String(message.chat.id);
-
-    try {
-      const [person, garment] = await Promise.all([
-        this.storage.readImage(personStored),
-        this.downloadTelegramPhoto(message),
-      ]);
-      const garmentStored = await this.storage.saveImage("telegram-input", garment, {
-        chatId,
-        flow: "tryon",
-        role: "garment",
-        username: message.from?.username,
-      });
-      logger.info("TryOn input photos ready", {
-        chatId,
-        personPath: personStored.relativePath,
-        garmentPath: garmentStored.relativePath,
-        provider: this.tryOn.name,
-      });
-      const result = await this.tryOn.run({ person, garments: [garment] });
-
-      if (result.image) {
-        const resultStored = await this.storage.saveImage("tryon-result", result.image, {
-          chatId,
-          flow: "tryon",
-          provider: result.provider,
-        });
-        logger.info("TryOn result saved", {
-          chatId,
-          provider: result.provider,
-          path: resultStored.relativePath,
-          sizeBytes: resultStored.sizeBytes,
-        });
-        await this.sendPhotoBuffer(
-          chatId,
-          result.image,
-          `${result.message}\n\nФайл сохранен локально: ${resultStored.relativePath}`,
-          mainMenuMarkup(),
-        );
-      } else {
-        await this.sendMessage(chatId, result.message, mainMenuMarkup());
-      }
-    } catch (error) {
-      logger.error("TryOn failed", {
-        chatId,
-        provider: this.tryOn.name,
-        error,
-      });
-      await this.sendMessage(
-        chatId,
-        friendlyErrorMessage(error, "Не удалось выполнить примерку. Попробуйте еще раз."),
-        mainMenuMarkup(),
-      );
-    } finally {
-      this.processing.delete(chatId);
-    }
-  }
-
-  private async startCatalogRefresh(chatId: string): Promise<void> {
-    this.processing.set(chatId, { flow: "catalog", startedAt: Date.now() });
-    const status = await this.sendStatusMessage(
-      chatId,
-      "Обновляю локальный каталог одежды. Это может занять немного времени.",
-    );
-
-    void this.runCatalogRefresh(chatId, status?.message_id).catch((error) => {
-      logger.error("Catalog refresh background task crashed", {
-        chatId,
-        error,
-      });
-    });
-  }
-
-  private async runCatalogRefresh(
-    chatId: string,
-    statusMessageId?: number,
-  ): Promise<void> {
-    try {
-      const items = await this.catalog.refresh();
-      const categories = await this.catalog.categories();
-
-      await this.updateStatusMessage(
-        chatId,
-        statusMessageId,
-        [
-          `Каталог обновлен. Товаров: **${items.length}**.`,
-          `Категории: ${categories.slice(0, 18).join(", ") || "нет"}.`,
-          `Кэш: ${this.config.catalog.cachePath}`,
-        ].join("\n"),
-        mainMenuMarkup(),
-      );
-    } catch (error) {
-      logger.error("Catalog refresh failed", { chatId, error });
-      await this.updateStatusMessage(
-        chatId,
-        statusMessageId,
-        friendlyErrorMessage(error, "Не удалось обновить каталог."),
-        mainMenuMarkup(),
-      );
-    } finally {
-      this.processing.delete(chatId);
-    }
-  }
-
-  private sendActiveSessionMessage(
+  private async sendActiveSessionMessage(
     chatId: string,
     session: ChatSession,
   ): Promise<unknown> {
@@ -875,10 +1041,31 @@ export class TelegramMonolithBot {
           "Сейчас открыт анализ внешности. Пришлите фото с лицом или нажмите «Отмена».",
           cancelMarkup(),
         );
+      case "awaiting-ideal-wish":
+        return this.sendMessage(
+          chatId,
+          "Сейчас открыт идеальный образ. Напишите пожелание к образу, нажмите «Пропустить» или «Отмена».",
+          idealWishMarkup(),
+        );
+      case "awaiting-ideal-size":
+        return this.sendMessage(
+          chatId,
+          "Сейчас нужно выбрать размерный диапазон или нажать «Отмена».",
+          await this.buildSizePreferenceMarkup(),
+        );
+      case "awaiting-ideal-price":
+        return this.sendMessage(
+          chatId,
+          "Сейчас нужно выбрать бюджет на одну вещь или нажать «Отмена».",
+          await this.buildPricePreferenceMarkup(session.sizePreference),
+        );
       case "awaiting-ideal-photo":
         return this.sendMessage(
           chatId,
-          "Сейчас открыт идеальный образ. Пришлите фото в полный рост или по колено, либо нажмите «Отмена».",
+          [
+            "Сейчас открыт идеальный образ. Пришлите фото в полный рост или по колено, либо нажмите «Отмена».",
+            "Фильтры: " + renderIdealPreferenceSummary(session),
+          ].join("\n"),
           cancelMarkup(),
         );
       case "awaiting-ideal-style":
@@ -887,20 +1074,18 @@ export class TelegramMonolithBot {
           "Сейчас нужно выбрать один из трех вариантов стиля или нажать «Отмена».",
           idealStyleOptionsMarkup(session.options),
         );
-      case "awaiting-tryon-person-photo":
+      case "awaiting-ideal-catalog-fallback":
         return this.sendMessage(
           chatId,
-          "Сейчас открыта ручная примерка. Пришлите фото человека или нажмите «Отмена».",
-          cancelMarkup(),
-        );
-      case "awaiting-tryon-garment-photo":
-        return this.sendMessage(
-          chatId,
-          "Сейчас открыта ручная примерка. Фото человека уже есть, пришлите фото вещи или нажмите «Отмена».",
-          cancelMarkup(),
+          "Под текущие пожелания и фильтры каталог не дал достаточно подходящих вещей. Могу предложить новый вариант без пожелания на том же фото или начать заново с другим пожеланием.",
+          idealCatalogFallbackMarkup(),
         );
     }
+
+    const exhaustive: never = session;
+    return Promise.resolve(exhaustive);
   }
+
   private async setupCommands(): Promise<unknown> {
     const commands: BotCommand[] = [
       {
@@ -914,14 +1099,6 @@ export class TelegramMonolithBot {
       {
         command: "ideal",
         description: "Идеальный образ из каталога",
-      },
-      {
-        command: "tryon",
-        description: "Ручная примерка одежды",
-      },
-      {
-        command: "catalog",
-        description: "Обновить локальный каталог",
       },
       {
         command: "cancel",
@@ -951,7 +1128,7 @@ export class TelegramMonolithBot {
   private async sendStatusMessage(
     chatId: string,
     text: string,
-    replyMarkup: TelegramReplyMarkup = processingMarkup(),
+    replyMarkup?: TelegramReplyMarkup,
   ): Promise<TelegramMessage | undefined> {
     try {
       return await this.callApi<TelegramMessage>("sendMessage", {
@@ -959,7 +1136,7 @@ export class TelegramMonolithBot {
         text: markdownToTelegramHtml(text),
         parse_mode: "HTML",
         disable_web_page_preview: true,
-        reply_markup: replyMarkup,
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
       });
     } catch (error) {
       logger.warn("Telegram status message send failed", { chatId, error });
@@ -972,10 +1149,10 @@ export class TelegramMonolithBot {
     messageId: number | undefined,
     text: string,
     replyMarkup?: TelegramReplyMarkup,
-  ): Promise<void> {
+  ): Promise<number | undefined> {
     if (!messageId) {
-      await this.sendMessage(chatId, text, replyMarkup);
-      return;
+      const status = await this.sendStatusMessage(chatId, text, replyMarkup);
+      return status?.message_id;
     }
 
     try {
@@ -985,11 +1162,35 @@ export class TelegramMonolithBot {
         text: markdownToTelegramHtml(text),
         parse_mode: "HTML",
         disable_web_page_preview: true,
-        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+        ...(isInlineReplyMarkup(replyMarkup) ? { reply_markup: replyMarkup } : {}),
       });
+      return messageId;
     } catch (error) {
-      logger.warn("Telegram status message edit failed", { chatId, messageId, error });
-      await this.sendMessage(chatId, text, replyMarkup);
+      if (isTelegramMessageNotModified(error)) {
+        return messageId;
+      }
+
+      logger.warn("Telegram status message edit failed; recreating status message", { chatId, messageId, error });
+
+      if (!(await this.deleteMessage(chatId, messageId))) {
+        return messageId;
+      }
+
+      const status = await this.sendStatusMessage(chatId, text, replyMarkup);
+      return status?.message_id;
+    }
+  }
+
+  private async deleteMessage(chatId: string, messageId: number): Promise<boolean> {
+    try {
+      await this.callApi("deleteMessage", {
+        chat_id: chatId,
+        message_id: messageId,
+      });
+      return true;
+    } catch (error) {
+      logger.warn("Telegram status message delete failed", { chatId, messageId, error });
+      return false;
     }
   }
 
@@ -1141,7 +1342,6 @@ function mainMenuMarkup(): TelegramReplyMarkup {
     keyboard: [
       [{ text: appearanceAnalysisButtonText }],
       [{ text: idealOutfitButtonText }],
-      [{ text: manualTryOnButtonText }, { text: catalogRefreshButtonText }],
     ],
     resize_keyboard: true,
     one_time_keyboard: false,
@@ -1156,6 +1356,85 @@ function cancelMarkup(): TelegramReplyMarkup {
   };
 }
 
+function idealCatalogFallbackMarkup(): TelegramReplyMarkup {
+  return {
+    keyboard: [
+      [{ text: relaxIdealWishButtonText }],
+      [{ text: changeIdealWishButtonText }],
+      [{ text: cancelButtonText }],
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: false,
+  };
+}
+
+function idealWishMarkup(): TelegramReplyMarkup {
+  return {
+    keyboard: [[{ text: skipWishButtonText }], [{ text: cancelButtonText }]],
+    resize_keyboard: true,
+    one_time_keyboard: false,
+  };
+}
+
+function sizePreferenceMarkup(
+  counts: Partial<Record<SizePreference, number>> = {},
+): TelegramReplyMarkup {
+  return {
+    keyboard: [
+      [{ text: sizeFilterButtonText(anySizeButtonText, "any", counts) }],
+      [
+        { text: sizeFilterButtonText(sizeSmallButtonText, "xs-s", counts) },
+        { text: sizeFilterButtonText(sizeMediumButtonText, "m-l", counts) },
+      ],
+      [{ text: sizeFilterButtonText(sizeLargeButtonText, "xl-xxl", counts) }],
+      [{ text: cancelButtonText }],
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: false,
+  };
+}
+
+function pricePreferenceMarkup(
+  counts: Partial<Record<PricePreference, number>> = {},
+): TelegramReplyMarkup {
+  return {
+    keyboard: [
+      [{ text: priceFilterButtonText(anyBudgetButtonText, "any", counts) }],
+      [
+        { text: priceFilterButtonText(budgetUnder10kButtonText, "under-10k", counts) },
+        { text: priceFilterButtonText(budgetUnder30kButtonText, "under-30k", counts) },
+      ],
+      [
+        { text: priceFilterButtonText(budgetUnder100kButtonText, "under-100k", counts) },
+        { text: priceFilterButtonText(budgetOver100kButtonText, "over-100k", counts) },
+      ],
+      [{ text: cancelButtonText }],
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: false,
+  };
+}
+
+function sizeFilterButtonText(
+  label: string,
+  preference: SizePreference,
+  counts: Partial<Record<SizePreference, number>>,
+): string {
+  return filterButtonText(label, counts[preference]);
+}
+
+function priceFilterButtonText(
+  label: string,
+  preference: PricePreference,
+  counts: Partial<Record<PricePreference, number>>,
+): string {
+  return filterButtonText(label, counts[preference]);
+}
+
+function filterButtonText(label: string, count: number | undefined): string {
+  return typeof count === "number" ? label + " (" + count + ")" : label;
+}
+
 function processingMarkup(): TelegramReplyMarkup {
   return {
     remove_keyboard: true,
@@ -1166,6 +1445,128 @@ function productLinkMarkup(productUrl: string): TelegramReplyMarkup {
   return {
     inline_keyboard: [[{ text: "Перейти к товару", url: productUrl }]],
   };
+}
+
+function isInlineReplyMarkup(replyMarkup: TelegramReplyMarkup | undefined): boolean {
+  return Boolean(replyMarkup && Array.isArray(replyMarkup.inline_keyboard));
+}
+
+function isTelegramMessageNotModified(error: unknown): boolean {
+  return error instanceof Error && error.message.toLowerCase().includes("message is not modified");
+}
+
+function isRelaxIdealWishCommand(text: string): boolean {
+  return normalizeCommandText(text) === normalizeCommandText(relaxIdealWishButtonText);
+}
+
+function isChangeIdealWishCommand(text: string): boolean {
+  return normalizeCommandText(text) === normalizeCommandText(changeIdealWishButtonText);
+}
+
+function isSkipWishCommand(text: string): boolean {
+  return normalizeCommandText(text) === normalizeCommandText(skipWishButtonText);
+}
+
+function parseSizePreference(text: string): SizePreference | undefined {
+  const normalized = normalizeFilterCommandText(text);
+
+  if (normalized === normalizeCommandText(anySizeButtonText)) {
+    return "any";
+  }
+
+  if (normalized === normalizeCommandText(sizeSmallButtonText)) {
+    return "xs-s";
+  }
+
+  if (normalized === normalizeCommandText(sizeMediumButtonText)) {
+    return "m-l";
+  }
+
+  if (normalized === normalizeCommandText(sizeLargeButtonText)) {
+    return "xl-xxl";
+  }
+
+  return undefined;
+}
+
+function parsePricePreference(text: string): PricePreference | undefined {
+  const normalized = normalizeFilterCommandText(text);
+
+  if (normalized === normalizeCommandText(anyBudgetButtonText)) {
+    return "any";
+  }
+
+  if (normalized === normalizeCommandText(budgetUnder10kButtonText)) {
+    return "under-10k";
+  }
+
+  if (normalized === normalizeCommandText(budgetUnder30kButtonText)) {
+    return "under-30k";
+  }
+
+  if (normalized === normalizeCommandText(budgetUnder100kButtonText)) {
+    return "under-100k";
+  }
+
+  if (normalized === normalizeCommandText(budgetOver100kButtonText)) {
+    return "over-100k";
+  }
+
+  return undefined;
+}
+
+function renderIdealPreferenceSummary(preferences: IdealOutfitPreferences): string {
+  return [
+    preferences.userWish ? "пожелание: " + preferences.userWish : "пожелание: свободный подбор",
+    "размер: " + renderSizePreferenceLabel(preferences.sizePreference),
+    "бюджет: " + renderPricePreferenceLabel(preferences.pricePreference),
+  ].join("; ");
+}
+
+function renderSizePreferenceLabel(preference: SizePreference): string {
+  const labels: Record<SizePreference, string> = {
+    any: "любой",
+    "xs-s": "XS-S",
+    "m-l": "M-L",
+    "xl-xxl": "XL-XXL",
+  };
+
+  return labels[preference];
+}
+
+function renderPricePreferenceLabel(preference: PricePreference): string {
+  const labels: Record<PricePreference, string> = {
+    any: "любой",
+    "under-10k": "до 10 000 ₽",
+    "under-30k": "до 30 000 ₽",
+    "under-100k": "до 100 000 ₽",
+    "over-100k": "100 000 ₽+",
+  };
+
+  return labels[preference];
+}
+
+function looksLikeMeaningfulIdealWish(text: string): boolean {
+  const compact = text.replace(/\s+/g, " ").trim();
+  const letters = compact.match(/[A-Za-zА-Яа-яЁё]/g)?.length ?? 0;
+  const words = compact.match(/[A-Za-zА-Яа-яЁё]{2,}/g) ?? [];
+  const nonSpaceLength = compact.replace(/\s/g, "").length;
+
+  if (letters < 3 || words.length === 0 || nonSpaceLength === 0) {
+    return false;
+  }
+
+  if (letters / nonSpaceLength < 0.35) {
+    return false;
+  }
+
+  const lowered = compact.toLowerCase().replace(/\s+/g, "");
+
+  if (/(.)\1{5,}/u.test(lowered) || /(.{2,4})\1{3,}/u.test(lowered)) {
+    return false;
+  }
+
+  return !["asdf", "qwer", "zxcv", "йцук", "фыва"].some((run) => lowered.includes(run));
 }
 
 function isAppearanceAnalysisCommand(text: string): boolean {
@@ -1188,26 +1589,6 @@ function isIdealOutfitCommand(text: string): boolean {
   );
 }
 
-function isTryOnCommand(text: string): boolean {
-  const normalized = normalizeCommandText(text);
-
-  return (
-    normalized === normalizeCommandText(manualTryOnButtonText) ||
-    normalized === normalizeCommandText(legacyTryOnButtonText) ||
-    normalized === "/tryon" ||
-    normalized === "/request"
-  );
-}
-
-function isCatalogCommand(text: string): boolean {
-  const normalized = normalizeCommandText(text);
-
-  return (
-    normalized === normalizeCommandText(catalogRefreshButtonText) ||
-    normalized === "/catalog"
-  );
-}
-
 function isCancelCommand(text: string): boolean {
   const normalized = normalizeCommandText(text);
 
@@ -1224,10 +1605,12 @@ function isInterruptingCommand(text: string): boolean {
   return (
     normalized.startsWith("/") ||
     isAppearanceAnalysisCommand(text) ||
-    isIdealOutfitCommand(text) ||
-    isTryOnCommand(text) ||
-    isCatalogCommand(text)
+    isIdealOutfitCommand(text)
   );
+}
+
+function normalizeFilterCommandText(text: string): string {
+  return normalizeCommandText(text).replace(/\s*\([0-9 ]+\)\s*$/, "").trim();
 }
 
 function normalizeCommandText(text: string): string {
@@ -1238,8 +1621,6 @@ function describeProcessingFlow(flow: ProcessingFlow): string {
   const labels: Record<ProcessingFlow, string> = {
     appearance: "анализ внешности",
     ideal: "идеальный образ",
-    tryon: "ручную примерку",
-    catalog: "обновление каталога",
   };
 
   return labels[flow];
@@ -1253,12 +1634,56 @@ function renderIdealProgress(stage: string, percent: number): string {
   return [
     "Подбор идеального образа",
     "",
-    `Прогресс: [${bar}] ${safePercent}%`,
-    `Этап: ${stage}`,
+    "Прогресс: [" + bar + "] " + safePercent + "%",
+    "Этап: " + stage,
   ].join("\n");
 }
 
-function normalizeIdealStyleOptions(plan: IdealOutfitPlan): IdealOutfitOption[] {
+function preferencesFromIdealOption(option: IdealOutfitOption): IdealOutfitPreferences {
+  const firstCategory = option.categories[0];
+
+  return {
+    userWish: option.userWish ?? firstCategory?.userWish,
+    sizePreference: option.sizePreference ?? firstCategory?.sizePreference ?? "any",
+    pricePreference: option.pricePreference ?? firstCategory?.pricePreference ?? "any",
+  };
+}
+
+function renderIdealCatalogFallbackMessage(
+  option: IdealOutfitOption,
+  groups: OutfitCandidateGroup[],
+  preferences: IdealOutfitPreferences,
+): string {
+  const missedGroups = groups.filter((group) => group.candidates.length === 0);
+  const missedLines = (missedGroups.length ? missedGroups : groups)
+    .map((group) => {
+      const tags = [
+        ...(group.request.requiredTags ?? []),
+        ...(group.request.color ? [group.request.color] : []),
+      ].filter(Boolean).slice(0, 5);
+      const tagText = tags.length ? "; признаки: " + tags.join(", ") : "";
+
+      return "- " + group.request.category + ": " + group.request.query + tagText;
+    });
+
+  return [
+    "Не нашёл достаточно вещей в каталоге под выбранный вариант.",
+    "",
+    option.styleName ? "Стиль: **" + option.styleName + "**" : undefined,
+    "Фильтры: " + renderIdealPreferenceSummary(preferences),
+    preferences.userWish
+      ? "Похоже, каталог сейчас не закрывает это пожелание достаточно точно. Лучше честно не собирать случайный образ из ближайших вещей."
+      : "Похоже, в каталоге не хватает вещей под выбранные категории и фильтры.",
+    "",
+    "Что не сошлось:",
+    ...missedLines,
+  ].filter(Boolean).join("\n");
+}
+
+function normalizeIdealStyleOptions(
+  plan: IdealOutfitPlan,
+  preferences: IdealOutfitPreferences,
+): IdealOutfitOption[] {
   const options = plan.options.length
     ? plan.options
     : plan.categories.length
@@ -1266,6 +1691,10 @@ function normalizeIdealStyleOptions(plan: IdealOutfitPlan): IdealOutfitOption[] 
           {
             styleName: plan.styleName,
             summary: plan.summary,
+            targetGender: plan.targetGender,
+            userWish: plan.userWish ?? preferences.userWish,
+            sizePreference: plan.sizePreference ?? preferences.sizePreference,
+            pricePreference: plan.pricePreference ?? preferences.pricePreference,
             categories: plan.categories,
           },
         ]
@@ -1273,7 +1702,28 @@ function normalizeIdealStyleOptions(plan: IdealOutfitPlan): IdealOutfitOption[] 
 
   return options
     .filter((option) => option.categories.length > 0)
-    .slice(0, 3);
+    .slice(0, 3)
+    .map((option) => {
+      const targetGender = option.targetGender ?? plan.targetGender;
+      const userWish = option.userWish ?? plan.userWish ?? preferences.userWish;
+      const sizePreference = option.sizePreference ?? plan.sizePreference ?? preferences.sizePreference;
+      const pricePreference = option.pricePreference ?? plan.pricePreference ?? preferences.pricePreference;
+
+      return {
+        ...option,
+        targetGender,
+        userWish,
+        sizePreference,
+        pricePreference,
+        categories: option.categories.map((category) => ({
+          ...category,
+          gender: category.gender ?? targetGender,
+          userWish: category.userWish ?? userWish,
+          sizePreference: category.sizePreference ?? sizePreference,
+          pricePreference: category.pricePreference ?? pricePreference,
+        })),
+      };
+    });
 }
 
 function renderIdealStyleOptionsMessage(options: IdealOutfitOption[]): string {
@@ -1284,15 +1734,11 @@ function renderIdealStyleOptionsMessage(options: IdealOutfitOption[]): string {
       const categories = option.categories.map((entry) => entry.category).join(", ");
 
       return [
-        `**${index + 1}. ${option.styleName ?? `Вариант ${index + 1}`}**`,
+        "**" + (index + 1) + ". " + (option.styleName ?? "Вариант " + (index + 1)) + "**",
         option.summary,
-        categories ? `Вещи: ${categories}` : undefined,
-      ]
-        .filter(Boolean)
-        .join("\n");
+        categories ? "Вещи: " + categories : undefined,
+      ].filter(Boolean).join("\n");
     }),
-    "",
-    "После выбора я локально подберу вещи из каталога и отправлю их в TryOn.",
   ].join("\n\n");
 }
 
@@ -1333,10 +1779,11 @@ function selectIdealOutfitOption(
 }
 
 function idealStyleOptionButtonText(option: IdealOutfitOption, index: number): string {
-  const styleName = option.styleName?.trim() || `Вариант ${index + 1}`;
+  const styleName = option.styleName?.trim() || "Вариант " + (index + 1);
 
-  return `${index + 1}. ${styleName}`.slice(0, 64);
+  return ((index + 1) + ". " + styleName).slice(0, 64);
 }
+
 function buildLocalOutfitSelection(
   plan: Pick<IdealOutfitOption, "styleName" | "summary">,
   groups: OutfitCandidateGroup[],
@@ -1370,13 +1817,15 @@ function buildLocalSelectionReason(
     ...(request.requiredTags ?? []),
     ...(request.preferredTags ?? []),
   ].filter((tag) => catalogItemContainsTag(item, tag));
+  const userWish = request.userWish?.replace(/\s+/g, " ").trim().slice(0, 80);
   const details = [
-    request.color ? `цвет: ${request.color}` : undefined,
-    matchedTags.length ? `совпали теги: ${matchedTags.slice(0, 4).join(", ")}` : undefined,
+    userWish ? "учтено пожелание: " + userWish : undefined,
+    request.color ? "цвет: " + request.color : undefined,
+    matchedTags.length ? "совпали теги: " + matchedTags.slice(0, 4).join(", ") : undefined,
   ].filter(Boolean);
 
   return details.length
-    ? `Лучший кандидат локального каталога, ${details.join("; ")}.`
+    ? "Лучший кандидат локального каталога, " + details.join("; ") + "."
     : "Лучший кандидат локального каталога по категории и описанию.";
 }
 
@@ -1390,16 +1839,16 @@ function catalogItemContainsTag(item: GarmentCatalogItem, tag: string): boolean 
   return [
     item.category,
     item.title,
-    item.brand,
     item.description,
+    item.gender,
+    ...item.sizes,
+    ...item.colors,
     ...item.tags,
-    ...item.colorTags,
-    ...item.styleTags,
-    ...item.materialTags,
   ]
     .filter(Boolean)
     .some((value) => String(value).toLowerCase().includes(normalized));
 }
+
 function uniqueSelectedCatalogItems(
   selected: OutfitSelectionItem[],
   groups: OutfitCandidateGroup[],
@@ -1445,17 +1894,37 @@ function uniqueSelectedCatalogItems(
 }
 
 function formatPrice(item: GarmentCatalogItem): string | undefined {
-  if (item.price === undefined) {
+  if (!item.price) {
     return undefined;
   }
 
-  const currency = item.currency ?? "RUB";
+  const amount = item.price.amount;
+  const currency = item.price.currency.toUpperCase();
+  const formatted = currency === "RUB"
+    ? Math.round(amount).toLocaleString("ru-RU") + " ₽"
+    : amount.toLocaleString("ru-RU") + " " + item.price.currency;
 
-  if (currency.toUpperCase() === "RUB") {
-    return `Цена: ${Math.round(item.price).toLocaleString("ru-RU")} ₽`;
+  if (!item.price.oldAmount || item.price.oldAmount <= amount) {
+    return "Цена: " + formatted;
   }
 
-  return `Цена: ${item.price.toLocaleString("ru-RU")} ${currency}`;
+  const oldFormatted = currency === "RUB"
+    ? Math.round(item.price.oldAmount).toLocaleString("ru-RU") + " ₽"
+    : item.price.oldAmount.toLocaleString("ru-RU") + " " + item.price.currency;
+
+  return "Цена: " + formatted + " вместо " + oldFormatted;
+}
+
+function labelForGender(gender: GarmentCatalogItem["gender"]): string {
+  if (gender === "male") {
+    return "Мужское";
+  }
+
+  if (gender === "female") {
+    return "Женское";
+  }
+
+  return "Унисекс";
 }
 
 function compareTelegramPhotos(a: TelegramPhotoSize, b: TelegramPhotoSize): number {
@@ -1624,15 +2093,15 @@ function friendlyErrorMessage(error: unknown, fallback: string): string {
   }
 
   if (error.message.includes("OPENAI_API_KEY")) {
-    return "Для анализа и подбора образа нужно заполнить OPENAI_API_KEY в `.env`.";
+    return "Сервис анализа сейчас не настроен. Проверьте ключ анализа в `.env`.";
   }
 
   if (error.message.includes("PRUNA_API_KEY")) {
-    return "Для реальной примерки через Pruna нужно заполнить PRUNA_API_KEY или поставить MONOLITH_TRYON_PROVIDER=mock.";
+    return "Реальная примерка сейчас не настроена. Проверьте ключ примерки в `.env` или включите тестовый режим.";
   }
 
   if (error.message.includes("Monolith catalog is empty")) {
-    return "Локальный каталог пуст. Нажмите «Обновить каталог» или запустите `npm run dev:catalog` из папки `monolith/`.";
+    return "Локальный каталог пуст. Запустите `npm run dev:catalog` или TSUM ingest из папки `monolith/`.";
   }
 
   if (error.message.toLowerCase().includes("playwright")) {

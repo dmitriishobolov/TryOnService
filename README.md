@@ -146,6 +146,8 @@ Shared:
 
 Monolith теперь живет как самостоятельный мини-проект внутри `monolith/`. Корневые distributed-команды, `.env.example`, `tsconfig.json` и `build:dist` не собирают его. Это сделано специально, чтобы MVP не смешивался с распределенной архитектурой в `apps/`.
 
+В монолите Telegram-сценарий `Идеальный образ` спрашивает пожелание, размерный диапазон и бюджет на вещь, затем одним GPT-вызовом валидирует фото и предлагает 3 варианта стиля. После выбора товары подбираются локальным скорингом по полу, категории, тегам, размеру, бюджету и наличию локального `imageFile`.
+
 Запускать бота нужно из собственной папки:
 
 ```bash
@@ -154,7 +156,9 @@ npm install
 npm run dev
 ```
 
-Медленный сбор всех страниц мужского каталога TSUM можно запускать из `monolith/` командой `npm run ingest:tsum:male` или из корня репозитория командой `npm run monolith:ingest:tsum:male`.
+Быстрый сбор всех страниц TSUM можно запускать из `monolith/` командой `npm run ingest:tsum:fast` или из корня репозитория командой `npm run monolith:ingest:tsum:fast`. Команда проходит мужской и женский каталоги последовательно; отдельно доступны обычные `male/female/all`, быстрые `male:fast/female:fast` и точные `male:enrich/female:enrich/all:enrich` режимы. Enrich-режим дополнительно открывает страницы товаров TSUM последовательным Playwright-проходом и добирает доступные размеры и все цвета.
+
+Lamoda session можно подготовить командой `npm run monolith:lamoda:session`, а для принудительного запуска через Opera - `npm run monolith:lamoda:session:opera`. Lamoda parser в монолите запускается отдельно: `npm run monolith:ingest:lamoda:male`, `npm run monolith:ingest:lamoda:female` или `npm run monolith:ingest:lamoda:all`. Через Opera: `npm run monolith:ingest:lamoda:male:opera`. Он идет через persistent Playwright-сессию, при необходимости добирает размеры/цвета со страниц товаров `/p/...`, сохраняет товары в общий `items.json`, а изображения скачивает в локальное `catalog-image` хранилище. Для Lamoda можно выбрать установленную Opera: `MONOLITH_LAMODA_BROWSER_CHANNEL=opera`, при нестандартной установке задайте `MONOLITH_LAMODA_BROWSER_EXECUTABLE_PATH`.
 
 Каталог товаров и пользовательские файлы по умолчанию лежат в `monolith/.monolith-data/`. Настройки берутся из `monolith/.env`, пример лежит в [monolith/.env.example](monolith/.env.example). Подробнее: [monolith/README.md](monolith/README.md).
 

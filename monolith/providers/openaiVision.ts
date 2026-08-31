@@ -21,6 +21,23 @@ import { fetchWithTimeout, joinUrl, responseError } from "../utils/http.js";
 
 const logger = createLogger("monolith");
 
+type ResponseTextFormat =
+  | { type: "text" }
+  | { type: "json_object" }
+  | {
+      type: "json_schema";
+      name: string;
+      description?: string;
+      schema: Record<string, unknown>;
+      strict?: boolean;
+    };
+
+const defaultTextFormat: ResponseTextFormat = { type: "text" };
+const idealPlanJsonFormat = buildJsonSchemaTextFormat("ideal_outfit_plan", buildIdealOutfitPlanSchema());
+const outfitSelectionJsonFormat = buildJsonSchemaTextFormat("ideal_outfit_selection", buildOutfitSelectionSchema());
+const visualReviewJsonFormat = buildJsonSchemaTextFormat("ideal_outfit_visual_review", buildVisualReviewSchema());
+const jsonRetryMinOutputTokens = 3_000;
+
 const appearanceAnalysisPrompt = [
   "Ты выполняешь разбор внешности только по фотографии реального человека.",
   "",
@@ -74,13 +91,13 @@ export class OpenAiVisionService {
     catalogHints: CatalogCategoryTagHints[],
     preferences: IdealOutfitPreferences,
   ): Promise<IdealOutfitPlan> {
-    const text = await this.requestResponsesText({
+    const parsed = await this.requestResponsesJson({
       operation: "ideal-outfit-plan",
       prompt: buildIdealOutfitPlanPrompt(catalogHints, preferences),
       images: [image],
-      maxOutputTokens: Math.max(this.config.openai.maxOutputTokens, 1_400),
+      maxOutputTokens: Math.max(this.config.openai.maxOutputTokens, 2_600),
+      textFormat: idealPlanJsonFormat,
     });
-    const parsed = parseJsonObject(text);
 
     return normalizeIdealOutfitPlan(parsed, preferences);
   }
@@ -89,13 +106,13 @@ export class OpenAiVisionService {
     plan: IdealOutfitPlan,
     groups: OutfitCandidateGroup[],
   ): Promise<OutfitSelection> {
-    const text = await this.requestResponsesText({
+    const parsed = await this.requestResponsesJson({
       operation: "ideal-outfit-selection",
       prompt: buildOutfitSelectionPrompt(plan, groups),
       images: [],
-      maxOutputTokens: 700,
+      maxOutputTokens: 900,
+      textFormat: outfitSelectionJsonFormat,
     });
-    const parsed = parseJsonObject(text);
 
     return normalizeOutfitSelection(parsed, plan, groups);
   }
@@ -134,17 +151,74 @@ export class OpenAiVisionService {
       };
     }
 
-    const text = await this.requestResponsesText({
+    const parsed = await this.requestResponsesJson({
       operation: "ideal-outfit-visual-review",
       prompt: buildOutfitCandidateVisualReviewPrompt(promptGroups),
       images,
       imageCaptions,
       imageDetail: "low",
-      maxOutputTokens: 900,
+      maxOutputTokens: 1_200,
+      textFormat: visualReviewJsonFormat,
     });
-    const parsed = parseJsonObject(text);
 
     return normalizeOutfitCandidateVisualReview(parsed, groups);
+  }
+
+  private async requestResponsesJson(params: {
+    operation: string;
+    prompt: string;
+    images: ImageData[];
+    imageCaptions?: string[];
+    imageDetail?: OpenAiImageDetail;
+    maxOutputTokens: number;
+    textFormat: ResponseTextFormat;
+  }): Promise<Record<string, unknown>> {
+    let text: string;
+
+    try {
+      text = await this.requestResponsesText(params);
+    } catch (error) {
+      if (!shouldRetryWithJsonObjectFormat(error, params.textFormat)) {
+        throw error;
+      }
+
+      logger.warn("OpenAI json_schema format failed; retrying with json_object format", {
+        operation: params.operation,
+        error,
+      });
+
+      text = await this.requestResponsesText({
+        ...params,
+        operation: params.operation + "-json-object-retry",
+        textFormat: { type: "json_object" },
+      });
+    }
+
+    try {
+      return parseJsonObject(text);
+    } catch (error) {
+      const retryMaxOutputTokens = Math.max(
+        jsonRetryMinOutputTokens,
+        params.maxOutputTokens + 1_200,
+        Math.ceil(params.maxOutputTokens * 1.6),
+      );
+
+      logger.warn("OpenAI JSON response invalid; retrying with larger output budget", {
+        operation: params.operation,
+        outputLength: text.length,
+        maxOutputTokens: params.maxOutputTokens,
+        retryMaxOutputTokens,
+        error,
+      });
+
+      const retryText = await this.requestResponsesText({
+        ...params,
+        operation: params.operation + "-json-retry",
+        maxOutputTokens: retryMaxOutputTokens,
+      });
+
+      return parseJsonObject(retryText);
+    }
   }
 
   private async requestResponsesText(params: {
@@ -154,6 +228,7 @@ export class OpenAiVisionService {
     imageCaptions?: string[];
     imageDetail?: OpenAiImageDetail;
     maxOutputTokens: number;
+    textFormat?: ResponseTextFormat;
   }): Promise<string> {
     const apiKey = this.config.openai.apiKey;
 
@@ -197,9 +272,7 @@ export class OpenAiVisionService {
             },
           ],
           text: {
-            format: {
-              type: "text",
-            },
+            format: params.textFormat ?? defaultTextFormat,
             verbosity: this.config.openai.textVerbosity,
           },
           reasoning: {
@@ -247,6 +320,161 @@ export class OpenAiVisionService {
         : {}),
     };
   }
+}
+
+function buildJsonSchemaTextFormat(name: string, schema: Record<string, unknown>): ResponseTextFormat {
+  return {
+    type: "json_schema",
+    name,
+    schema,
+    strict: false,
+  };
+}
+
+function buildIdealOutfitPlanSchema(): Record<string, unknown> {
+  const categorySchema = buildOutfitCategoryRequestSchema();
+  const optionSchema = {
+    type: "object",
+    additionalProperties: true,
+    properties: {
+      styleName: { type: "string" },
+      summary: { type: "string" },
+      targetGender: genderSchema(),
+      userWish: { type: "string" },
+      sizePreference: sizePreferenceSchema(),
+      pricePreference: pricePreferenceSchema(),
+      categories: {
+        type: "array",
+        maxItems: 3,
+        items: categorySchema,
+      },
+    },
+  };
+
+  return {
+    type: "object",
+    additionalProperties: true,
+    properties: {
+      accepted: { type: "boolean" },
+      rejectionMessage: { type: "string" },
+      targetGender: genderSchema(),
+      userWish: { type: "string" },
+      sizePreference: sizePreferenceSchema(),
+      pricePreference: pricePreferenceSchema(),
+      styleName: { type: "string" },
+      summary: { type: "string" },
+      categories: {
+        type: "array",
+        maxItems: 3,
+        items: categorySchema,
+      },
+      options: {
+        type: "array",
+        maxItems: 3,
+        items: optionSchema,
+      },
+    },
+    required: ["accepted"],
+  };
+}
+
+function buildOutfitSelectionSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: true,
+    properties: {
+      styleName: { type: "string" },
+      summary: { type: "string" },
+      items: {
+        type: "array",
+        maxItems: 3,
+        items: {
+          type: "object",
+          additionalProperties: true,
+          properties: {
+            category: { type: "string" },
+            itemId: { type: "string" },
+            reason: { type: "string" },
+          },
+        },
+      },
+    },
+  };
+}
+
+function buildVisualReviewSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: true,
+    properties: {
+      groups: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: true,
+          properties: {
+            groupIndex: { type: "integer", minimum: 0 },
+            category: { type: "string" },
+            acceptedItemIds: {
+              type: "array",
+              items: { type: "string" },
+            },
+            rejected: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: true,
+                properties: {
+                  itemId: { type: "string" },
+                  reason: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+function buildOutfitCategoryRequestSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: true,
+    properties: {
+      category: { type: "string" },
+      query: { type: "string" },
+      gender: genderSchema(),
+      color: { type: "string" },
+      notes: { type: "string" },
+      userWish: { type: "string" },
+      sizePreference: sizePreferenceSchema(),
+      pricePreference: pricePreferenceSchema(),
+      requiredTags: stringArraySchema(4),
+      preferredTags: stringArraySchema(8),
+      avoidTags: stringArraySchema(5),
+    },
+  };
+}
+
+function genderSchema(): Record<string, unknown> {
+  return { type: "string", enum: ["male", "female", "unisex"] };
+}
+
+function sizePreferenceSchema(): Record<string, unknown> {
+  return { type: "string", enum: ["any", "xs-s", "m-l", "xl-xxl"] };
+}
+
+function pricePreferenceSchema(): Record<string, unknown> {
+  return { type: "string", enum: ["any", "under-10k", "under-30k", "under-100k", "over-100k"] };
+}
+
+function stringArraySchema(maxItems: number): Record<string, unknown> {
+  return {
+    type: "array",
+    maxItems,
+    items: { type: "string" },
+  };
 }
 
 function buildUserContent(
@@ -357,94 +585,8 @@ function buildIdealOutfitPlanPrompt(
     "catalogHints JSON:",
     JSON.stringify(serializeCatalogHints(catalogHints)),
     "",
-    "Верни только JSON без markdown:",
-    JSON.stringify({
-      accepted: true,
-      targetGender: "male",
-      userWish: preferences.userWish ?? undefined,
-      sizePreference: preferences.sizePreference,
-      pricePreference: preferences.pricePreference,
-      options: [
-        {
-          styleName: "спокойный smart casual",
-          targetGender: "male",
-          userWish: preferences.userWish ?? undefined,
-          sizePreference: preferences.sizePreference,
-          pricePreference: preferences.pricePreference,
-          summary: "мягкий собранный образ на каждый день с учетом пожелания и бюджета",
-          categories: [
-            {
-              category: "рубашка",
-              gender: "male",
-              query: "голубая хлопковая рубашка прямого кроя",
-              color: "голубой",
-              userWish: preferences.userWish ?? undefined,
-              sizePreference: preferences.sizePreference,
-              pricePreference: preferences.pricePreference,
-              requiredTags: ["рубашка", "голубой"],
-              preferredTags: ["хлопок", "прямой крой", "smart casual"],
-              avoidTags: ["яркий принт"],
-            },
-            {
-              category: "брюки",
-              gender: "male",
-              query: "темно-синие прямые брюки",
-              color: "темно-синий",
-              userWish: preferences.userWish ?? undefined,
-              sizePreference: preferences.sizePreference,
-              pricePreference: preferences.pricePreference,
-              requiredTags: ["брюки", "темно-синий"],
-              preferredTags: ["прямой крой", "smart casual"],
-              avoidTags: [],
-            },
-          ],
-        },
-        {
-          styleName: "городской минимализм",
-          targetGender: "male",
-          userWish: preferences.userWish ?? undefined,
-          sizePreference: preferences.sizePreference,
-          pricePreference: preferences.pricePreference,
-          summary: "лаконичный контрастный образ с чистыми линиями",
-          categories: [
-            {
-              category: "куртка",
-              gender: "male",
-              query: "черная лаконичная куртка",
-              color: "черный",
-              userWish: preferences.userWish ?? undefined,
-              sizePreference: preferences.sizePreference,
-              pricePreference: preferences.pricePreference,
-              requiredTags: ["куртка", "черный"],
-              preferredTags: ["минимализм"],
-              avoidTags: ["крупный логотип"],
-            },
-          ],
-        },
-        {
-          styleName: "расслабленный casual",
-          targetGender: "male",
-          userWish: preferences.userWish ?? undefined,
-          sizePreference: preferences.sizePreference,
-          pricePreference: preferences.pricePreference,
-          summary: "более мягкая посадка и спокойная палитра",
-          categories: [
-            {
-              category: "футболка",
-              gender: "male",
-              query: "белая плотная футболка прямого кроя",
-              color: "белый",
-              userWish: preferences.userWish ?? undefined,
-              sizePreference: preferences.sizePreference,
-              pricePreference: preferences.pricePreference,
-              requiredTags: ["футболка", "белый"],
-              preferredTags: ["хлопок", "casual"],
-              avoidTags: ["яркий принт"],
-            },
-          ],
-        },
-      ],
-    }),
+    "Верни только JSON без markdown. Структура ответа:",
+    "{accepted:boolean,rejectionMessage?:string,targetGender?:male|female|unisex,options:[{styleName,summary,targetGender,userWish,sizePreference,pricePreference,categories:[{category,query,gender,color,userWish,sizePreference,pricePreference,requiredTags,preferredTags,avoidTags}]}]}",
   ].join("\n");
 }
 
@@ -570,31 +712,53 @@ function collectText(value: unknown): string[] {
   return Object.values(value).flatMap(collectText);
 }
 
+function shouldRetryWithJsonObjectFormat(error: unknown, textFormat: ResponseTextFormat): boolean {
+  if (textFormat.type !== "json_schema") {
+    return false;
+  }
+
+  const message = error instanceof Error
+    ? error.message.toLowerCase()
+    : String(error).toLowerCase();
+
+  return message.includes("json_schema") ||
+    message.includes("response_format") ||
+    message.includes("text.format") ||
+    message.includes("format");
+}
+
 function parseJsonObject(text: string): Record<string, unknown> {
   const trimmed = text.trim();
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed)?.[1]?.trim();
   const candidate = fenced ?? trimmed;
+  const direct = tryParseJsonObject(candidate);
 
-  try {
-    const parsed = JSON.parse(candidate) as unknown;
+  if (direct) {
+    return direct;
+  }
 
-    if (isRecord(parsed)) {
-      return parsed;
-    }
-  } catch {
-    const start = candidate.indexOf("{");
-    const end = candidate.lastIndexOf("}");
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
 
-    if (start >= 0 && end > start) {
-      const parsed = JSON.parse(candidate.slice(start, end + 1)) as unknown;
+  if (start >= 0 && end > start) {
+    const extracted = tryParseJsonObject(candidate.slice(start, end + 1));
 
-      if (isRecord(parsed)) {
-        return parsed;
-      }
+    if (extracted) {
+      return extracted;
     }
   }
 
-  throw new Error("OpenAI response did not contain a JSON object");
+  throw new Error("OpenAI response did not contain a complete JSON object");
+}
+
+function tryParseJsonObject(candidate: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(candidate) as unknown;
+
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function sizePreferenceValue(value: unknown): SizePreference | undefined {

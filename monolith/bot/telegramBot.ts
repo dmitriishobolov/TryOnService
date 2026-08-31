@@ -2781,8 +2781,11 @@ function friendlyErrorMessage(error: unknown, fallback: string): string {
   if (error.message.includes("Monolith catalog is empty")) {
     return "Локальный каталог пуст. Запустите `npm run dev:catalog` или TSUM ingest из папки `monolith/`.";
   }
-  if (error.message.includes("OpenAI response did not contain a JSON object")) {
-    return "Ответ анализа пришёл в неожиданном формате. Попробуйте ещё раз, а если повторится, посмотрите лог `ideal-outfit-plan`.";
+  if (
+    error.message.includes("OpenAI response did not contain a JSON object") ||
+    error.message.includes("OpenAI response did not contain a complete JSON object")
+  ) {
+    return "Сервис анализа вернул неполный JSON с вариантами образа. Фото тут ни при чем. Я уже пробую стабилизировать этот ответ, повторите запрос после перезапуска бота.";
   }
 
   if (error.message.toLowerCase().includes("openai")) {

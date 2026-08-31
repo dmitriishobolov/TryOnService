@@ -1,5 +1,5 @@
 import { createLogger } from "../utils/logger.js";
-import type { MonolithConfig } from "../config.js";
+import type { MonolithConfig, OpenAiImageDetail } from "../config.js";
 import type {
   CatalogCategoryTagHints,
   GarmentCatalogItem,
@@ -9,6 +9,8 @@ import type {
   IdealOutfitPlan,
   ImageData,
   OutfitCandidateGroup,
+  OutfitCandidateImageReviewGroup,
+  OutfitCandidateVisualReview,
   OutfitCategoryRequest,
   OutfitSelection,
   OutfitSelectionItem,
@@ -98,10 +100,59 @@ export class OpenAiVisionService {
     return normalizeOutfitSelection(parsed, plan, groups);
   }
 
+  async reviewOutfitCandidateImages(
+    groups: OutfitCandidateImageReviewGroup[],
+  ): Promise<OutfitCandidateVisualReview> {
+    const images: ImageData[] = [];
+    const imageCaptions: string[] = [];
+    const promptGroups = groups.map((group, groupIndex) => ({
+      groupIndex,
+      request: serializeReviewRequest(group.request),
+      candidates: group.candidates.map((candidate) => {
+        const imageRef = "image_" + (images.length + 1);
+
+        images.push(candidate.image);
+        imageCaptions.push(
+          imageRef + ": groupIndex=" + groupIndex + "; itemId=" + candidate.item.id + "; category=" + candidate.item.category + "; title=" + candidate.item.title,
+        );
+
+        return {
+          imageRef,
+          item: serializeCatalogItem(candidate.item),
+        };
+      }),
+    }));
+
+    if (images.length === 0) {
+      return {
+        groups: groups.map((group, groupIndex) => ({
+          groupIndex,
+          category: group.request.category,
+          acceptedItemIds: [],
+          rejected: [],
+        })),
+      };
+    }
+
+    const text = await this.requestResponsesText({
+      operation: "ideal-outfit-visual-review",
+      prompt: buildOutfitCandidateVisualReviewPrompt(promptGroups),
+      images,
+      imageCaptions,
+      imageDetail: "low",
+      maxOutputTokens: 900,
+    });
+    const parsed = parseJsonObject(text);
+
+    return normalizeOutfitCandidateVisualReview(parsed, groups);
+  }
+
   private async requestResponsesText(params: {
     operation: string;
     prompt: string;
     images: ImageData[];
+    imageCaptions?: string[];
+    imageDetail?: OpenAiImageDetail;
     maxOutputTokens: number;
   }): Promise<string> {
     const apiKey = this.config.openai.apiKey;
@@ -140,7 +191,8 @@ export class OpenAiVisionService {
               content: buildUserContent(
                 params.prompt,
                 params.images,
-                this.config.openai.imageDetail,
+                params.imageDetail ?? this.config.openai.imageDetail,
+                params.imageCaptions,
               ),
             },
           ],
@@ -201,18 +253,33 @@ function buildUserContent(
   prompt: string,
   images: ImageData[],
   imageDetail: string,
+  imageCaptions?: string[],
 ): Array<Record<string, string>> {
-  return [
+  const content: Array<Record<string, string>> = [
     {
       type: "input_text",
       text: prompt,
     },
-    ...images.map((image) => ({
+  ];
+
+  for (const [index, image] of images.entries()) {
+    const caption = imageCaptions?.[index];
+
+    if (caption) {
+      content.push({
+        type: "input_text",
+        text: caption,
+      });
+    }
+
+    content.push({
       type: "input_image",
       image_url: toDataUrl(image),
       detail: imageDetail,
-    })),
-  ];
+    });
+  }
+
+  return content;
 }
 
 function formatIdealPreferences(preferences: IdealOutfitPreferences): Record<string, string> {
@@ -274,7 +341,7 @@ function buildIdealOutfitPlanPrompt(
     "avoidTags: 0-4 признака, которых лучше избегать.",
     "Не указывай бренды как requiredTags. Не выбирай два одинаковых типа вещи. Для низа используй канон каталога, например брюки или джинсы, а не разговорное штаны. Для обычного публичного образа не выбирай нижнее белье, носки, пижаму, халат или плавки, если пользователь явно не просит. Не используй длинное тире.",
     "Не устанавливай личность и не делай выводы о чувствительных признаках.",
-    "Учитывай пользовательские ограничения как сильные предпочтения, но если каталог пуст по точному размеру или бюджету, оставь шанс лучшим близким товарам.",
+    "Не ослабляй выбранные пользователем sizePreference и pricePreference. Если по ним мало вещей, выбирай другую доступную категорию внутри этих фильтров.",
     "",
     "Пожелания пользователя:",
     JSON.stringify(formatIdealPreferences(preferences)),
@@ -379,6 +446,23 @@ function buildIdealOutfitPlanPrompt(
   ].join("\n");
 }
 
+function buildOutfitCandidateVisualReviewPrompt(groups: unknown[]): string {
+  return [
+    "Ты проверяешь изображения товаров перед virtual try-on.",
+    "Для каждой группы выбери только те itemId, где изображение и metadata соответствуют request.category, request.query, полу сегмента и базовым признакам.",
+    "acceptedItemIds верни в порядке качества: лучший кандидат первым. Можно вернуть несколько кандидатов, чтобы приложение взяло следующий, если первый не подойдет дальше.",
+    "Будь строгим к нижнему белью: трусы, трусы-шорты, боксеры, брифы, слипы, panties, briefs, underwear и похожие вещи нельзя принимать как шорты, майку, брюки, джинсы или повседневный верх/низ.",
+    "Для category=шорты принимай только внешние повседневные шорты. Reject boxer shorts, трусы-шорты, плавки и домашнее белье.",
+    "Для category=майка принимай только верхнюю майку/tank top. Reject белье, бра, боди и интимные вещи.",
+    "Reject товар, если на изображении явно другой тип вещи, несколько основных вещей вместо одной, человек в белье вместо товарной карточки или вещь не подходит под описание.",
+    "Если сомневаешься между безопасным reject и рискованным accept, выбери reject. Лучше не собрать образ, чем показать пользователю трусы вместо шорт или вещь сильно дороже фильтра.",
+    "Не используй markdown. Верни только JSON формата: {\"groups\":[{\"groupIndex\":0,\"category\":\"...\",\"acceptedItemIds\":[\"...\"],\"rejected\":[{\"itemId\":\"...\",\"reason\":\"...\"}]}]}",
+    "",
+    "Группы кандидатов:",
+    JSON.stringify(groups),
+  ].join("\n");
+}
+
 function buildOutfitSelectionPrompt(
   plan: IdealOutfitPlan,
   groups: OutfitCandidateGroup[],
@@ -414,6 +498,21 @@ function serializeCandidateGroup(group: OutfitCandidateGroup): unknown {
   return {
     request: group.request,
     candidates: group.candidates.map(serializeCatalogItem),
+  };
+}
+
+function serializeReviewRequest(request: OutfitCategoryRequest): unknown {
+  return {
+    category: request.category,
+    query: request.query,
+    gender: request.gender,
+    color: request.color,
+    userWish: request.userWish,
+    sizePreference: request.sizePreference,
+    pricePreference: request.pricePreference,
+    requiredTags: request.requiredTags,
+    preferredTags: request.preferredTags,
+    avoidTags: request.avoidTags,
   };
 }
 
@@ -614,6 +713,42 @@ function normalizeCategoryRequest(
     },
   ];
 }
+function normalizeOutfitCandidateVisualReview(
+  value: Record<string, unknown>,
+  inputGroups: OutfitCandidateImageReviewGroup[],
+): OutfitCandidateVisualReview {
+  const rawGroups = Array.isArray(value.groups) ? value.groups.filter(isRecord) : [];
+  const byIndex = new Map<number, Record<string, unknown>>();
+
+  for (const rawGroup of rawGroups) {
+    const groupIndex = numberValue(rawGroup.groupIndex);
+
+    if (groupIndex !== undefined) {
+      byIndex.set(groupIndex, rawGroup);
+    }
+  }
+
+  return {
+    groups: inputGroups.map((group, groupIndex) => {
+      const rawGroup = byIndex.get(groupIndex) ?? rawGroups.find((entry) => stringValue(entry.category) === group.request.category);
+      const allowedIds = new Set(group.candidates.map((candidate) => candidate.item.id));
+      const acceptedItemIds = uniqueStrings([
+        ...itemIdsValue(rawGroup?.acceptedItemIds),
+        ...itemIdsValue(rawGroup?.acceptedIds),
+        ...itemIdsValue(rawGroup?.accepted),
+      ]).filter((itemId) => allowedIds.has(itemId));
+      const rejected = rejectionValues(rawGroup?.rejected, allowedIds);
+
+      return {
+        groupIndex,
+        category: group.request.category,
+        acceptedItemIds,
+        rejected,
+      };
+    }),
+  };
+}
+
 function normalizeOutfitSelection(
   value: Record<string, unknown>,
   plan: IdealOutfitPlan,
@@ -670,6 +805,66 @@ function fallbackSelection(groups: OutfitCandidateGroup[]): OutfitSelectionItem[
         ]
       : [];
   }).slice(0, 3);
+}
+
+function numberValue(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    return undefined;
+  }
+
+  return value;
+}
+
+function itemIdsValue(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return uniqueStrings(value.flatMap((item) => {
+      if (typeof item === "string") {
+        return [item];
+      }
+
+      if (isRecord(item)) {
+        return stringValue(item.itemId) ? [stringValue(item.itemId) as string] : [];
+      }
+
+      return [];
+    }));
+  }
+
+  if (typeof value === "string") {
+    return uniqueStrings(value.split(","));
+  }
+
+  return [];
+}
+
+function rejectionValues(
+  value: unknown,
+  allowedIds: Set<string>,
+): Array<{ itemId: string; reason?: string }> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry) => {
+    if (typeof entry === "string" && allowedIds.has(entry)) {
+      return [{ itemId: entry }];
+    }
+
+    if (!isRecord(entry)) {
+      return [];
+    }
+
+    const itemId = stringValue(entry.itemId);
+
+    if (!itemId || !allowedIds.has(itemId)) {
+      return [];
+    }
+
+    return [{
+      itemId,
+      reason: stringValue(entry.reason),
+    }];
+  });
 }
 
 function garmentGenderValue(value: unknown): GarmentGender | undefined {

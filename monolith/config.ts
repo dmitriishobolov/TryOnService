@@ -90,6 +90,7 @@ export interface MonolithCatalogConfig {
   imageDownloadConcurrency: number;
   imageDownloadDelayMs: number;
   candidatesPerCategory: number;
+  visualReviewCandidatesPerCategory: number;
   cachePath: string;
   browserHeadless: boolean;
   browserTimeoutMs: number;
@@ -119,6 +120,7 @@ export function loadMonolithConfig(
 ): MonolithConfig {
   const requireTelegramToken = options.requireTelegramToken ?? true;
   const storageRoot = resolve(readString("MONOLITH_STORAGE_ROOT", ".monolith-data"));
+  const candidatesPerCategory = readNumber("MONOLITH_CATALOG_CANDIDATES_PER_CATEGORY", 5);
 
   return {
     telegramBotToken: requireTelegramToken
@@ -204,7 +206,11 @@ export function loadMonolithConfig(
       downloadImagesOnRefresh: readBoolean("MONOLITH_CATALOG_DOWNLOAD_IMAGES_ON_REFRESH", true),
       imageDownloadConcurrency: readNumber("MONOLITH_CATALOG_IMAGE_DOWNLOAD_CONCURRENCY", 3),
       imageDownloadDelayMs: readNonNegativeNumber("MONOLITH_CATALOG_IMAGE_DOWNLOAD_DELAY_MS", 0),
-      candidatesPerCategory: readNumber("MONOLITH_CATALOG_CANDIDATES_PER_CATEGORY", 5),
+      candidatesPerCategory,
+      visualReviewCandidatesPerCategory: readNumber(
+        "MONOLITH_CATALOG_VISUAL_REVIEW_CANDIDATES_PER_CATEGORY",
+        Math.max(candidatesPerCategory, 8),
+      ),
       cachePath: resolve(
         readString("MONOLITH_CATALOG_CACHE_PATH", storageRoot + "/catalog/items.json"),
       ),

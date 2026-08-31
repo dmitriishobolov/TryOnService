@@ -9,6 +9,7 @@ import type {
   IdealOutfitPlan,
   ImageData,
   OutfitCandidateGroup,
+  OutfitCandidateImageReviewGroup,
   OutfitCategoryRequest,
   OutfitSelection,
   OutfitSelectionItem,
@@ -1024,7 +1025,10 @@ export class TelegramMonolithBot {
       }
 
       statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("подбираю вещи", 46));
-      const groups = await this.buildCandidateGroups(option.categories);
+      const groups = await this.buildCandidateGroups(
+        option.categories,
+        this.config.catalog.visualReviewCandidatesPerCategory,
+      );
       logger.info("Ideal outfit candidates built", {
         chatId,
         styleName: option.styleName,
@@ -1039,11 +1043,20 @@ export class TelegramMonolithBot {
           itemIds: group.candidates.slice(0, 5).map((item) => item.id),
         })),
       });
-      const missing = groups.filter((group) => group.candidates.length === 0);
-      const usableGroups = groups.filter((group) => group.candidates.length > 0);
+      let missing = groups.filter((group) => group.candidates.length === 0);
 
       if (missing.length > 0) {
         await this.offerIdealCatalogFallback(chatId, person, option, groups, statusMessageId);
+        return;
+      }
+
+      statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("проверяю изображения вещей", 60));
+      const reviewedGroups = await this.reviewCandidateGroupsWithVision(chatId, groups);
+      missing = reviewedGroups.filter((group) => group.candidates.length === 0);
+      const usableGroups = reviewedGroups.filter((group) => group.candidates.length > 0);
+
+      if (missing.length > 0) {
+        await this.offerIdealCatalogFallback(chatId, person, option, reviewedGroups, statusMessageId);
         return;
       }
 
@@ -1221,19 +1234,80 @@ export class TelegramMonolithBot {
     );
   }
 
-  private async buildCandidateGroups(    requests: OutfitCategoryRequest[],
+  private async buildCandidateGroups(
+    requests: OutfitCategoryRequest[],
+    limit = this.config.catalog.candidatesPerCategory,
   ): Promise<OutfitCandidateGroup[]> {
     const groups: OutfitCandidateGroup[] = [];
 
     for (const request of requests.slice(0, 3)) {
-      const candidates = await this.catalog.findCandidates(
-        request,
-        this.config.catalog.candidatesPerCategory,
-      );
+      const candidates = (await this.catalog.findCandidates(request, limit))
+        .filter((item) => isLocallyAllowedCandidate(item, request));
       groups.push({ request, candidates });
     }
 
     return groups;
+  }
+
+  private async reviewCandidateGroupsWithVision(
+    chatId: string,
+    groups: OutfitCandidateGroup[],
+  ): Promise<OutfitCandidateGroup[]> {
+    const reviewInputs: OutfitCandidateImageReviewGroup[] = [];
+
+    for (const group of groups) {
+      const candidates: OutfitCandidateImageReviewGroup["candidates"] = [];
+
+      for (const item of group.candidates.slice(0, this.config.catalog.visualReviewCandidatesPerCategory)) {
+        try {
+          candidates.push({
+            item,
+            image: await this.catalog.getImage(item),
+          });
+        } catch (error) {
+          logger.warn("Ideal outfit candidate image could not be loaded for visual review", {
+            chatId,
+            itemId: item.id,
+            category: item.category,
+            title: item.title,
+            error,
+          });
+        }
+      }
+
+      reviewInputs.push({
+        request: group.request,
+        candidates,
+      });
+    }
+
+    const review = await this.openai.reviewOutfitCandidateImages(reviewInputs);
+    const reviewedGroups = reviewInputs.map((input, groupIndex) => {
+      const result = review.groups.find((entry) => entry.groupIndex === groupIndex);
+      const candidatesById = new Map(input.candidates.map((candidate) => [candidate.item.id, candidate.item] as const));
+      const candidates = (result?.acceptedItemIds ?? [])
+        .map((itemId) => candidatesById.get(itemId))
+        .filter((item): item is GarmentCatalogItem => Boolean(item))
+        .filter((item) => isLocallyAllowedCandidate(item, input.request));
+
+      return {
+        request: input.request,
+        candidates,
+      };
+    });
+
+    logger.info("Ideal outfit visual candidate review applied", {
+      chatId,
+      groups: reviewedGroups.map((group, groupIndex) => ({
+        category: group.request.category,
+        requestedCandidates: reviewInputs[groupIndex]?.candidates.length ?? 0,
+        acceptedCandidates: group.candidates.length,
+        acceptedItemIds: group.candidates.map((item) => item.id),
+        rejected: review.groups.find((entry) => entry.groupIndex === groupIndex)?.rejected.slice(0, 5) ?? [],
+      })),
+    });
+
+    return reviewedGroups;
   }
 
   private async sendGarmentCard(
@@ -2062,8 +2136,8 @@ function normalizeIdealStyleOptions(
     .map((option) => {
       const targetGender = option.targetGender ?? plan.targetGender;
       const userWish = option.userWish ?? plan.userWish ?? preferences.userWish;
-      const sizePreference = option.sizePreference ?? plan.sizePreference ?? preferences.sizePreference;
-      const pricePreference = option.pricePreference ?? plan.pricePreference ?? preferences.pricePreference;
+      const sizePreference = preferences.sizePreference;
+      const pricePreference = preferences.pricePreference;
 
       return {
         ...option,
@@ -2254,6 +2328,111 @@ function uniqueSelectedCatalogItems(
         : [];
     })
     .slice(0, 3);
+}
+
+const publicOutfitBlockedCategories = new Set([
+  "нижнее белье",
+  "носки",
+  "пижама",
+  "халат",
+  "плавки",
+]);
+
+const privateGarmentPattern = /трус|боксер|бриф|слип|хипс|нижнее белье|underwear|boxer|brief|panties|knickers|lingerie/i;
+
+const botPricePreferenceThresholds: Partial<Record<PricePreference, number>> = {
+  "under-10k": 10_000,
+  "under-30k": 30_000,
+  "under-100k": 100_000,
+};
+
+const botSizePreferenceTokens: Record<Exclude<SizePreference, "any">, string[]> = {
+  "xs-s": ["xxs", "xs", "s", "40", "42", "44"],
+  "m-l": ["m", "l", "46", "48", "50", "52"],
+  "xl-xxl": ["xl", "xxl", "2xl", "3xl", "54", "56", "58", "60", "62"],
+};
+
+function isLocallyAllowedCandidate(
+  item: GarmentCatalogItem,
+  request: OutfitCategoryRequest,
+): boolean {
+  return matchesCandidatePricePreference(item, request.pricePreference) &&
+    matchesCandidateSizePreference(item, request.sizePreference) &&
+    matchesCandidatePublicOutfitCategory(item, request);
+}
+
+function matchesCandidatePricePreference(
+  item: GarmentCatalogItem,
+  preference: PricePreference | undefined,
+): boolean {
+  if (!preference || preference === "any") {
+    return true;
+  }
+
+  const amount = item.price?.amount;
+
+  if (typeof amount !== "number" || !Number.isFinite(amount)) {
+    return false;
+  }
+
+  if (preference === "over-100k") {
+    return amount >= 100_000;
+  }
+
+  const threshold = botPricePreferenceThresholds[preference];
+
+  return typeof threshold === "number" && amount <= threshold;
+}
+
+function matchesCandidateSizePreference(
+  item: GarmentCatalogItem,
+  preference: SizePreference | undefined,
+): boolean {
+  if (!preference || preference === "any") {
+    return true;
+  }
+
+  if (item.sizes.length === 0) {
+    return false;
+  }
+
+  const normalizedSizes = new Set(item.sizes.flatMap(expandCandidateSizeTokens));
+
+  return botSizePreferenceTokens[preference].some((size) => normalizedSizes.has(size));
+}
+
+function matchesCandidatePublicOutfitCategory(
+  item: GarmentCatalogItem,
+  request: OutfitCategoryRequest,
+): boolean {
+  const requestCategory = normalizeCommandText(request.category);
+
+  if (publicOutfitBlockedCategories.has(requestCategory)) {
+    return true;
+  }
+
+  if (publicOutfitBlockedCategories.has(normalizeCommandText(item.category))) {
+    return false;
+  }
+
+  const itemText = [
+    item.category,
+    item.title,
+    item.description,
+    ...item.tags,
+  ].filter(Boolean).join(" ");
+
+  return !privateGarmentPattern.test(itemText);
+}
+
+function expandCandidateSizeTokens(size: string): string[] {
+  const compact = normalizeCommandText(size)
+    .replace(/\s+/g, "")
+    .replace(/^(?:ru|rus|it|fr|eu|us|uk)/, "");
+  const letterMatches = compact.match(/xxs|xs|s|m|l|xl|xxl|2xl|3xl/g) ?? [];
+  const numericMatches = compact.match(/\d{2}/g) ?? [];
+
+  return [...new Set([compact, ...letterMatches, ...numericMatches].filter(Boolean))];
 }
 
 function formatPrice(item: GarmentCatalogItem): string | undefined {

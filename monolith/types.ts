@@ -106,6 +106,32 @@ export interface OutfitCandidateGroup {
   candidates: GarmentCatalogItem[];
 }
 
+export interface OutfitCandidateImageReviewCandidate {
+  item: GarmentCatalogItem;
+  image: ImageData;
+}
+
+export interface OutfitCandidateImageReviewGroup {
+  request: OutfitCategoryRequest;
+  candidates: OutfitCandidateImageReviewCandidate[];
+}
+
+export interface OutfitCandidateReviewRejection {
+  itemId: string;
+  reason?: string;
+}
+
+export interface OutfitCandidateReviewGroupResult {
+  groupIndex: number;
+  category: string;
+  acceptedItemIds: string[];
+  rejected: OutfitCandidateReviewRejection[];
+}
+
+export interface OutfitCandidateVisualReview {
+  groups: OutfitCandidateReviewGroupResult[];
+}
+
 export interface OutfitSelectionItem {
   category: string;
   itemId: string;

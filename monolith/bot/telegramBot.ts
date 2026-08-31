@@ -106,6 +106,13 @@ type ChatSession =
       mode: "awaiting-ideal-catalog-fallback";
       person: StoredImage;
       preferences: IdealOutfitPreferences;
+    }
+  | {
+      mode: "awaiting-ideal-wish-retry";
+      person: StoredImage;
+      sizePreference: SizePreference;
+      pricePreference: PricePreference;
+      previousWish?: string;
     };
 
 type ProcessingFlow = "appearance" | "ideal";
@@ -286,6 +293,11 @@ export class TelegramMonolithBot {
 
     if (session.mode === "awaiting-ideal-catalog-fallback") {
       await this.handleIdealCatalogFallbackStep(message, session);
+      return;
+    }
+
+    if (session.mode === "awaiting-ideal-wish-retry") {
+      await this.handleIdealWishRetryStep(message, session);
       return;
     }
 
@@ -578,6 +590,14 @@ export class TelegramMonolithBot {
       const options = normalizeIdealStyleOptions(plan, preferences);
 
       if (!plan.accepted || options.length === 0) {
+        const rejectionMessage = plan.rejectionMessage ??
+          "Фото не подходит для подбора образа. Пришлите фото в полный рост или хотя бы по колено.";
+
+        if (preferences.userWish && isIdealWishRejection(rejectionMessage)) {
+          await this.askForIdealWishRetry(chatId, stored, preferences, statusMessageId, rejectionMessage);
+          return;
+        }
+
         this.sessions.set(chatId, {
           mode: "awaiting-ideal-photo",
           userWish: preferences.userWish,
@@ -587,8 +607,7 @@ export class TelegramMonolithBot {
         statusMessageId = await this.updateStatusMessage(
           chatId,
           statusMessageId,
-          plan.rejectionMessage ??
-            "Фото не подходит для подбора образа. Пришлите фото в полный рост или хотя бы по колено.",
+          rejectionMessage,
           cancelMarkup(),
         );
         return;
@@ -657,6 +676,100 @@ export class TelegramMonolithBot {
     });
   }
 
+  private async askForIdealWishRetry(
+    chatId: string,
+    person: StoredImage,
+    preferences: IdealOutfitPreferences,
+    statusMessageId: number | undefined,
+    rejectionMessage: string,
+  ): Promise<void> {
+    this.sessions.set(chatId, {
+      mode: "awaiting-ideal-wish-retry",
+      person,
+      sizePreference: preferences.sizePreference,
+      pricePreference: preferences.pricePreference,
+      previousWish: preferences.userWish,
+    });
+    logger.info("Ideal outfit wish retry requested", {
+      chatId,
+      sizePreference: preferences.sizePreference,
+      pricePreference: preferences.pricePreference,
+      previousWish: preferences.userWish,
+      rejectionMessage,
+    });
+    await this.updateStatusMessage(
+      chatId,
+      statusMessageId,
+      [
+        rejectionMessage,
+        "",
+        "Фото уже сохранено. Напишите новое пожелание или нажмите «Пропустить», и я пересоберу варианты без повторной загрузки фото.",
+      ].join("\n"),
+    );
+    await this.sendMessage(
+      chatId,
+      "Напишите новое пожелание к образу или нажмите «Пропустить».",
+      idealWishMarkup(),
+    );
+  }
+
+  private async handleIdealWishRetryStep(
+    message: TelegramMessage,
+    session: Extract<ChatSession, { mode: "awaiting-ideal-wish-retry" }>,
+  ): Promise<void> {
+    const chatId = String(message.chat.id);
+    const text = message.text?.trim() ?? message.caption?.trim();
+
+    if (!text || message.photo?.length) {
+      await this.sendMessage(
+        chatId,
+        "Фото уже есть. Напишите новое пожелание к образу обычными словами или нажмите «Пропустить».",
+        idealWishMarkup(),
+      );
+      return;
+    }
+
+    const userWish = isSkipWishCommand(text) ? undefined : text;
+
+    if (userWish && userWish.length > 500) {
+      await this.sendMessage(
+        chatId,
+        "Пожелание слишком длинное. Напишите короче: стиль, случай и пару важных деталей.",
+        idealWishMarkup(),
+      );
+      return;
+    }
+
+    if (userWish && !looksLikeMeaningfulIdealWish(userWish)) {
+      await this.sendMessage(
+        chatId,
+        "Пожелание выглядит как случайный набор символов. Переформулируйте его коротко, например: «повседневный образ в темных цветах».",
+        idealWishMarkup(),
+      );
+      return;
+    }
+
+    const preferences: IdealOutfitPreferences = {
+      userWish,
+      sizePreference: session.sizePreference,
+      pricePreference: session.pricePreference,
+    };
+
+    this.sessions.delete(chatId);
+    this.processing.set(chatId, { flow: "ideal", startedAt: Date.now() });
+    const status = await this.sendStatusMessage(
+      chatId,
+      renderIdealProgress(userWish ? "пересобираю с новым пожеланием" : "подбираю без пожелания", 8),
+    );
+
+    void this.runRelaxedIdealOutfitFromStoredPhoto(chatId, session.person, preferences, status?.message_id).catch((error) => {
+      logger.error("Ideal outfit wish retry background task crashed", {
+        chatId,
+        error,
+      });
+    });
+  }
+
   private async handleIdealCatalogFallbackStep(
     message: TelegramMessage,
     session: Extract<ChatSession, { mode: "awaiting-ideal-catalog-fallback" }>,
@@ -686,10 +799,16 @@ export class TelegramMonolithBot {
     }
 
     if (text && isChangeIdealWishCommand(text)) {
-      this.sessions.set(chatId, { mode: "awaiting-ideal-wish" });
+      this.sessions.set(chatId, {
+        mode: "awaiting-ideal-wish-retry",
+        person: session.person,
+        sizePreference: session.preferences.sizePreference,
+        pricePreference: session.preferences.pricePreference,
+        previousWish: session.preferences.userWish,
+      });
       await this.sendMessage(
         chatId,
-        "Ок, напишите новое пожелание к образу или нажмите «Пропустить».",
+        "Ок, напишите новое пожелание к образу или нажмите «Пропустить». Фото уже сохранено.",
         idealWishMarkup(),
       );
       return;
@@ -719,21 +838,33 @@ export class TelegramMonolithBot {
         throw new Error("Monolith catalog is empty");
       }
 
-      statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("собираю варианты без пожелания", 44));
+      statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress(preferences.userWish ? "собираю варианты с новым пожеланием" : "собираю варианты без пожелания", 44));
       const plan = await this.openai.planIdealOutfit(image, catalogHints, preferences);
       const options = normalizeIdealStyleOptions(plan, preferences);
 
       if (!plan.accepted || options.length === 0) {
-        this.sessions.set(chatId, { mode: "awaiting-ideal-wish" });
+        const rejectionMessage = plan.rejectionMessage ??
+          "Не получилось предложить образ. Попробуйте написать другое пожелание или отправить другое фото.";
+
+        if (preferences.userWish && isIdealWishRejection(rejectionMessage)) {
+          await this.askForIdealWishRetry(chatId, stored, preferences, statusMessageId, rejectionMessage);
+          return;
+        }
+
+        this.sessions.set(chatId, {
+          mode: "awaiting-ideal-photo",
+          userWish: preferences.userWish,
+          sizePreference: preferences.sizePreference,
+          pricePreference: preferences.pricePreference,
+        });
         statusMessageId = await this.updateStatusMessage(
           chatId,
           statusMessageId,
-          plan.rejectionMessage ?? "Не получилось предложить образ даже без пожелания. Попробуйте написать другое пожелание или отправить другое фото.",
+          rejectionMessage,
         );
-        await this.sendMessage(chatId, "Напишите новое пожелание или нажмите «Пропустить».", idealWishMarkup());
+        await this.sendMessage(chatId, "Пришлите другое фото или нажмите «Отмена».", cancelMarkup());
         return;
       }
-
       this.sessions.set(chatId, {
         mode: "awaiting-ideal-style",
         person: stored,
@@ -746,7 +877,9 @@ export class TelegramMonolithBot {
       await this.sendMessage(
         chatId,
         [
-          "Я убрал прежнее пожелание и подготовил варианты по фото, размеру и бюджету.",
+          preferences.userWish
+            ? "Я учёл новое пожелание и подготовил варианты по фото, размеру и бюджету."
+            : "Я убрал прежнее пожелание и подготовил варианты по фото, размеру и бюджету.",
           "",
           renderIdealStyleOptionsMessage(options),
         ].join("\n"),
@@ -1079,6 +1212,12 @@ export class TelegramMonolithBot {
           chatId,
           "Под текущие пожелания и фильтры каталог не дал достаточно подходящих вещей. Могу предложить новый вариант без пожелания на том же фото или начать заново с другим пожеланием.",
           idealCatalogFallbackMarkup(),
+        );
+      case "awaiting-ideal-wish-retry":
+        return this.sendMessage(
+          chatId,
+          "Фото уже сохранено. Напишите новое пожелание к образу, нажмите «Пропустить» или «Отмена».",
+          idealWishMarkup(),
         );
     }
 
@@ -1561,14 +1700,49 @@ function looksLikeMeaningfulIdealWish(text: string): boolean {
   }
 
   const lowered = compact.toLowerCase().replace(/\s+/g, "");
+  const loweredWords = words.map((word) => word.toLowerCase());
 
   if (/(.)\1{5,}/u.test(lowered) || /(.{2,4})\1{3,}/u.test(lowered)) {
     return false;
   }
 
-  return !["asdf", "qwer", "zxcv", "йцук", "фыва"].some((run) => lowered.includes(run));
+  if (["asdf", "qwer", "zxcv", "йцук", "фыва"].some((run) => lowered.includes(run))) {
+    return false;
+  }
+
+  const knownWishFragments = [
+    "хочу", "нуж", "образ", "стил", "одеж", "вещ", "лук", "look", "outfit",
+    "повседнев", "офис", "делов", "свидан", "вечер", "празд", "свад", "работ",
+    "casual", "smart", "street", "streetwear", "classic", "минимал", "оверсайз",
+    "особ", "необыч", "ярк", "спокой", "строг", "сдерж", "романт", "спорт",
+    "темн", "светл", "черн", "бел", "син", "сер", "беж", "крас", "зел", "радуж",
+    "рубаш", "футбол", "худи", "брюк", "джинс", "куртк", "пидж", "пальт", "свит",
+    "единорог", "принт", "цвет", "кож", "лен", "хлоп", "шерст", "деним", "кибер", "панк", "футур",
+  ];
+
+  if (knownWishFragments.some((fragment) => lowered.includes(fragment))) {
+    return true;
+  }
+
+  const hasVeryLongUnknownWord = loweredWords.some((word) => word.length >= 18);
+  const averageWordLength = letters / Math.max(words.length, 1);
+
+  if (hasVeryLongUnknownWord || averageWordLength > 12) {
+    return false;
+  }
+
+  return words.length >= 3 && letters >= 10;
 }
 
+function isIdealWishRejection(message: string): boolean {
+  const normalized = normalizeCommandText(message);
+
+  return normalized.includes("пожел") ||
+    normalized.includes("переформули") ||
+    normalized.includes("случайный набор") ||
+    normalized.includes("не про стиль") ||
+    normalized.includes("не про одеж");
+}
 function isAppearanceAnalysisCommand(text: string): boolean {
   const normalized = normalizeCommandText(text);
 

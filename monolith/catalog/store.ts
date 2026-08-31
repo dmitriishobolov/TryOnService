@@ -89,9 +89,9 @@ const categoryInferenceRules: Array<[RegExp, string]> = [
   [/pizham|pyjama|pajama|sleepwear|пижам/, "пижама"],
   [/halat|robe|халат/, "халат"],
   [/plavk|swim trunks|swimwear|плавк/, "плавки"],
-  [/obuv|shoes|sneaker|boot|туфл|кроссов|ботин|лофер|кед/, "обувь"],
   [/dzhins|jeans|denim|джинс/, "джинсы"],
   [/bryuk|trouser|pants|slacks|chino|чинос|брюк|джоггер|штан/, "брюки"],
+  [/obuv|\bshoes?\b|\bsneakers?\b|\bboots?\b|\bloafers?\b|туфл|кроссов|ботин|сапог|лофер|кед/, "обувь"],
 ];
 
 const canonicalCategoryNames = new Set(Object.keys(categoryAliasesByCanonical));

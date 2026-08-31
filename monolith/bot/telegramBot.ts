@@ -502,6 +502,13 @@ export class TelegramMonolithBot {
       return;
     }
 
+    const preferences: IdealOutfitPreferences = {
+      userWish: session.userWish,
+      sizePreference: session.sizePreference,
+      pricePreference,
+    };
+    const catalogNotice = await this.buildIdealWishCatalogNotice(preferences);
+
     this.sessions.set(chatId, {
       mode: "awaiting-ideal-photo",
       userWish: session.userWish,
@@ -514,12 +521,9 @@ export class TelegramMonolithBot {
       [
         "Теперь пришлите фото в полный рост или хотя бы по колено.",
         "Обувь может быть не видна, тогда я просто не буду подбирать обувь.",
-        "Фильтры: " + renderIdealPreferenceSummary({
-          userWish: session.userWish,
-          sizePreference: session.sizePreference,
-          pricePreference,
-        }),
-      ].join("\n"),
+        "Фильтры: " + renderIdealPreferenceSummary(preferences),
+        catalogNotice,
+      ].filter(Boolean).join("\n"),
       cancelMarkup(),
     );
   }
@@ -616,9 +620,15 @@ export class TelegramMonolithBot {
 
       if (!plan.accepted || options.length === 0) {
         const rejectionMessage = plan.rejectionMessage ??
-          "Фото не подходит для подбора образа. Пришлите фото в полный рост или хотя бы по колено.";
+          (options.length === 0
+            ? "Фото подходит, но не получилось собрать варианты образа из каталога под выбранные фильтры и пожелание."
+            : "Фото не подходит для подбора образа. Пришлите фото в полный рост или хотя бы по колено.");
 
-        if (preferences.userWish && isIdealWishRejection(rejectionMessage)) {
+        const hasNoOptionsForAcceptedPhoto = plan.accepted && options.length === 0;
+        const hasWishOrCatalogIssue = preferences.userWish &&
+          (hasNoOptionsForAcceptedPhoto || isIdealWishRejection(rejectionMessage));
+
+        if (hasWishOrCatalogIssue) {
           await this.askForIdealWishRetry(chatId, stored, preferences, statusMessageId, rejectionMessage);
           return;
         }
@@ -1158,6 +1168,55 @@ export class TelegramMonolithBot {
       logger.warn("Telegram could not build price counts; falling back to plain buttons", { error });
       return pricePreferenceMarkup();
     }
+  }
+
+  private async buildIdealWishCatalogNotice(
+    preferences: IdealOutfitPreferences,
+  ): Promise<string | undefined> {
+    if (!preferences.userWish) {
+      return undefined;
+    }
+
+    const coverage = detectIdealWishCatalogCoverage(preferences.userWish);
+
+    if (coverage.supported.length === 0 && coverage.unsupported.length === 0) {
+      return undefined;
+    }
+
+    const unavailable: string[] = [];
+
+    try {
+      for (const request of coverage.supported) {
+        const candidateRequest: OutfitCategoryRequest = {
+          category: request.category,
+          query: request.label,
+          sizePreference: preferences.sizePreference,
+          pricePreference: preferences.pricePreference,
+          requiredTags: [request.category],
+        };
+        const candidates = await this.catalog.findCandidates(candidateRequest, 1);
+        const allowed = candidates.some((item) => isLocallyAllowedCandidate(item, candidateRequest));
+
+        if (!allowed) {
+          unavailable.push(request.label);
+        }
+      }
+    } catch (error) {
+      logger.warn("Telegram could not build wish catalog coverage notice", { error });
+      return undefined;
+    }
+
+    if (coverage.unsupported.length === 0 && unavailable.length === 0) {
+      return undefined;
+    }
+
+    return [
+      "По каталогу заранее вижу ограничение: " + [
+        unavailable.length ? "не нахожу под фильтры: " + unavailable.join(", ") : undefined,
+        coverage.unsupported.length ? "не подбираю в примерке: " + coverage.unsupported.join(", ") : undefined,
+      ].filter(Boolean).join("; ") + ".",
+      "Если фото подходит, я не буду отказывать из-за этого, а соберу образ из доступной одежды и честно отмечу, что пришлось адаптировать.",
+    ].join("\n");
   }
 
   private async checkIdealOptionsAvailability(
@@ -1908,6 +1967,71 @@ function renderPricePreferenceLabel(preference: PricePreference): string {
   return labels[preference];
 }
 
+interface IdealWishDetectedCatalogCategory {
+  category: string;
+  label: string;
+}
+
+interface IdealWishCatalogCoverage {
+  supported: IdealWishDetectedCatalogCategory[];
+  unsupported: string[];
+}
+
+const idealWishSupportedCategoryPatterns: Array<[RegExp, IdealWishDetectedCatalogCategory]> = [
+  [/комбинез|jumpsuit|overall/i, { category: "комбинезон", label: "комбинезон" }],
+  [/пальт|coat/i, { category: "пальто", label: "пальто" }],
+  [/тренч|плащ|trench/i, { category: "плащ", label: "тренч/плащ" }],
+  [/пидж|жакет|блейзер|blazer/i, { category: "пиджак", label: "пиджак/жакет" }],
+  [/куртк|бомбер|парка|пухов|ветров|jacket|bomber/i, { category: "куртка", label: "куртка" }],
+  [/рубаш|сороч|блуз|shirt/i, { category: "рубашка", label: "рубашка/блузка" }],
+  [/лонгслив|longsliv/i, { category: "лонгслив", label: "лонгслив" }],
+  [/футбол|t-shirt|tee/i, { category: "футболка", label: "футболка" }],
+  [/(^|[^a-zа-яе])топ([^a-zа-яе]|$)|(^|[^a-z])top([^a-z]|$)/i, { category: "топ", label: "топ" }],
+  [/худи|толстов|свитшот|hoodie|sweatshirt/i, { category: "худи", label: "худи/толстовка" }],
+  [/свитер|джемпер|пуловер|sweater|jumper/i, { category: "свитер", label: "свитер/джемпер" }],
+  [/кардиган|cardigan/i, { category: "кардиган", label: "кардиган" }],
+  [/жилет|vest/i, { category: "жилет", label: "жилет" }],
+  [/поло|polo/i, { category: "поло", label: "поло" }],
+  [/майк|tank top/i, { category: "майка", label: "майка" }],
+  [/джинс|jeans|denim/i, { category: "джинсы", label: "джинсы" }],
+  [/брюк|штаны|штан|чинос|джоггер|trouser|pants|chino/i, { category: "брюки", label: "брюки" }],
+  [/шорт|shorts/i, { category: "шорты", label: "шорты" }],
+  [/юбк|skirt/i, { category: "юбка", label: "юбка" }],
+  [/плать|dress/i, { category: "платье", label: "платье" }],
+  [/сапог|казак|ботин|кроссов|туфл|лофер|кед|обув|boots|shoes|sneakers|loafers/i, { category: "обувь", label: "обувь" }],
+];
+
+const idealWishUnsupportedCategoryPatterns: Array<[RegExp, string]> = [
+  [/шляп|шапк|кепк|бейсболк|берет|панам|hat|cap|beanie/i, "головные уборы"],
+  [/сумк|клатч|рюкзак|bag|clutch|backpack/i, "сумки"],
+  [/ремен|пояс|belt/i, "ремни"],
+  [/очк|glasses|sunglasses/i, "очки"],
+  [/украшен|серьг|колье|браслет|jewelry/i, "украшения"],
+];
+
+function detectIdealWishCatalogCoverage(wish: string): IdealWishCatalogCoverage {
+  const normalized = normalizeCommandText(wish).replace(/ё/g, "е");
+  const supportedByCategory = new Map<string, IdealWishDetectedCatalogCategory>();
+  const unsupported = new Set<string>();
+
+  for (const [pattern, category] of idealWishSupportedCategoryPatterns) {
+    if (pattern.test(normalized)) {
+      supportedByCategory.set(category.category, category);
+    }
+  }
+
+  for (const [pattern, label] of idealWishUnsupportedCategoryPatterns) {
+    if (pattern.test(normalized)) {
+      unsupported.add(label);
+    }
+  }
+
+  return {
+    supported: [...supportedByCategory.values()],
+    unsupported: [...unsupported],
+  };
+}
+
 function looksLikeMeaningfulIdealWish(text: string): boolean {
   const compact = text.replace(/\s+/g, " ").trim();
   const letters = compact.match(/[A-Za-zА-Яа-яЁё]/g)?.length ?? 0;
@@ -1958,13 +2082,25 @@ function looksLikeMeaningfulIdealWish(text: string): boolean {
 }
 
 function isIdealWishRejection(message: string): boolean {
-  const normalized = normalizeCommandText(message);
+  const normalized = normalizeCommandText(message).replace(/ё/g, "е");
 
   return normalized.includes("пожел") ||
     normalized.includes("переформули") ||
     normalized.includes("случайный набор") ||
     normalized.includes("не про стиль") ||
-    normalized.includes("не про одеж");
+    normalized.includes("не про одеж") ||
+    normalized.includes("каталог") ||
+    normalized.includes("фильтр") ||
+    normalized.includes("нет подход") ||
+    normalized.includes("не хватает") ||
+    normalized.includes("не нахожу") ||
+    normalized.includes("не нашел") ||
+    normalized.includes("недоступ") ||
+    normalized.includes("аксессуар") ||
+    normalized.includes("головн") ||
+    normalized.includes("обув") ||
+    normalized.includes("шляп") ||
+    normalized.includes("сапог");
 }
 function isAppearanceAnalysisCommand(text: string): boolean {
   const normalized = normalizeCommandText(text);

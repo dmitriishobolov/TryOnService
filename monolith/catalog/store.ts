@@ -59,6 +59,7 @@ const categoryAliasesByCanonical: Record<string, string[]> = {
   "плавки": ["swim trunks", "swimwear"],
 };
 
+// Keep concrete garment nouns before denim/jeans: a denim shirt is still a shirt.
 const categoryInferenceRules: Array<[RegExp, string]> = [
   [/smoking|tuxedo|смокинг/, "смокинг"],
   [/kostyum|suit|костюм/, "костюм"],
@@ -69,8 +70,6 @@ const categoryInferenceRules: Array<[RegExp, string]> = [
   [/palto|coat|пальто/, "пальто"],
   [/plash|trench|плащ|тренч/, "плащ"],
   [/kombinezon|jumpsuit|overall|комбинезон/, "комбинезон"],
-  [/dzhins|jeans|джинс/, "джинсы"],
-  [/bryuk|trouser|pants|slacks|chino|чинос|брюк|джоггер|штан/, "брюки"],
   [/rubash|shirt|сорочк|рубаш|bluzy|блуз/, "рубашка"],
   [/futbol|t-shirt|tee|футбол|тиширт/, "футболка"],
   [/longsliv|лонгслив/, "лонгслив"],
@@ -90,6 +89,8 @@ const categoryInferenceRules: Array<[RegExp, string]> = [
   [/halat|robe|халат/, "халат"],
   [/plavk|swim trunks|swimwear|плавк/, "плавки"],
   [/obuv|shoes|sneaker|boot|туфл|кроссов|ботин|лофер|кед/, "обувь"],
+  [/dzhins|jeans|denim|джинс/, "джинсы"],
+  [/bryuk|trouser|pants|slacks|chino|чинос|брюк|джоггер|штан/, "брюки"],
 ];
 
 const canonicalCategoryNames = new Set(Object.keys(categoryAliasesByCanonical));

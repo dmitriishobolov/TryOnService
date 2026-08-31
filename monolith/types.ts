@@ -58,6 +58,7 @@ export interface CatalogPreferenceFilter {
 export interface CatalogCategoryTagHints {
   category: string;
   itemCount: number;
+  genderCounts: Partial<Record<GarmentGender, number>>;
   aliases: string[];
   colors: string[];
   tags: string[];

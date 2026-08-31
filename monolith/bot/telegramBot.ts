@@ -586,8 +586,27 @@ export class TelegramMonolithBot {
       const items = await this.catalog.ensureReady();
       const catalogHints = await this.catalog.categoryTagHints(preferences);
 
-      if (!this.config.catalog.enabled || items.length === 0 || catalogHints.length === 0) {
+      if (!this.config.catalog.enabled || items.length === 0) {
         throw new Error("Monolith catalog is empty");
+      }
+
+      logger.info("Ideal outfit catalog hints prepared", {
+        chatId,
+        totalItems: items.length,
+        hintCategories: catalogHints.length,
+        sizePreference: preferences.sizePreference,
+        pricePreference: preferences.pricePreference,
+        userWish: preferences.userWish?.slice(0, 160),
+      });
+
+      if (catalogHints.length === 0) {
+        await this.updateStatusMessage(
+          chatId,
+          statusMessageId,
+          renderNoCatalogItemsForPreferencesMessage(preferences),
+        );
+        await this.sendMessage(chatId, "Выберите сценарий заново с более широкими фильтрами.", mainMenuMarkup());
+        return;
       }
 
       statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress("анализирую фото и собираю варианты", 44));
@@ -851,8 +870,27 @@ export class TelegramMonolithBot {
       const items = await this.catalog.ensureReady();
       const catalogHints = await this.catalog.categoryTagHints(preferences);
 
-      if (!this.config.catalog.enabled || items.length === 0 || catalogHints.length === 0) {
+      if (!this.config.catalog.enabled || items.length === 0) {
         throw new Error("Monolith catalog is empty");
+      }
+
+      logger.info("Ideal outfit catalog hints prepared", {
+        chatId,
+        totalItems: items.length,
+        hintCategories: catalogHints.length,
+        sizePreference: preferences.sizePreference,
+        pricePreference: preferences.pricePreference,
+        userWish: preferences.userWish?.slice(0, 160),
+      });
+
+      if (catalogHints.length === 0) {
+        await this.updateStatusMessage(
+          chatId,
+          statusMessageId,
+          renderNoCatalogItemsForPreferencesMessage(preferences),
+        );
+        await this.sendMessage(chatId, "Выберите сценарий заново с более широкими фильтрами.", mainMenuMarkup());
+        return;
       }
 
       statusMessageId = await this.updateStatusMessage(chatId, statusMessageId, renderIdealProgress(preferences.userWish ? "собираю варианты с новым пожеланием" : "собираю варианты без пожелания", 44));
@@ -1764,6 +1802,15 @@ function renderIdealPreferenceSummary(preferences: IdealOutfitPreferences): stri
   ].join("; ");
 }
 
+function renderNoCatalogItemsForPreferencesMessage(preferences: IdealOutfitPreferences): string {
+  return [
+    "В каталоге сейчас нет вещей под выбранные фильтры.",
+    "",
+    "Фильтры: " + renderIdealPreferenceSummary(preferences),
+    "",
+    "Это не проблема с фото. Попробуйте запустить «Идеальный образ» ещё раз и выбрать более широкий размер или бюджет, например «Любой размер» или «Любой бюджет».",
+  ].join("\n");
+}
 function renderSizePreferenceLabel(preference: SizePreference): string {
   const labels: Record<SizePreference, string> = {
     any: "любой",
@@ -2418,6 +2465,13 @@ function friendlyErrorMessage(error: unknown, fallback: string): string {
 
   if (error.message.includes("Monolith catalog is empty")) {
     return "Локальный каталог пуст. Запустите `npm run dev:catalog` или TSUM ingest из папки `monolith/`.";
+  }
+  if (error.message.includes("OpenAI response did not contain a JSON object")) {
+    return "Ответ анализа пришёл в неожиданном формате. Попробуйте ещё раз, а если повторится, посмотрите лог `ideal-outfit-plan`.";
+  }
+
+  if (error.message.toLowerCase().includes("openai")) {
+    return "Сервис анализа не смог подготовить варианты. Попробуйте ещё раз чуть позже и проверьте лог OpenAI-запроса.";
   }
 
   if (error.message.toLowerCase().includes("playwright")) {

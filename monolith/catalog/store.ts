@@ -98,20 +98,25 @@ const pricePreferences: PricePreference[] = ["any", "under-10k", "under-30k", "u
 const catalogWriteLockPollMs = 100;
 const catalogWriteLockTimeoutMs = 30_000;
 const catalogWriteLockStaleMs = 120_000;
+const catalogHintLimitPerField = 48;
 
 export class LocalCatalogStore {
   private items = new Map<string, GarmentCatalogItem>();
   private loaded = false;
+  private loadedCacheMtimeMs: number | undefined;
 
   constructor(private readonly config: MonolithConfig) {}
 
   async load(): Promise<GarmentCatalogItem[]> {
-    if (this.loaded) {
+    const currentCacheMtimeMs = await this.cacheMtimeMs();
+
+    if (this.loaded && this.loadedCacheMtimeMs === currentCacheMtimeMs) {
       return this.list();
     }
 
     this.loaded = true;
     this.items = await this.readCacheMap();
+    this.loadedCacheMtimeMs = await this.cacheMtimeMs();
 
     return this.list();
   }
@@ -119,7 +124,7 @@ export class LocalCatalogStore {
   async upsertMany(items: GarmentCatalogItem[]): Promise<GarmentCatalogItem[]> {
     await this.load();
 
-    const incoming = items.map(normalizeCatalogItem);
+    const incoming = items;
 
     await this.withCatalogWriteLock(async () => {
       const current = await this.readCacheMap();
@@ -127,13 +132,7 @@ export class LocalCatalogStore {
 
       for (const item of incoming) {
         const existing = current.get(item.id);
-        current.set(item.id, normalizeCatalogItem({
-          ...existing,
-          ...item,
-          imageFile: item.imageFile ?? existing?.imageFile,
-          createdAt: existing?.createdAt ?? item.createdAt,
-          updatedAt: now,
-        }));
+        current.set(item.id, mergeCatalogItem(existing, item, now));
       }
 
       await this.writeCacheMap(current);
@@ -208,6 +207,15 @@ export class LocalCatalogStore {
       "utf8",
     );
     await rename(tempPath, this.config.catalog.cachePath);
+    this.loadedCacheMtimeMs = await this.cacheMtimeMs();
+  }
+
+  private async cacheMtimeMs(): Promise<number | undefined> {
+    try {
+      return (await stat(this.config.catalog.cachePath)).mtimeMs;
+    } catch {
+      return undefined;
+    }
   }
 
   private async withCatalogWriteLock<T>(operation: () => Promise<T>): Promise<T> {
@@ -257,7 +265,7 @@ export class LocalCatalogStore {
 
   categoryTagHints(
     filter: CatalogPreferenceFilter = {},
-    limitPerField = Number.MAX_SAFE_INTEGER,
+    limitPerField = catalogHintLimitPerField,
   ): CatalogCategoryTagHints[] {
     const grouped = new Map<string, GarmentCatalogItem[]>();
 
@@ -272,6 +280,7 @@ export class LocalCatalogStore {
         category,
         aliases: aliasesForCategory(category),
         itemCount: items.length,
+        genderCounts: countByGender(items),
         colors: topValues(items.flatMap((item) => item.colors), limitPerField),
         tags: topValues(
           items.flatMap((item) => item.tags.filter((tag) => isUsefulHintTag(tag, item))),
@@ -347,6 +356,56 @@ export class LocalCatalogStore {
       }),
     ])) as Record<PricePreference, number>;
   }
+}
+
+function mergeCatalogItem(
+  existing: GarmentCatalogItem | undefined,
+  incoming: GarmentCatalogItem,
+  updatedAt: string,
+): GarmentCatalogItem {
+  return normalizeCatalogItem({
+    ...existing,
+    ...incoming,
+    description: nonEmptyString(incoming.description) ?? existing?.description,
+    productUrl: nonEmptyString(incoming.productUrl) ?? existing?.productUrl ?? incoming.productUrl,
+    imageUrl: nonEmptyString(incoming.imageUrl) ?? existing?.imageUrl ?? incoming.imageUrl,
+    imageFile: nonEmptyString(incoming.imageFile) ?? existing?.imageFile,
+    sizes: mergeCatalogArray(existing?.sizes, incoming.sizes),
+    colors: mergeCatalogArray(existing?.colors, incoming.colors),
+    tags: mergeCatalogArray(existing?.tags, incoming.tags),
+    price: incoming.price ?? existing?.price,
+    createdAt: existing?.createdAt ?? incoming.createdAt,
+    updatedAt,
+  });
+}
+
+function mergeCatalogArray(
+  existing: string[] | undefined,
+  incoming: string[] | undefined,
+): string[] {
+  const incomingValues = uniqueStrings(incoming ?? []);
+
+  if (incomingValues.length > 0) {
+    return incomingValues;
+  }
+
+  return uniqueStrings(existing ?? []);
+}
+
+function nonEmptyString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+
+  return trimmed || undefined;
+}
+
+function countByGender(items: GarmentCatalogItem[]): Partial<Record<GarmentGender, number>> {
+  const counts: Partial<Record<GarmentGender, number>> = {};
+
+  for (const item of items) {
+    counts[item.gender] = (counts[item.gender] ?? 0) + 1;
+  }
+
+  return counts;
 }
 
 async function isStaleCatalogLock(lockPath: string): Promise<boolean> {

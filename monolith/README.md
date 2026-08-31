@@ -298,7 +298,7 @@ OpenAI не должен придумывать категории от себя
 - `category` должен быть каноническим;
 - `colors` и `tags` должны быть короткими и полезными для поиска;
 - один образ не должен содержать два одинаковых типа вещи;
-- `sizes` и `price` используются как мягкие фильтры: точное совпадение поднимает товар, явное несовпадение снижает score, но не ломает сценарий при неполных данных магазина. Счетчики на кнопках считают товары с `productUrl` и доступным `imageFile` или `imageUrl`; для конкретного размера/бюджета учитываются только известные совпадения.
+- `sizes` и `price` используются как строгие фильтры для кнопок, подсказок GPT и локального поиска кандидатов. Если выбран `M-L` и `до 100 000 ₽`, вещь без такого размера или дороже лимита не попадет в подбор. Для максимального охвата выбирайте `Любой размер` или `Любой бюджет`.
 
 ## Парсинг TSUM
 
@@ -515,6 +515,15 @@ node --input-type=module -e "import { loadMonolithConfig } from './dist/config.j
 ```
 
 Ожидаемо `штаны` и `чиносы` должны приводиться к `брюки`, а `джинсы` должны находить именно джинсы, не куртки.
+
+### Проверить Подсказки Для GPT
+
+```powershell
+cd monolith
+node --input-type=module -e "import { loadMonolithConfig } from './dist/config.js'; import { LocalCatalogStore } from './dist/catalog/store.js'; const cfg=loadMonolithConfig({requireTelegramToken:false}); const store=new LocalCatalogStore(cfg); await store.load(); const hints=store.categoryTagHints({sizePreference:'m-l',pricePreference:'under-100k'}); console.log({total:store.list().length,hintCategories:hints.length,top:hints.slice(0,8).map(h=>({category:h.category,itemCount:h.itemCount,genderCounts:h.genderCounts}))});"
+```
+
+В логах сценария `Идеальный образ` есть строка `Ideal outfit catalog hints prepared`: она показывает общий размер каталога, количество категорий после фильтров и выбранные пользователем фильтры. Затем `OpenAI Responses request started` показывает `promptLength`, чтобы быстро увидеть слишком раздутый prompt.
 
 ### Частые Проблемы
 

@@ -114,6 +114,7 @@ export class OpenAiVisionService {
       operation: params.operation,
       model: this.config.openai.model,
       images: params.images.length,
+      promptLength: params.prompt.length,
       maxOutputTokens: params.maxOutputTokens,
     });
 
@@ -265,6 +266,8 @@ function buildIdealOutfitPlanPrompt(
     "Если пожелание необычное, но применимое, не отказывай. Адаптируй его под реальный носибельный образ и доступный каталог, а причину адаптации коротко упомяни в summary одного или нескольких вариантов.",
     "Если подходит, верни targetGender и options из 3 вариантов. У каждого варианта должен быть свой styleName, summary, targetGender, userWish, sizePreference, pricePreference и categories. У каждой category тоже укажи gender, userWish, sizePreference и pricePreference.",
     "category должен быть ровно одним из catalogHints.c. aliases помогают понять синонимы, но в category возвращай только каноническое catalogHints.c. Теги бери из colors/tags или aliases каталога.",
+    "catalogHints.g показывает сколько товаров этой категории есть по полу после выбранных фильтров. После определения targetGender выбирай только категории, где g[targetGender] или g.unisex больше 0.",
+    "Если для пола и фильтров нет категории под желаемую идею, адаптируй идею к доступным категориям вместо того, чтобы планировать вещь, которой нет в каталоге.",
     "requiredTags: 0-4 главных признака, которые сильно нужны для вещи: цвет, материал, крой, сезонность или категория.",
     "Если userWish содержит конкретный мотив, рисунок, цвет или материал, добавь это в requiredTags; каталог будет считать такие признаки обязательными.",
     "preferredTags: 2-6 мягких признаков: стиль, посадка, оттенок, настроение образа.",
@@ -402,6 +405,7 @@ function serializeCatalogHints(hints: CatalogCategoryTagHints[]): unknown[] {
     c: hint.category,
     aliases: hint.aliases,
     n: hint.itemCount,
+    g: hint.genderCounts,
     colors: hint.colors,
     tags: hint.tags,
   }));
